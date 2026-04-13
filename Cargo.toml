@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["crates/photobook-core"]
+
+[patch.crates-io]
+printpdf = { path = "crates/printpdf-patched" }

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Photobook Editor</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar">
+      <span class="app-title">Photobook</span>
+      <div class="toolbar-actions">
+        <button id="btn-add-spread" title="Add spread">+ Spread</button>
+        <button id="btn-export-pdf" title="Export PDF">Export PDF</button>
+      </div>
+      <div class="toolbar-right">
+        <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>↺ Undo</button>
+        <button id="btn-redo" title="Redo (Ctrl+Y)" disabled>↻ Redo</button>
+        <button id="btn-settings" title="Project settings" class="icon-btn">⚙</button>
+      </div>
+    </header>
+
+    <!-- Settings modal -->
+    <dialog id="settings-modal">
+      <h2>Project Settings</h2>
+      <div class="settings-form">
+        <div class="settings-row">
+          <label for="set-page-w">Page width (mm)</label>
+          <input id="set-page-w" type="number" min="50" max="600" step="1" />
+        </div>
+        <div class="settings-row">
+          <label for="set-page-h">Page height (mm)</label>
+          <input id="set-page-h" type="number" min="50" max="600" step="1" />
+        </div>
+        <div class="settings-row">
+          <label for="set-bleed">Bleed (mm)</label>
+          <input id="set-bleed" type="number" min="0" max="20" step="0.5" />
+        </div>
+        <div class="settings-row">
+          <label for="set-safe">Safe zone (mm)</label>
+          <input id="set-safe" type="number" min="0" max="30" step="0.5" />
+        </div>
+        <div class="settings-row">
+          <label for="set-spine">Spine per page (mm)</label>
+          <input id="set-spine" type="number" min="0" max="2" step="0.01" />
+        </div>
+        <div class="settings-row">
+          <label for="set-spine-min">Spine minimum (mm)</label>
+          <input id="set-spine-min" type="number" min="0" max="50" step="0.5" />
+        </div>
+        <div class="settings-row">
+          <label for="set-margin-step">Margin step (mm)</label>
+          <input id="set-margin-step" type="number" min="0" max="20" step="0.5" />
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button id="btn-settings-cancel">Cancel</button>
+        <button id="btn-settings-apply" class="primary">Apply</button>
+      </div>
+    </dialog>
+
+    <div id="workspace">
+      <!-- Left sidebar: image browser -->
+      <aside id="sidebar-left">
+        <div class="sidebar-header">
+          <button id="btn-open-folder">Open Folder</button>
+        </div>
+        <div id="image-grid"></div>
+      </aside>
+
+      <!-- Main canvas area -->
+      <main id="canvas-area">
+        <div id="canvas-wrapper">
+          <canvas id="main-canvas"></canvas>
+        </div>
+        <div id="zoom-controls">
+          <button id="btn-zoom-out" title="Zoom out">−</button>
+          <span id="zoom-label">100%</span>
+          <button id="btn-zoom-in" title="Zoom in">+</button>
+          <button id="btn-zoom-fit" title="Fit to window">Fit</button>
+        </div>
+      </main>
+
+      <!-- Right sidebar: box model editor -->
+      <aside id="sidebar-right">
+        <div class="sidebar-header">Box Model</div>
+        <div id="box-model-editor">
+          <p class="no-selection">Select a frame to edit</p>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Footer: page switcher -->
+    <footer id="footer">
+      <button id="btn-prev-spread" title="Previous spread">&#8592;</button>
+      <div id="spread-thumbnails"></div>
+      <button id="btn-next-spread" title="Next spread">&#8594;</button>
+    </footer>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

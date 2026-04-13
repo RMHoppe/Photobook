@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/hoppe/.cargo/bin/**)",
+      "Read(//usr/local/**)",
+      "Bash(grep -v \"^$\")",
+      "Bash(wasm-pack build:*)"
+    ]
+  }
+}
