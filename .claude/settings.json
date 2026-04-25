@@ -4,7 +4,9 @@
       "Read(//Users/hoppe/.cargo/bin/**)",
       "Read(//usr/local/**)",
       "Bash(grep -v \"^$\")",
-      "Bash(wasm-pack build:*)"
+      "Bash(wasm-pack build:*)",
+      "Bash(wc -l /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/web/*.js /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/crates/photobook-core/src/*.rs)",
+      "Bash(find /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/crates/photobook-core/src -name \"*.rs\" -exec wc -l {} +)"
     ]
   }
 }

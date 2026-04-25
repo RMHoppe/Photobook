@@ -1,0 +1,16 @@
+# Compiled JS (generated from TypeScript, do not edit directly)
+web/*.js
+
+# Build artifacts
+target/
+node_modules/
+
+# Lock files (auto-managed)
+Cargo.lock
+package-lock.json
+
+# Vendored external library (patched fork, treat as read-only)
+crates/printpdf-patched/
+
+# Claude memory (meta, not project code)
+memory/

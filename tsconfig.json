@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "outDir": "web",
+    "rootDir": "web",
+    "lib": ["ES2022", "DOM"],
+    "skipLibCheck": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["web/**/*.ts"],
+  "exclude": ["web/pkg", "node_modules"]
+}

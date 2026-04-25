@@ -80,7 +80,7 @@ impl PdfLayerReference {
 
     /// Add an image to the layer. To be called from the
     /// `image.add_to_layer()` class (see `use_xobject` documentation)
-    pub(crate) fn add_image<T>(&self, image: T) -> XObjectRef
+    pub fn add_image<T>(&self, image: T) -> XObjectRef
     where
         T: Into<ImageXObject>,
     {
@@ -155,8 +155,7 @@ impl PdfLayerReference {
     /// and use `image.add_to(layer)`, which will essentially do the same thing, but ensures
     /// that the image is referenced correctly
     ///
-    /// Function is limited to this library to ensure that outside code cannot call it
-    pub(crate) fn use_xobject(&self, xobj: XObjectRef, transformations: &[CurTransMat]) {
+    pub fn use_xobject(&self, xobj: XObjectRef, transformations: &[CurTransMat]) {
         // save graphics state
         self.save_graphics_state();
 

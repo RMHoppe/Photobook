@@ -9,12 +9,62 @@ pub enum SpreadKind {
     Content,
 }
 
+// ---------------------------------------------------------------------------
+// Text elements — freely positioned, not part of the BSP tree
+// ---------------------------------------------------------------------------
+
+/// A free-floating text element on a spread.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TextElement {
+    /// Globally unique ID (assigned from PhotobookDocument::next_text_id).
+    pub id: u32,
+    /// Text content; `\n` separates lines.
+    pub content: String,
+    /// X position of the bounding-box top-left corner in mm (from spread left).
+    pub x_mm: f32,
+    /// Y position of the bounding-box top-left corner in mm (from spread top).
+    pub y_mm: f32,
+    /// Font family name: "Helvetica", "Times New Roman", or "Courier".
+    pub font_family: String,
+    /// Font size in typographic points (1 pt = 1/72 inch).
+    pub font_size_pt: f32,
+    /// Text colour as "#RRGGBB".
+    pub color: String,
+    /// Rotation in degrees counter-clockwise.
+    pub rotation_deg: f32,
+    pub bold: bool,
+    pub italic: bool,
+    /// Text alignment: "left" | "center" | "right".
+    pub align: String,
+}
+
+impl TextElement {
+    pub fn new(id: u32, x_mm: f32, y_mm: f32) -> Self {
+        TextElement {
+            id,
+            content: "Text".into(),
+            x_mm,
+            y_mm,
+            font_family: "Helvetica".into(),
+            font_size_pt: 24.0,
+            color: "#000000".into(),
+            rotation_deg: 0.0,
+            bold: false,
+            italic: false,
+            align: "left".into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Spread {
     pub id: u32,
     pub tree: BspTree,
     pub kind: SpreadKind,
     pub label: String,
+    /// Free-floating text elements on this spread (not part of the BSP tree).
+    #[serde(default)]
+    pub text_elements: Vec<TextElement>,
 }
 
 impl Spread {
@@ -29,6 +79,7 @@ impl Spread {
             tree: BspTree::new_with_start(id * 1_000_000),
             kind,
             label,
+            text_elements: Vec::new(),
         }
     }
 }
@@ -59,8 +110,27 @@ pub struct PhotobookDocument {
     /// Snapping step for the transform box margin handles (0 = continuous).
     #[serde(default)]
     pub margin_step_mm: f32,
+    /// Target print resolution in pixels per inch (used when exporting PDF).
+    #[serde(default = "default_print_dpi")]
+    pub print_dpi: f32,
+    /// Default margin applied to the root node of each newly created spread (mm).
+    #[serde(default)]
+    pub default_margin_top: f32,
+    #[serde(default)]
+    pub default_margin_right: f32,
+    #[serde(default)]
+    pub default_margin_bottom: f32,
+    #[serde(default)]
+    pub default_margin_left: f32,
     next_spread_id: u32,
+    /// Counter used to assign globally unique IDs to text elements.
+    /// Starts at 500_000_000 to avoid collision with BSP node IDs.
+    #[serde(default = "default_next_text_id")]
+    pub next_text_id: u32,
 }
+
+fn default_print_dpi() -> f32 { 300.0 }
+fn default_next_text_id() -> u32 { 500_000_000 }
 
 impl PhotobookDocument {
     pub fn new(width_mm: f32, height_mm: f32, bleed_mm: f32) -> Self {
@@ -76,7 +146,13 @@ impl PhotobookDocument {
             spine_mm_per_page: 0.12,
             spine_min_mm: 5.0,
             margin_step_mm: 0.0,
+            print_dpi: 300.0,
+            default_margin_top: 0.0,
+            default_margin_right: 0.0,
+            default_margin_bottom: 0.0,
+            default_margin_left: 0.0,
             next_spread_id: 2,
+            next_text_id: 500_000_000,
         }
     }
 
