@@ -6,7 +6,7 @@
     "strict": true,
     "outDir": "web",
     "rootDir": "web",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false

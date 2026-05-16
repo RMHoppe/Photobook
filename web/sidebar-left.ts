@@ -6,6 +6,13 @@
 //   3. A semaphore caps concurrent createImageBitmap calls (DECODE_CONCURRENCY).
 //   4. createImageBitmap runs off the main thread; no jank during proxy creation.
 //   5. ArrayBuffers are read lazily: only when an image is exported or assigned.
+//
+// Selection model:
+//   - Click: select single image (clears previous selection).
+//   - Ctrl/Cmd+Click: toggle image into/out of the selection.
+//   - Shift+Click: extend selection range from last-clicked item.
+//   - Drag: initiates a canvas drop using the dragged image; does not alter
+//     the sidebar selection.
 
 import { PROXY_MAX_PX, THUMB_MAX_PX, DECODE_CONCURRENCY } from './constants.js';
 
@@ -18,14 +25,22 @@ export interface ImageBufferEntry {
 
 export class ImageSidebar {
   private gridEl: HTMLElement;
-  private onSelect: (id: string) => void;
+  /** Called whenever the sidebar selection changes. */
+  private onPhotoSelect: (ids: ReadonlySet<string>) => void;
   private onProxyReady: (id: string) => void;
-  private selectedId: string | null = null;
 
   private _handles  = new Map<string, FileSystemFileHandle>();
   private _proxies  = new Map<string, ImageBitmap>();       // 800px, for canvas rendering
   private _buffers  = new Map<string, ArrayBuffer>();       // lazy, for PDF export
   private _dims     = new Map<string, [number, number]>();  // natural dims, lazy
+  private _sizes    = new Map<string, number>();            // file sizes in bytes
+
+  /** Ordered list of IDs matching DOM order — used for shift-range selection. */
+  private _ids: string[] = [];
+  /** Currently selected image IDs. */
+  private _selectedIds: Set<string> = new Set();
+  /** Index of the last item clicked (for shift-range). */
+  private _lastClickedIdx: number | null = null;
 
   // Semaphore
   private _active = 0;
@@ -36,12 +51,12 @@ export class ImageSidebar {
 
   constructor(
     gridEl: HTMLElement,
-    onSelect: (id: string) => void,
+    onPhotoSelect: (ids: ReadonlySet<string>) => void,
     onProxyReady?: (id: string) => void,
   ) {
-    this.gridEl       = gridEl;
-    this.onSelect     = onSelect;
-    this.onProxyReady = onProxyReady ?? (() => {});
+    this.gridEl         = gridEl;
+    this.onPhotoSelect  = onPhotoSelect;
+    this.onProxyReady   = onProxyReady ?? (() => {});
 
     this._observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
@@ -72,11 +87,14 @@ export class ImageSidebar {
     // Tear down previous state.
     this._observer.disconnect();
     this.gridEl.innerHTML = '';
-    this.selectedId = null;
+    this._ids = [];
+    this._selectedIds = new Set();
+    this._lastClickedIdx = null;
     this._handles.clear();
     this._proxies.clear();
     this._buffers.clear();
     this._dims.clear();
+    this._sizes.clear();
 
     const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'];
 
@@ -87,6 +105,7 @@ export class ImageSidebar {
 
       const id = name;
       this._handles.set(id, handle as FileSystemFileHandle);
+      this._ids.push(id);
 
       const item = this._makeItem(id, name);
       this.gridEl.appendChild(item);
@@ -113,27 +132,74 @@ export class ImageSidebar {
     pCtx.fillRect(0, 0, THUMB_MAX_PX, THUMB_MAX_PX);
     div.appendChild(canvas);
 
-    div.addEventListener('click', () => this._selectItem(id, div));
+    // Used-badge (hidden until updateUsedBadges marks it).
+    const badge = document.createElement('div');
+    badge.className = 'image-used-badge';
+    badge.textContent = '✓';
+    badge.hidden = true;
+    div.appendChild(badge);
+
+    div.addEventListener('click', (e) => this._handleClick(e, id));
     div.draggable = true;
     div.addEventListener('dragstart', (e: DragEvent) => {
-      e.dataTransfer!.setData('text/plain', id);
+      // If the dragged item is already part of a multi-selection, carry all
+      // selected IDs. Otherwise drag only this one.
+      const dragIds = (this._selectedIds.has(id) && this._selectedIds.size > 1)
+        ? [...this._selectedIds]
+        : [id];
+      e.dataTransfer!.setData('text/plain', JSON.stringify(dragIds));
       e.dataTransfer!.effectAllowed = 'copy';
-      this._selectItem(id, div);
+      // Refresh proxy cache for all dragged images.
+      this.onPhotoSelect(this._selectedIds);
     });
 
     return div;
   }
 
-  private _selectItem(id: string, el: HTMLElement): void {
-    if (this.selectedId) {
-      const prev = this.gridEl.querySelector<HTMLElement>(
-        `[data-id="${CSS.escape(this.selectedId)}"]`,
-      );
-      prev?.classList.remove('selected');
+  private _handleClick(e: MouseEvent, id: string): void {
+    const idx = this._ids.indexOf(id);
+    if (idx === -1) return;
+
+    if (e.ctrlKey || e.metaKey) {
+      // Toggle this item.
+      if (this._selectedIds.has(id)) {
+        this._selectedIds.delete(id);
+      } else {
+        this._selectedIds.add(id);
+      }
+      this._lastClickedIdx = idx;
+    } else if (e.shiftKey && this._lastClickedIdx !== null) {
+      // Extend selection range from last click to here.
+      const lo = Math.min(this._lastClickedIdx, idx);
+      const hi = Math.max(this._lastClickedIdx, idx);
+      for (let i = lo; i <= hi; i++) this._selectedIds.add(this._ids[i]);
+      // Don't update _lastClickedIdx on shift-click.
+    } else {
+      // Plain click — select only this item.
+      this._selectedIds = new Set([id]);
+      this._lastClickedIdx = idx;
     }
-    this.selectedId = id;
-    el.classList.add('selected');
-    this.onSelect(id);
+
+    this._syncSelectedClass();
+    this.onPhotoSelect(this._selectedIds);
+  }
+
+  private _syncSelectedClass(): void {
+    for (const el of this.gridEl.querySelectorAll<HTMLElement>('.image-thumb')) {
+      el.classList.toggle('selected', this._selectedIds.has(el.dataset.id!));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Used-image badge
+  // -------------------------------------------------------------------------
+
+  /** Update the green tick badges to reflect which images are currently placed on any spread. */
+  updateUsedBadges(usedIds: ReadonlySet<string>): void {
+    for (const el of this.gridEl.querySelectorAll<HTMLElement>('.image-thumb')) {
+      const badge = el.querySelector<HTMLElement>('.image-used-badge');
+      if (badge) badge.hidden = !usedIds.has(el.dataset.id!);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -163,6 +229,7 @@ export class ImageSidebar {
     if (!handle) return;
 
     const file = await handle.getFile();
+    this._sizes.set(id, file.size);
 
     // createImageBitmap decodes off the main thread — no frame drops.
     // resizeWidth produces a downsampled proxy; fall back to full size on Safari.
@@ -202,6 +269,23 @@ export class ImageSidebar {
   /** Returns the 800px proxy ImageBitmap, or null if not yet decoded. */
   getProxy(id: string): ImageBitmap | null {
     return this._proxies.get(id) ?? null;
+  }
+
+  /** Returns the known file size in bytes, or null if not yet loaded. */
+  getFileSize(id: string): number | null {
+    return this._sizes.get(id) ?? null;
+  }
+
+  /** Returns the current sidebar selection. */
+  getSelectedIds(): ReadonlySet<string> {
+    return this._selectedIds;
+  }
+
+  /** Clears the sidebar selection without firing onPhotoSelect. */
+  clearSelection(): void {
+    this._selectedIds = new Set();
+    this._lastClickedIdx = null;
+    this._syncSelectedClass();
   }
 
   /**

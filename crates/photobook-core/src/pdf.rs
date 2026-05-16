@@ -4,9 +4,10 @@ use printpdf::{
     ColorBits, ColorSpace, CurTransMat, Pt, XObjectRef,
     path,
 };
-use crate::bsp::{BspKind, BspTree};
-use crate::layout::{resolve_backgrounds_mm, resolve_mm, Border, BorderPosition, Rect};
+use crate::layout::{Border, BorderPosition, Rect};
 use crate::page::{PhotobookDocument, SpreadKind, TextElement};
+use crate::grid_layout::GridLayout;
+use crate::grid_resolver::{resolve_backgrounds_mm, resolve_frames_mm};
 use crate::utils::image_cover_factors;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -35,13 +36,13 @@ struct DecodedImage {
 
 /// One output PDF page derived from a spread.
 struct OutputPage<'a> {
-    tree: &'a BspTree,
+    layout: &'a GridLayout,
     /// Which horizontal slice of the spread (in spread-mm) this page covers.
     region: Rect,
     /// Trimmed page size on paper.
     out_w: f32,
     out_h: f32,
-    /// Full spread width in mm (needed for resolve_mm / resolve_backgrounds_mm).
+    /// Full spread width in mm (needed for resolve_rooms_mm).
     spread_w: f32,
 }
 
@@ -75,7 +76,7 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
     for spread in &doc.spreads {
         let spread_w = doc.spread_width_mm(spread);
         out_pages.push(OutputPage {
-            tree: &spread.tree,
+            layout: &spread.layout,
             region: Rect::new(0.0, 0.0, spread_w, ph),
             out_w: spread_w,
             out_h: ph,
@@ -116,8 +117,8 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None)));
         fill_rect(&layer, 0.0, 0.0, total_w, total_h);
 
-        // Node backgrounds (in tree-walk / parent-first order, bleed-extended).
-        for bg in resolve_backgrounds_mm(p.tree, p.spread_w, p.out_h, bleed) {
+        // Room backgrounds, bleed-extended.
+        for bg in resolve_backgrounds_mm(p.layout, p.spread_w, p.out_h, bleed) {
             let (r, g, b) = parse_hex_color(&bg.color);
             layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
             let pdf_x = bg.rect.x + bleed;
@@ -127,25 +128,18 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
 
         draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
 
-        let leaves_mm = resolve_mm(p.tree, p.spread_w, ph, bleed);
+        let rooms_mm = resolve_frames_mm(p.layout, p.spread_w, ph, bleed);
 
         // --- Pass 1: prepare per-frame placement data and deduplicate crops. ---
-        // Key: (image_id, crop_left, crop_top, crop_width, crop_height)
-        // Value: embedded XObjectRef + placement info reused by all frames with the same crop.
         type CropKey = (String, u32, u32, u32, u32);
         let mut xobj_cache: HashMap<CropKey, XObjectRef> = HashMap::new();
-
-        // Collect all leaf placements first so we can share XObjects within the page.
-        // Tuple: (frame_page, node_rotation_deg, Prepared).
         let mut pending: Vec<(Rect, f32, Prepared)> = Vec::new();
 
-        for (node_id, spread_rect) in &leaves_mm {
+        for (face_id, spread_rect) in &rooms_mm {
             let Some(_clipped) = intersect_rect(spread_rect, &p.region) else { continue };
-            let Some(node) = p.tree.get(*node_id) else { continue };
-            let BspKind::Leaf(ref leaf) = node.kind else { continue };
+            let Some(face) = p.layout.faces.get(face_id) else { continue };
 
-            let node_rotation = node.box_model.node_rotation_deg.unwrap_or(0.0);
-
+            let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
             let frame_page = Rect::new(
                 spread_rect.x - p.region.x,
                 spread_rect.y,
@@ -153,11 +147,12 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
                 spread_rect.h,
             );
 
-            if let Some(ref img_id) = leaf.image_id {
+            if let Some(ref img_id) = face.image.image_id {
                 if let Some(decoded_img) = decoded.get(img_id.as_str()) {
                     if let Some(prep) = prepare_image(
                         decoded_img, &frame_page, bleed, p.out_h,
-                        leaf.pan_x, leaf.pan_y, leaf.scale, leaf.rotation_deg,
+                        face.image.pan_x, face.image.pan_y,
+                        face.image.scale, face.image.rotation_deg,
                         print_dpi,
                     ) {
                         let key: CropKey = (
@@ -165,7 +160,6 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
                             prep.crop.left, prep.crop.top,
                             prep.crop.width, prep.crop.height,
                         );
-                        // Embed the XObject only once per unique crop.
                         let xobj_ref = xobj_cache.entry(key).or_insert_with(|| {
                             layer.add_image(prep.xobj.clone())
                         }).clone();
@@ -183,18 +177,18 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
                             *node_rotation, bleed, p.out_h);
             }
         }
-        for (node_id, spread_rect) in &leaves_mm {
+        for (face_id, spread_rect) in &rooms_mm {
             let Some(_clipped) = intersect_rect(spread_rect, &p.region) else { continue };
-            let Some(node) = p.tree.get(*node_id) else { continue };
+            let Some(face) = p.layout.faces.get(face_id) else { continue };
             let frame_page = Rect::new(
                 spread_rect.x - p.region.x,
                 spread_rect.y,
                 spread_rect.w,
                 spread_rect.h,
             );
-            let border = &node.box_model.border;
+            let border = &face.box_model.border;
             if border.width > 0.0 {
-                let node_rotation = node.box_model.node_rotation_deg.unwrap_or(0.0);
+                let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
                 layer.save_graphics_state();
                 apply_node_ctm(&layer, node_rotation, &frame_page, bleed, p.out_h);
                 draw_border_rect(&layer, &frame_page, bleed, p.out_h, border);
@@ -492,7 +486,7 @@ fn paint_image(
     xobj_ref: XObjectRef,
     prep: &Prepared,
     frame_rect: &Rect,
-    node_rotation_deg: f32,
+    face_rotation_deg: f32,
     bleed: f32,
     page_h_mm: f32,
 ) {
@@ -528,7 +522,7 @@ fn paint_image(
     use printpdf::lopdf::Object::Real;
 
     layer.save_graphics_state();
-    apply_node_ctm(layer, node_rotation_deg, frame_rect, bleed, page_h_mm);
+    apply_node_ctm(layer, face_rotation_deg, frame_rect, bleed, page_h_mm);
     layer.add_operation(Operation::new("re", vec![Real(cx), Real(cy), Real(cw), Real(ch)]));
     layer.add_operation(Operation::new("W", vec![]));
     layer.add_operation(Operation::new("n", vec![]));
@@ -823,7 +817,6 @@ fn placement_params(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bsp::{BspKind, SplitAxis};
     use crate::page::PhotobookDocument;
 
     /// Generate a synthetic JPEG of size `w × h` pixels and return it as a
@@ -854,39 +847,27 @@ mod tests {
         (b64, raw_len)
     }
 
-    /// Build a one-spread document split into `n_cols` equal vertical frames,
-    /// each assigned the given image id.
+    /// Build a one-spread document split into `n_cols` equal vertical frames.
     fn doc_with_n_frames(n_cols: usize, img_id: &str) -> PhotobookDocument {
         let mut doc = PhotobookDocument::new(210.0, 297.0, 3.0);
-        // Use the first content spread (index 1).
         let spread = &mut doc.spreads[1];
-        let tree = &mut spread.tree;
+        let layout = &mut spread.layout;
 
-        // Split the root leaf into n_cols equal vertical slices.
-        let mut current = tree.root;
+        let mut current_id: u32 = *layout.faces.keys().next().unwrap();
         for i in 0..n_cols.saturating_sub(1) {
-            // Split current leaf; ratio keeps each remaining slice equal.
             let ratio = 1.0 / (n_cols - i) as f32;
-            let (first, second) = tree.split(current, SplitAxis::Vertical).unwrap();
-            // Set ratio so the first child is 1/remaining of the total.
-            if let Some(node) = tree.get_mut(current) {
-                if let BspKind::Split(ref mut s) = node.kind {
-                    s.ratio = ratio;
-                }
+            let (rx, ry, rw, rh) = layout.face_rect(current_id).unwrap();
+            let x = rx + ratio * rw;
+            layout.split_face(current_id, x, crate::layout::SplitAxis::Vertical);
+            if let Some(face) = layout.faces.get_mut(&current_id) {
+                face.image.image_id = Some(img_id.to_string());
             }
-            // Assign image to the first (narrower) child.
-            if let Some(node) = tree.get_mut(first) {
-                if let BspKind::Leaf(ref mut l) = node.kind {
-                    l.image_id = Some(img_id.to_string());
-                }
-            }
-            current = second;
+            let probe_x = (x + rx + rw) / 2.0;
+            current_id = layout.face_at(probe_x, ry + rh * 0.5)
+                .unwrap_or(current_id);
         }
-        // Assign image to the last remaining leaf.
-        if let Some(node) = tree.get_mut(current) {
-            if let BspKind::Leaf(ref mut l) = node.kind {
-                l.image_id = Some(img_id.to_string());
-            }
+        if let Some(face) = layout.faces.get_mut(&current_id) {
+            face.image.image_id = Some(img_id.to_string());
         }
 
         doc.current_spread = 1;
@@ -901,7 +882,7 @@ mod tests {
             height_px: h,
         };
         let images_json = serde_json::to_string(&[entry]).unwrap();
-        export_pdf(doc, &images_json)
+        export_pdf(doc, &images_json, "[]")
     }
 
     #[test]
@@ -938,122 +919,5 @@ mod tests {
         );
     }
 
-    /// Build the layout the user described: one horizontal split creating
-    /// top and bottom halves, then the top half split vertically into left
-    /// and right. Result: top-left, top-right, bottom (3 frames).
-    fn doc_h_split_then_v(img_id: &str) -> PhotobookDocument {
-        let mut doc = PhotobookDocument::new(210.0, 297.0, 3.0);
-        let spread = &mut doc.spreads[1];
-        let tree = &mut spread.tree;
-        let root = tree.root;
-
-        // Split root horizontally (top / bottom halves).
-        let (top, bottom) = tree.split(root, SplitAxis::Horizontal).unwrap();
-        if let Some(n) = tree.get_mut(root) {
-            if let BspKind::Split(ref mut s) = n.kind { s.ratio = 0.5; }
-        }
-
-        // Split the top half vertically (left / right).
-        let (top_left, top_right) = tree.split(top, SplitAxis::Vertical).unwrap();
-        if let Some(n) = tree.get_mut(top) {
-            if let BspKind::Split(ref mut s) = n.kind { s.ratio = 0.5; }
-        }
-
-        for id in [top_left, top_right, bottom] {
-            if let Some(n) = tree.get_mut(id) {
-                if let BspKind::Leaf(ref mut l) = n.kind {
-                    l.image_id = Some(img_id.to_string());
-                }
-            }
-        }
-
-        doc.current_spread = 1;
-        doc
-    }
-
-    #[test]
-    fn investigate_mixed_split_layout() {
-        let img_w = 3000_u32;
-        let img_h = 2000_u32;
-        let (b64, src_bytes) = make_jpeg(img_w, img_h);
-        let bleed = 3.0_f32;
-        let page_h = 297.0_f32;
-        let spread_w = 420.0_f32; // 2 × 210mm pages
-
-        println!("─── Source image: {}×{} px, {} KB ───", img_w, img_h, src_bytes / 1024);
-
-        // --- 1-frame baseline (full spread, no split) ---
-        let doc_1 = doc_with_n_frames(1, "img");
-        let pdf_1 = run_export(&doc_1, "img", &b64, img_w, img_h);
-        println!("1 frame (full spread): {} KB", pdf_1.len() / 1024);
-
-        // --- user layout: horizontal split then top half vertical ---
-        let doc_3 = doc_h_split_then_v("img");
-        let pdf_3 = run_export(&doc_3, "img", &b64, img_w, img_h);
-        println!("3 frames (H-split + top V-split): {} KB  ({:.1}× baseline)",
-            pdf_3.len() / 1024,
-            pdf_3.len() as f64 / pdf_1.len() as f64);
-
-        // --- per-frame crop inspection ---
-        // Frames resolved from the H+V layout:
-        //   top-left:  x=0,     y=0,      w=210, h=148.5
-        //   top-right: x=210,   y=0,      w=210, h=148.5
-        //   bottom:    x=0,     y=148.5,  w=420, h=148.5
-        let frames = [
-            ("top-left  (210×148.5 mm)", Rect::new(0.0,   0.0,   210.0, 148.5)),
-            ("top-right (210×148.5 mm)", Rect::new(210.0, 0.0,   210.0, 148.5)),
-            ("bottom    (420×148.5 mm)", Rect::new(0.0,   148.5, 420.0, 148.5)),
-        ];
-
-        println!("\nPer-frame crop analysis (pan 0.5/0.5, no zoom/rotation):");
-        println!("{:<30}  {:>12}  {:>12}  {:>12}  {:>12}",
-            "frame", "cover_scale", "crop px", "resamp px", "JPEG KB");
-
-        let mut total_embedded_kb = 0.0_f64;
-        for (label, frame) in &frames {
-            let (sw, sh, x_mm, y_mm, total_scale) =
-                placement_params(frame, img_w, img_h, 0.5, 0.5, 1.0, 0.0, bleed, page_h);
-
-            let crop = compute_crop(frame, bleed, page_h, img_w, img_h,
-                                    sw, sh, x_mm, y_mm, 0.0);
-
-            // Resampling target at 300 DPI.
-            let rw_in = crop.width  as f32 * sw / (img_w as f32 * 25.4);
-            let rh_in = crop.height as f32 * sh / (img_h as f32 * 25.4);
-            let target_w = ((rw_in * 300.0).round() as u32).clamp(1, crop.width);
-            let target_h = ((rh_in * 300.0).round() as u32).clamp(1, crop.height);
-
-            // Rough JPEG size estimate: assume same bits-per-pixel as source.
-            let src_bpp = src_bytes as f64 / (img_w as f64 * img_h as f64);
-            let est_kb = target_w as f64 * target_h as f64 * src_bpp / 1024.0;
-            total_embedded_kb += est_kb;
-
-            let cover_scale = (frame.w / (img_w as f32 / 300.0 * 25.4))
-                .max(frame.h / (img_h as f32 / 300.0 * 25.4));
-
-            println!("{:<30}  {:>12.3}  {:>5}×{:<5}  {:>5}×{:<5}  {:>12.1}",
-                label, cover_scale,
-                crop.width, crop.height,
-                target_w, target_h,
-                est_kb);
-        }
-        println!("{:<30}  {:>12}  {:>12}  {:>12}  {:>12.1}",
-            "TOTAL estimated", "", "", "", total_embedded_kb);
-
-        // Baseline single-frame crop for comparison.
-        let full_frame = Rect::new(0.0, 0.0, spread_w, page_h);
-        let (sw1, sh1, xm1, ym1, _) =
-            placement_params(&full_frame, img_w, img_h, 0.5, 0.5, 1.0, 0.0, bleed, page_h);
-        let crop1 = compute_crop(&full_frame, bleed, page_h, img_w, img_h, sw1, sh1, xm1, ym1, 0.0);
-        let src_bpp = src_bytes as f64 / (img_w as f64 * img_h as f64);
-        let est1_kb = crop1.width as f64 * crop1.height as f64 * src_bpp / 1024.0;
-        println!("{:<30}  {:>12.3}  {:>5}×{:<5}  {:>12}  {:>12.1}",
-            "baseline (420×297 mm)",
-            (spread_w / (img_w as f32 / 300.0 * 25.4))
-                .max(page_h / (img_h as f32 / 300.0 * 25.4)),
-            crop1.width, crop1.height, "(no resamp)", est1_kb);
-
-        println!("\nSize ratio 3-frame / 1-frame: {:.2}×", pdf_3.len() as f64 / pdf_1.len() as f64);
-    }
 }
 

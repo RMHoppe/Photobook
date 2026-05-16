@@ -17,12 +17,11 @@ impl PhotobookEditor {
             self.doc.default_margin_left,
         );
         if let Some(spread) = self.doc.spreads.last_mut() {
-            let root_id = spread.tree.root;
-            if let Some(node) = spread.tree.nodes.get_mut(&root_id) {
-                node.box_model.margin.top    = t;
-                node.box_model.margin.right  = r;
-                node.box_model.margin.bottom = b;
-                node.box_model.margin.left   = l;
+            for face in spread.layout.faces.values_mut() {
+                face.box_model.margin.top    = t;
+                face.box_model.margin.right  = r;
+                face.box_model.margin.bottom = b;
+                face.box_model.margin.left   = l;
             }
         }
         let n = self.doc.spreads.len();
@@ -54,7 +53,6 @@ impl PhotobookEditor {
         self.doc.current_spread as u32
     }
 
-    /// Returns JSON array of {id, label, kind} for all spreads (lightweight, no tree data).
     pub fn get_spreads_info(&self) -> String {
         #[derive(serde::Serialize)]
         struct SpreadInfo<'a> { id: u32, label: &'a str, kind: &'static str, width_mm: f32, height_mm: f32 }
@@ -69,7 +67,6 @@ impl PhotobookEditor {
         serde_json::to_string(&info).unwrap_or_default()
     }
 
-    /// Returns JSON {kind, width_mm, height_mm, spine_mm, page_width_mm} for the current spread.
     pub fn get_current_spread_info(&self) -> String {
         let spread = self.doc.current_spread();
         let w = self.doc.spread_width_mm(spread);
@@ -124,29 +121,12 @@ impl PhotobookEditor {
         serde_json::to_string(&self.doc.page_size).unwrap_or_default()
     }
 
-    pub fn get_bleed_mm(&self) -> f32 {
-        self.doc.bleed_mm
-    }
-
-    pub fn get_safe_zone_mm(&self) -> f32 {
-        self.doc.safe_zone_mm
-    }
-
-    pub fn get_spine_mm_per_page(&self) -> f32 {
-        self.doc.spine_mm_per_page
-    }
-
-    pub fn get_spine_min_mm(&self) -> f32 {
-        self.doc.spine_min_mm
-    }
-
-    pub fn get_margin_step_mm(&self) -> f32 {
-        self.doc.margin_step_mm
-    }
-
-    pub fn get_print_dpi(&self) -> f32 {
-        self.doc.print_dpi
-    }
+    pub fn get_bleed_mm(&self) -> f32 { self.doc.bleed_mm }
+    pub fn get_safe_zone_mm(&self) -> f32 { self.doc.safe_zone_mm }
+    pub fn get_spine_mm_per_page(&self) -> f32 { self.doc.spine_mm_per_page }
+    pub fn get_spine_min_mm(&self) -> f32 { self.doc.spine_min_mm }
+    pub fn get_margin_step_mm(&self) -> f32 { self.doc.margin_step_mm }
+    pub fn get_print_dpi(&self) -> f32 { self.doc.print_dpi }
 
     pub fn get_default_spread_margin_mm(&self) -> String {
         serde_json::json!({
@@ -162,13 +142,11 @@ impl PhotobookEditor {
         self.doc.default_margin_right  = right.max(0.0);
         self.doc.default_margin_bottom = bottom.max(0.0);
         self.doc.default_margin_left   = left.max(0.0);
-
-        let root_id = self.doc.current_spread().tree.root;
-        if let Some(node) = self.doc.current_spread_mut().tree.get_mut(root_id) {
-            node.box_model.margin.top    = top.max(0.0);
-            node.box_model.margin.right  = right.max(0.0);
-            node.box_model.margin.bottom = bottom.max(0.0);
-            node.box_model.margin.left   = left.max(0.0);
+        for face in self.doc.current_spread_mut().layout.faces.values_mut() {
+            face.box_model.margin.top    = top.max(0.0);
+            face.box_model.margin.right  = right.max(0.0);
+            face.box_model.margin.bottom = bottom.max(0.0);
+            face.box_model.margin.left   = left.max(0.0);
         }
     }
 

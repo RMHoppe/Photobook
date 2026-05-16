@@ -14,23 +14,24 @@
 //   { sr, relX, relY }
 
 import { NULL_ID } from './constants.js';
-import { computeImageCover, getRenderList, getDividers, getLeafTransform, getTransformNodeBoxModel, getSpreadInfo,
+import { computeImageCover, getRenderList, getDividers, getFrameTransform, getTransformBoxModel, getSpreadInfo,
          getSelectedTransformHandles, addTextElement, moveTextElement, updateTextElement, getTextElements } from './wasm-bridge.js';
-import type { CrossHandle } from './types.js';
 import type { PhotobookEditor } from './pkg/photobook_core.js';
-import type { SpreadRect, Overlays, TextElement } from './types.js';
+import type { SpreadRect, Overlays, TextElement, TwinHandle, XJunction } from './types.js';
 import type { CanvasRenderer } from './canvas.js';
 
 // ---------------------------------------------------------------------------
 // Context types
 // ---------------------------------------------------------------------------
 
-export type ModeState = Record<string, unknown>;
+export type ModeState = object;
 
 export interface ToSpreadResult {
   sr: SpreadRect;
   relX: number;
   relY: number;
+  canvasX: number; // sr.x + relX
+  canvasY: number; // sr.y + relY
 }
 
 export interface InteractionContext {
@@ -63,10 +64,8 @@ export interface InteractionMode {
 // Mode-specific state shapes (used internally via cast)
 // ---------------------------------------------------------------------------
 
-// Each state type includes [key: string]: unknown so it satisfies ModeState (Record<string, unknown>)
-// and can be passed to setMode() and cast back without a double-cast.
-interface MarqueeState      { startX: number; startY: number; shiftKey: boolean; [k: string]: unknown; }
-interface DividerDragState  { nodeId: number; [k: string]: unknown; }
+interface MarqueeState      { startX: number; startY: number; shiftKey: boolean; }
+interface DividerDragState  { nodeId: number; }
 
 // Text-element interaction state types.
 interface TextDragState {
@@ -75,7 +74,6 @@ interface TextDragState {
   startX: number; startY: number; // element x_mm / y_mm at drag start
   mmToPx: number;
   hasMoved: boolean;
-  [k: string]: unknown;
 }
 interface TextResizeState {
   el: TextElement;
@@ -89,23 +87,22 @@ interface TextResizeState {
   startFontSize: number;
   mmToPx: number;
   srX: number; srY: number; // spread origin in canvas CSS px at drag start
-  [k: string]: unknown;
+  hasMoved: boolean;
 }
 interface TextRotateState {
   el: TextElement;
   cx: number; cy: number; // bounding-box centre in canvas px
   startAngle: number; // angle from centre to mouse at drag start (canvas)
   startRot: number;   // el.rotation_deg at drag start
-  [k: string]: unknown;
+  hasMoved: boolean;
 }
-interface TextPlaceState { [k: string]: unknown; }
+interface TextPlaceState { }
 interface ImagePanState {
   nodeId: number;
   startX: number; startY: number;
   startPanX: number; startPanY: number;
   overflowX: number; overflowY: number;
   hasMoved: boolean;
-  [k: string]: unknown;
 }
 type MarginCorner = 'tl' | 'tr' | 'bl' | 'br';
 type MarginKey    = 'top' | 'right' | 'bottom' | 'left';
@@ -129,22 +126,23 @@ interface MarginDragState {
   startMargins: Record<MarginKey, number>;
   mmToPx: number;
   marginStepMm: number;
-  [k: string]: unknown;
 }
-interface ImageSwapState      { sourceId: number; targetId: number | null; [k: string]: unknown; }
+interface ImageSwapState      { sourceId: number; targetId: number | null; }
 interface NodeRotateDragState {
   cx: number; cy: number;     // node centre in canvas px
   startAngle: number;          // atan2 from centre to mouse at drag start
   startRotDeg: number;
   hasMoved: boolean;
-  [k: string]: unknown;
 }
-interface SplitPreviewState { nodeId: number; axis: 'v' | 'h' | 'quadrant' | null; ratio: number | null; numCuts: number; [k: string]: unknown; }
-interface EdgeDragState { edge: 'top' | 'bottom' | 'left' | 'right'; axis: 'h' | 'v'; newIsFirst: boolean; ratio: number; [k: string]: unknown; }
-interface CrossHandleDragState { handle: CrossHandle; ratio: number; [k: string]: unknown; }
+interface SplitPreviewState { nodeId: number; axis: 'v' | 'h' | 'quadrant' | null; ratio: number | null; numCuts: number; }
+interface EdgeLiveDragState { edge: 'top' | 'bottom' | 'left' | 'right'; axis: 'h' | 'v'; newIsFirst: boolean; spawned: boolean; segmentId: number; }
 
 // Tracks the currently hovered spread edge (for the new-split-at-root drag gesture).
 let _hoveredEdge: 'top' | 'bottom' | 'left' | 'right' | null = null;
+
+// When a twin handle is selected: chain rep ID and specific edge ID of the selected twin.
+let _selectedTwinChainId: number | null = null;
+let _selectedTwinEdgeId: number | null = null;
 
 // ---------------------------------------------------------------------------
 // Marquee selection mode
@@ -174,9 +172,9 @@ export const marqueeMode: InteractionMode = {
     const dragged = rect && (rect.w > 4 || rect.h > 4);
     if (dragged) {
       if (state.shiftKey) {
-        editor.toggle_nodes_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
+        editor.toggle_faces_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
       } else {
-        editor.select_nodes_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
+        editor.select_faces_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
       }
       refreshBoxModel();
     } else if (state.shiftKey) {
@@ -213,7 +211,7 @@ const MARGIN_HANDLE_CURSORS: Record<string, string> = {
 export const idleMode: InteractionMode = {
   onMouseDown(e, ctx) {
     const { editor, renderer, overlays, toSpread, snapshot, refreshBoxModel, redraw, setMode } = ctx;
-    const { sr, relX, relY } = toSpread(e);
+    const { sr, relX, relY, canvasX, canvasY } = toSpread(e);
 
     function handleRotationHandle(): void {
       const handles = getSelectedTransformHandles(editor, sr.w, sr.h);
@@ -221,14 +219,12 @@ export const idleMode: InteractionMode = {
       const { outer } = handles;
       const cx = sr.x + outer.x + outer.w / 2;
       const cy = sr.y + outer.y + outer.h / 2;
-      const canvasX = relX + sr.x;
-      const canvasY = relY + sr.y;
       const startAngle = Math.atan2(canvasY - cy, canvasX - cx);
-      const bm = getTransformNodeBoxModel(editor);
+      const bm = getTransformBoxModel(editor);
       snapshot();
       setMode(nodeRotateDragMode, {
         cx, cy, startAngle,
-        startRotDeg: bm.node_rotation_deg ?? 0,
+        startRotDeg: bm.face_rotation_deg ?? 0,
         hasMoved: false,
       } as NodeRotateDragState);
       e.preventDefault();
@@ -236,7 +232,7 @@ export const idleMode: InteractionMode = {
 
     function handleMarginHandle(): void {
       const corner = renderer.hoveredMarginHandle! as MarginCorner;
-      const bm = getTransformNodeBoxModel(editor);
+      const bm = getTransformBoxModel(editor);
       const startMargins: Record<MarginKey, number> = {
         top: bm.margin.top, right: bm.margin.right,
         bottom: bm.margin.bottom, left: bm.margin.left,
@@ -253,18 +249,45 @@ export const idleMode: InteractionMode = {
     }
 
     function handleDividerHit(): void {
-      if (e.shiftKey) {
-        // Shift-click: toggle membership without starting a drag.
-        editor.toggle_selection(renderer.hoveredDivider!);
+      const divId = renderer.hoveredDivider!;
+      if (renderer.twinSegmentSelected && divId === _selectedTwinChainId && _selectedTwinEdgeId !== null) {
+        const selTh = renderer._twinHandles.find(h => h.edge_id === _selectedTwinEdgeId);
+        if (selTh) {
+          const HIT_R = 8;
+          const onSegment = selTh.axis === 'v'
+            ? Math.abs(relX - selTh.x) < HIT_R && relY >= selTh.y - selTh.length / 2 && relY <= selTh.y + selTh.length / 2
+            : Math.abs(relY - selTh.y) < HIT_R && relX >= selTh.x - selTh.length / 2 && relX <= selTh.x + selTh.length / 2;
+          if (onSegment) {
+            // Clicking on the highlighted twin segment → drag it as a twin pair.
+            snapshot();
+            editor.begin_divider_drag(_selectedTwinEdgeId, false, sr.w, sr.h);
+            setMode(dividerDragMode, { nodeId: _selectedTwinEdgeId } as DividerDragState);
+            e.preventDefault();
+            return;
+          }
+        }
+        // Clicking elsewhere on the same chain → fall through to select the full chain.
+      }
+      _selectedTwinChainId = null;
+      _selectedTwinEdgeId = null;
+      renderer.twinSegmentSelected = false;
+
+      if (e.metaKey || e.ctrlKey) {
+        // cmd/ctrl+click — toggle this segment without clearing faces or texts.
+        editor.toggle_segment(divId);
         refreshBoxModel();
         redraw();
-      } else {
-        editor.select_node(renderer.hoveredDivider!);
-        refreshBoxModel();
-        snapshot();
-        editor.begin_divider_drag(renderer.hoveredDivider!, sr.w, sr.h);
-        setMode(dividerDragMode, { nodeId: renderer.hoveredDivider! } as DividerDragState);
+        e.preventDefault();
+        return;
       }
+
+      // Plain click — select only this segment, clear faces and texts.
+      renderer.selectedTextIds.clear();
+      editor.select_segment(divId);
+      refreshBoxModel();
+      snapshot();
+      editor.begin_divider_drag(divId, true, sr.w, sr.h);
+      setMode(dividerDragMode, { nodeId: divId } as DividerDragState);
       e.preventDefault();
     }
 
@@ -279,15 +302,27 @@ export const idleMode: InteractionMode = {
     }
 
     function handleTextHit(): boolean {
-      const canvasX = sr.x + relX;
-      const canvasY = sr.y + relY;
       const textHit = renderer.hitTestText(canvasX, canvasY);
       if (!textHit) return false;
       const el = getTextElements(editor).find(t => t.id === textHit.id);
       if (!el) return false;
 
-      renderer.selectedTextId = textHit.id;
-      editor.select_node(NULL_ID);
+      if (e.metaKey || e.ctrlKey) {
+        // cmd/ctrl+click — toggle this text without clearing faces or segments.
+        if (renderer.selectedTextIds.has(textHit.id)) {
+          renderer.selectedTextIds.delete(textHit.id);
+        } else {
+          renderer.selectedTextIds.add(textHit.id);
+        }
+        refreshBoxModel();
+        redraw();
+        e.preventDefault();
+        return true;
+      }
+
+      // Plain click — select only this text, clear faces and segments.
+      editor.select_face(NULL_ID);  // clears faces + segments
+      renderer.selectedTextIds = new Set([textHit.id]);
       ctx.onTextSelected?.(textHit.id);
       const mmToPx = sr.w / getSpreadInfo(editor).width_mm;
 
@@ -330,19 +365,28 @@ export const idleMode: InteractionMode = {
       return true;
     }
 
-    function handleBspHit(): void {
+    function handleLeafHit(): void {
       editor.set_mouse_pos(relX, relY);
       const insideSpread = relX >= 0 && relX <= sr.w && relY >= 0 && relY <= sr.h;
       const hitId = insideSpread ? editor.hit_test(relX, relY, sr.w, sr.h) : NULL_ID;
 
       if (hitId !== NULL_ID) {
-        renderer.selectedTextId = null;
-        if (!editor.is_selected(hitId) || editor.get_selection_count() > 1) {
-          editor.select_node(hitId);
+        if (e.metaKey || e.ctrlKey) {
+          // cmd/ctrl+click — toggle this face without clearing segments or texts.
+          editor.toggle_selection(hitId);
+          refreshBoxModel();
+          redraw();
+          e.preventDefault();
+          return;
+        }
+        // Plain click — clear texts and segments, select only this face.
+        renderer.selectedTextIds.clear();
+        if (!editor.is_selected(hitId) || editor.get_selection_count() > 1 || editor.get_selected_segment() !== NULL_ID) {
+          editor.select_face(hitId);
           refreshBoxModel();
           redraw();
         }
-        const t = getLeafTransform(editor, hitId);
+        const t = getFrameTransform(editor, hitId);
         if (t) {
           const frame = getRenderList(editor, sr.w, sr.h).find(f => f.id === hitId);
           if (frame && frame.image_id && renderer.imageCache.has(frame.image_id)) {
@@ -366,8 +410,8 @@ export const idleMode: InteractionMode = {
           }
         }
       } else {
-        renderer.selectedTextId = null;
-        editor.select_node(NULL_ID);
+        editor.select_face(NULL_ID);  // clears faces + segments
+        renderer.selectedTextIds.clear();
         refreshBoxModel();
         redraw();
         setMode(marqueeMode, { startX: relX, startY: relY, shiftKey: false } as MarqueeState);
@@ -380,50 +424,40 @@ export const idleMode: InteractionMode = {
       const edge = _hoveredEdge!;
       const axis: 'h' | 'v' = (edge === 'top' || edge === 'bottom') ? 'h' : 'v';
       const newIsFirst = edge === 'top' || edge === 'left';
-      const initRatio = axis === 'h' ? Math.max(0.05, Math.min(0.95, relY / sr.h)) : Math.max(0.05, Math.min(0.95, relX / sr.w));
       snapshot();
-      setMode(edgeDragMode, { edge, axis, newIsFirst, ratio: initRatio } as EdgeDragState);
-      e.preventDefault();
-    }
-
-    function handleCrossHit(): void {
-      const ch = renderer.hoveredCrossHandle!;
-      if (ch.kind === 'unlock') {
-        snapshot();
-        editor.begin_divider_drag_unlocked(ch.parent_id, sr.w, sr.h);
-        setMode(dividerDragMode, { nodeId: ch.parent_id });
-        e.preventDefault();
-        return;
-      }
-      if (ch.kind === 'pinwheel_spawn') {
-        snapshot();
-        const ok = editor.begin_pinwheel_spawn_drag(ch.parent_id, ch.x, ch.y, sr.w, sr.h);
-        if (ok) {
-          refreshBoxModel();
-          redraw();
-          setMode(pinwheelSpawnDragMode, {});
-        }
-        e.preventDefault();
-        return;
-      }
-      // Rewire immediately so frames resize live during drag.
-      const initRatio = ch.drag_axis === 'h'
-        ? Math.max(0.05, Math.min(0.95, relX / sr.w))
-        : Math.max(0.05, Math.min(0.95, relY / sr.h));
-      snapshot();
-      editor.rewire_cross_handle(ch.parent_id, ch.first_child, initRatio);
-      refreshBoxModel();
-      redraw();
-      setMode(crossHandleDragMode, { handle: ch, ratio: initRatio } as CrossHandleDragState);
+      setMode(edgeLiveDragMode, { edge, axis, newIsFirst, spawned: false, segmentId: NULL_ID } as EdgeLiveDragState);
       e.preventDefault();
     }
 
     if (_hoveredEdge !== null)                       { handleEdgeHit(); return; }
-    if (renderer.hoveredCrossHandle !== null)        { handleCrossHit(); return; }
+
+    // X-junction handle → begin pinwheel spawn drag.
+    if (renderer.hoveredXJunction !== null) {
+      const jx = renderer.hoveredXJunction;
+      snapshot();
+      editor.begin_pinwheel_spawn(jx.tl_id, jx.tr_id, jx.bl_id, jx.br_id, jx.nx, jx.ny);
+      setMode(pinwheelSpawnMode, { junction: jx, spreadRect: sr } as PinwheelSpawnState);
+      e.preventDefault();
+      return;
+    }
+
+    if (renderer.hoveredTwinHandle !== null) {
+      const th = renderer.hoveredTwinHandle;
+      editor.select_segment(th.edge_id);
+      renderer.twinSegmentSelected = true;
+      _selectedTwinChainId = renderer.hoveredDivider;
+      _selectedTwinEdgeId = th.edge_id;
+      refreshBoxModel();
+      snapshot();
+      editor.begin_divider_drag(th.edge_id, false, sr.w, sr.h);
+      setMode(dividerDragMode, { nodeId: th.edge_id } as DividerDragState);
+      e.preventDefault();
+      return;
+    }
     if (renderer.hoveredRotationHandle)              { handleRotationHandle(); return; }
     if (renderer.hoveredMarginHandle !== null)      { handleMarginHandle(); return; }
     if (renderer.hoveredDivider !== null)           { handleDividerHit(); return; }
-    if ((e.metaKey || e.ctrlKey) && handleImageSwapHit()) return;
+    if (e.altKey && handleImageSwapHit()) return;
     if (handleTextHit()) return;
     if (e.shiftKey) {
       setMode(marqueeMode, { startX: relX, startY: relY, shiftKey: true } as MarqueeState);
@@ -431,7 +465,7 @@ export const idleMode: InteractionMode = {
       e.preventDefault();
       return;
     }
-    handleBspHit();
+    handleLeafHit();
   },
 
   onMouseMove(e, ctx) {
@@ -445,22 +479,28 @@ export const idleMode: InteractionMode = {
 
     const changed = renderer.updateHover(editor, cx, cy, sr);
 
-    // Cross handle hit test (uses cached handles from last draw).
-    const CROSS_HIT_R = 11;
-    let newCrossHover: CrossHandle | null = null;
-    for (const ch of renderer._crossHandles) {
-      const dx = cx - (sr.x + ch.x);
-      const dy = cy - (sr.y + ch.y);
-      if (dx * dx + dy * dy <= CROSS_HIT_R * CROSS_HIT_R) {
-        newCrossHover = ch;
+    // Twin handle hit test (uses cached handles from last draw).
+    const TWIN_HIT_R = 11;
+    let newTwinHover: TwinHandle | null = null;
+    for (const th of renderer._twinHandles) {
+      const dx = cx - (sr.x + th.x);
+      const dy = cy - (sr.y + th.y);
+      if (dx * dx + dy * dy <= TWIN_HIT_R * TWIN_HIT_R) {
+        newTwinHover = th;
         break;
       }
     }
-    const crossChanged = (newCrossHover !== null) !== (renderer.hoveredCrossHandle !== null) ||
-      (newCrossHover && renderer.hoveredCrossHandle &&
-       (newCrossHover.parent_id !== renderer.hoveredCrossHandle.parent_id ||
-        Math.abs(newCrossHover.x - renderer.hoveredCrossHandle.x) > 0.5));
-    renderer.hoveredCrossHandle = newCrossHover;
+    const twinChanged = (newTwinHover !== null) !== (renderer.hoveredTwinHandle !== null) ||
+      (newTwinHover !== null && renderer.hoveredTwinHandle !== null &&
+       newTwinHover.edge_id !== renderer.hoveredTwinHandle.edge_id);
+    renderer.hoveredTwinHandle = newTwinHover;
+
+    // X-junction handle hit test.
+    const newXJunction = renderer.xJunctionAt(cx, cy, sr);
+    const xjChanged = (newXJunction !== null) !== (renderer.hoveredXJunction !== null) ||
+      (newXJunction !== null && renderer.hoveredXJunction !== null &&
+       newXJunction.tl_id !== renderer.hoveredXJunction.tl_id);
+    renderer.hoveredXJunction = newXJunction;
 
     // Detect hover within EDGE_THRESHOLD px outside each spread edge.
     const EDGE_THRESHOLD = 20;
@@ -475,15 +515,17 @@ export const idleMode: InteractionMode = {
     _hoveredEdge = edgeHit;
     renderer.hoveredEdge = edgeHit;
 
-    if (renderer.hoveredCrossHandle !== null) {
-      canvasEl.style.cursor = renderer.hoveredCrossHandle.drag_axis === 'h' ? 'ew-resize' : 'ns-resize';
+    if (renderer.hoveredTwinHandle !== null) {
+      canvasEl.style.cursor = 'pointer';
+    } else if (renderer.hoveredXJunction !== null) {
+      canvasEl.style.cursor = 'crosshair';
     } else if (renderer.hoveredRotationHandle) {
       canvasEl.style.cursor = 'grab';
     } else if (renderer.hoveredMarginHandle !== null) {
       canvasEl.style.cursor = MARGIN_HANDLE_CURSORS[renderer.hoveredMarginHandle] ?? 'default';
     } else if (renderer.hoveredDivider !== null) {
       const divs = getDividers(editor, sr.w, sr.h);
-      const div = divs.find(d => d.node_id === renderer.hoveredDivider);
+      const div = divs.find(d => d.segment_id === renderer.hoveredDivider);
       canvasEl.style.cursor = div ? (div.axis === 'v' ? 'col-resize' : 'row-resize') : 'default';
     } else if (edgeHit) {
       canvasEl.style.cursor = (edgeHit === 'top' || edgeHit === 'bottom') ? 'n-resize' : 'ew-resize';
@@ -492,7 +534,7 @@ export const idleMode: InteractionMode = {
       const textHit = renderer.hitTestText(cx, cy);
       canvasEl.style.cursor = textHit ? 'text' : 'default';
     }
-    if (changed || edgeChanged || crossChanged) redraw();
+    if (changed || edgeChanged || twinChanged || xjChanged) redraw();
   },
 
   onMouseUp(_e, _ctx) {},
@@ -501,7 +543,8 @@ export const idleMode: InteractionMode = {
     const { renderer, redraw, canvasEl } = ctx;
     renderer.hoveredDivider = null;
     renderer.hoveredEdge = null;
-    renderer.hoveredCrossHandle = null;
+    renderer.hoveredTwinHandle = null;
+    renderer.hoveredXJunction = null;
     _hoveredEdge = null;
     canvasEl.style.cursor = 'default';
     redraw();
@@ -518,14 +561,17 @@ export const dividerDragMode: InteractionMode = {
   onMouseMove(e, ctx) {
     const { editor, toSpread, refreshBoxModel, redraw } = ctx;
     const { sr, relX, relY } = toSpread(e);
+    editor.set_snap_disabled(e.altKey);
     editor.update_divider_drag(relX, relY, sr.w, sr.h);
     refreshBoxModel();
     redraw();
   },
 
   onMouseUp(_e, ctx) {
-    const { editor, refreshBoxModel, redraw, setMode, canvasEl } = ctx;
-    editor.end_divider_drag();
+    const { editor, spreadRect, refreshBoxModel, redraw, setMode, canvasEl } = ctx;
+    const sr = spreadRect();
+    editor.set_snap_disabled(false);
+    editor.end_divider_drag(sr.w, sr.h);
     refreshBoxModel();
     canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
@@ -609,7 +655,7 @@ export const marginDragMode: InteractionMode = {
 
 // ---------------------------------------------------------------------------
 // Node rotation drag mode — horizontal drag rotates the transform-target node.
-// Drag right = clockwise (node_rotation_deg is CCW positive, so right drag subtracts).
+// Drag right = clockwise (face_rotation_deg is CCW positive, so right drag subtracts).
 // ---------------------------------------------------------------------------
 
 export const nodeRotateDragMode: InteractionMode = {
@@ -617,11 +663,9 @@ export const nodeRotateDragMode: InteractionMode = {
 
   onMouseMove(e, ctx) {
     const { editor, toSpread, refreshBoxModel, redraw, canvasEl, modeState } = ctx;
-    const { sr, relX, relY } = toSpread(e);
+    const { canvasX, canvasY } = toSpread(e);
     const state = modeState as NodeRotateDragState;
 
-    const canvasX = relX + sr.x;
-    const canvasY = relY + sr.y;
     const angle = Math.atan2(canvasY - state.cy, canvasX - state.cx);
     const delta = -(angle - state.startAngle) * (180 / Math.PI);
 
@@ -630,7 +674,7 @@ export const nodeRotateDragMode: InteractionMode = {
       state.hasMoved = true;
     }
 
-    editor.set_transform_node_rotation_deg(state.startRotDeg + delta);
+    editor.set_face_rotation_deg(state.startRotDeg + delta);
     canvasEl.style.cursor = 'crosshair';
     refreshBoxModel();
     redraw();
@@ -690,78 +734,59 @@ export const imageSwapMode: InteractionMode = {
 };
 
 // ---------------------------------------------------------------------------
-// Cross handle drag mode — drag to rewire a quadrant BSP layout
-// ---------------------------------------------------------------------------
-
-export const crossHandleDragMode: InteractionMode = {
-  onMouseDown(_e, _ctx) {},
-
-  onMouseMove(e, ctx) {
-    const { editor, overlays, toSpread, refreshBoxModel, redraw, canvasEl, modeState } = ctx;
-    const state = modeState as CrossHandleDragState;
-    const { relX, relY, sr } = toSpread(e);
-
-    // Snapping is handled in Rust alongside the child-rect-relative ratio computation.
-    editor.update_rewired_drag(
-      state.handle.parent_id, state.handle.first_child,
-      relX, relY, sr.w, sr.h,
-    );
-    overlays.crossHandleDragPreview = null;
-    canvasEl.style.cursor = state.handle.drag_axis === 'h' ? 'ew-resize' : 'ns-resize';
-    refreshBoxModel();
-    redraw();
-  },
-
-  onMouseUp(_e, ctx) {
-    const { overlays, redraw, setMode, canvasEl } = ctx;
-    overlays.crossHandleDragPreview = null;
-    canvasEl.style.cursor = 'default';
-    setMode(idleMode, {});
-    redraw();
-  },
-
-  onMouseLeave(_e, ctx) {
-    const { overlays, redraw, setMode, canvasEl } = ctx;
-    overlays.crossHandleDragPreview = null;
-    canvasEl.style.cursor = 'default';
-    setMode(idleMode, {});
-    redraw();
-  },
-};
-
-// ---------------------------------------------------------------------------
 // Edge drag mode — drag inward from a spread edge to insert a new split at root
 // ---------------------------------------------------------------------------
 
-export const edgeDragMode: InteractionMode = {
+export const edgeLiveDragMode: InteractionMode = {
   onMouseDown(_e, _ctx) {},
 
   onMouseMove(e, ctx) {
-    const { overlays, toSpread, redraw, canvasEl, modeState } = ctx;
-    const state = modeState as EdgeDragState;
+    const { editor, overlays, toSpread, redraw, canvasEl, modeState } = ctx;
+    const state = modeState as EdgeLiveDragState;
     const { relX, relY, sr } = toSpread(e);
-    const SNAP_PX = 8;
+    const MIN_SPAWN_PX = 8;
+    const newIsFirst = state.edge === 'top' || state.edge === 'left';
 
-    let ratio: number;
-    if (state.axis === 'h') {
-      ratio = Math.max(0.05, Math.min(0.95, relY / sr.h));
-      if (Math.abs(ratio - 0.5) * sr.h < SNAP_PX) ratio = 0.5;
-    } else {
-      ratio = Math.max(0.05, Math.min(0.95, relX / sr.w));
-      if (Math.abs(ratio - 0.5) * sr.w < SNAP_PX) ratio = 0.5;
+    const distFromEdge =
+      state.edge === 'top'    ? relY :
+      state.edge === 'bottom' ? sr.h - relY :
+      state.edge === 'left'   ? relX :
+                                sr.w - relX;
+
+    if (!state.spawned) {
+      if (distFromEdge >= MIN_SPAWN_PX) {
+        const segmentId = editor.begin_edge_panel_drag(state.axis, state.newIsFirst, relX, relY, sr.w, sr.h);
+        if (segmentId !== NULL_ID) {
+          state.spawned = true;
+          state.segmentId = segmentId;
+          overlays.edgeDragPreview = null;
+        }
+      } else {
+        // Ghost preview before threshold — show where the panel edge will appear.
+        const ratio = state.axis === 'h'
+          ? Math.max(0.01, Math.min(0.99, relY / sr.h))
+          : Math.max(0.01, Math.min(0.99, relX / sr.w));
+        overlays.edgeDragPreview = { axis: state.axis, ratio, newIsFirst };
+        canvasEl.style.cursor = state.axis === 'h' ? 'row-resize' : 'col-resize';
+        redraw();
+        return;
+      }
     }
 
-    state.ratio = ratio;
-    overlays.edgeDragPreview = { axis: state.axis, ratio, newIsFirst: state.newIsFirst };
+    editor.set_snap_disabled(e.altKey);
+    editor.update_edge_panel_drag(relX, relY, sr.w, sr.h);
     canvasEl.style.cursor = state.axis === 'h' ? 'row-resize' : 'col-resize';
     redraw();
   },
 
   onMouseUp(_e, ctx) {
     const { editor, overlays, refreshBoxModel, redraw, setMode, canvasEl } = ctx;
-    const state = ctx.modeState as EdgeDragState;
-    editor.insert_split_at_root(state.axis, state.ratio, state.newIsFirst);
-    refreshBoxModel();
+    const state = ctx.modeState as EdgeLiveDragState;
+    editor.set_snap_disabled(false);
+    if (state.spawned) {
+      editor.end_edge_panel_drag();
+      refreshBoxModel();
+    }
     overlays.edgeDragPreview = null;
     canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
@@ -769,7 +794,12 @@ export const edgeDragMode: InteractionMode = {
   },
 
   onMouseLeave(_e, ctx) {
-    const { overlays, redraw, setMode, canvasEl } = ctx;
+    const { editor, overlays, redraw, setMode, canvasEl } = ctx;
+    const state = ctx.modeState as EdgeLiveDragState;
+    editor.set_snap_disabled(false);
+    if (state.spawned) {
+      editor.end_edge_panel_drag();
+    }
     overlays.edgeDragPreview = null;
     canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
@@ -788,15 +818,15 @@ export const splitPreviewMode: InteractionMode = {
     const state = ctx.modeState as SplitPreviewState;
     if (state.axis === 'quadrant') {
       snapshot();
-      editor.split_node_into_quadrant_n(state.nodeId, state.numCuts + 1);
+      editor.split_face_into_quadrant_n(state.nodeId, state.numCuts + 1);
       refreshBoxModel();
     } else if (state.axis !== null && state.numCuts > 1) {
       snapshot();
-      editor.split_node_into_n(state.nodeId, state.axis, state.numCuts + 1);
+      editor.split_face_into_n(state.nodeId, state.axis, state.numCuts + 1);
       refreshBoxModel();
     } else if (state.axis !== null && state.ratio !== null) {
       snapshot();
-      editor.split_node_at(state.nodeId, state.axis, state.ratio);
+      editor.split_face_at(state.nodeId, state.axis, state.ratio);
       refreshBoxModel();
     }
     overlays.splitPreview = null;
@@ -835,7 +865,7 @@ export const splitPreviewMode: InteractionMode = {
         ? Math.max(0.05, Math.min(0.95, relXInFrame))
         : Math.max(0.05, Math.min(0.95, relYInFrame));
       const snapThreshold = SNAP_PX / (axis === 'v' ? fw : fh);
-      if (Math.abs(ratio - 0.5) < snapThreshold) ratio = 0.5;
+      if (!e.altKey && Math.abs(ratio - 0.5) < snapThreshold) ratio = 0.5;
       state.axis  = axis;
       state.ratio = ratio;
       overlays.splitPreview = { frameRect: frame.rect, axis, ratio, numCuts: state.numCuts };
@@ -897,7 +927,7 @@ export const imagePanMode: InteractionMode = {
       ? Math.max(0, Math.min(1, state.startPanY - dy / state.overflowY))
       : 0.5;
 
-    const t = getLeafTransform(editor, state.nodeId);
+    const t = getFrameTransform(editor, state.nodeId);
     if (!t) return;
     editor.set_image_transform(state.nodeId, newPanX, newPanY, t.scale, t.rotation_deg);
     canvasEl.style.cursor = 'grabbing';
@@ -930,8 +960,8 @@ export const textPlaceMode: InteractionMode = {
     const y_mm = relY / mmToPx;
     snapshot();
     const newId = addTextElement(editor, x_mm, y_mm);
-    renderer.selectedTextId = newId;
-    editor.select_node(0xFFFFFFFF);
+    renderer.selectedTextIds = new Set([newId]);
+    editor.select_face(0xFFFFFFFF);
     canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
     redraw();
@@ -994,19 +1024,17 @@ export const textResizeMode: InteractionMode = {
   onMouseMove(e, ctx) {
     const { editor, toSpread, redraw, canvasEl, modeState, snapshot } = ctx;
     const state = modeState as TextResizeState;
-    const { relX, relY, sr } = toSpread(e);
-    const mouseX = relX + sr.x;
-    const mouseY = relY + sr.y;
+    const { canvasX, canvasY } = toSpread(e);
 
     // Project mouse-to-fixed-corner vector onto the diagonal to get scale factor.
-    const vx = mouseX - state.fx;
-    const vy = mouseY - state.fy;
+    const vx = canvasX - state.fx;
+    const vy = canvasY - state.fy;
     const s = state.d2 > 0 ? (vx * state.ddx + vy * state.ddy) / state.d2 : 1;
 
-    if (!(modeState as unknown as { hasMoved: boolean }).hasMoved) {
+    if (!state.hasMoved) {
       if (Math.abs(s - 1) * Math.sqrt(state.d2) < 2) return;
       snapshot();
-      (modeState as unknown as { hasMoved: boolean }).hasMoved = true;
+      state.hasMoved = true;
     }
 
     const minS = 1 / state.startFontSize; // keeps font_size_pt >= 1
@@ -1049,18 +1077,16 @@ export const textRotateMode: InteractionMode = {
   onMouseMove(e, ctx) {
     const { editor, toSpread, redraw, canvasEl, modeState, snapshot } = ctx;
     const state = modeState as TextRotateState;
-    const { sr, relX, relY } = toSpread(e);
+    const { canvasX, canvasY } = toSpread(e);
 
     // Angle from element centre to current mouse position (in canvas space).
-    const canvasX = relX + sr.x;
-    const canvasY = relY + sr.y;
     const angle = Math.atan2(canvasY - state.cy, canvasX - state.cx);
     const delta = -(angle - state.startAngle) * (180 / Math.PI);
 
-    if (!(modeState as unknown as { hasMoved: boolean }).hasMoved) {
+    if (!state.hasMoved) {
       if (Math.abs(delta) < 1) return;
       snapshot();
-      (modeState as unknown as { hasMoved: boolean }).hasMoved = true;
+      state.hasMoved = true;
     }
 
     const newRot = state.startRot + delta;
@@ -1080,36 +1106,164 @@ export const textRotateMode: InteractionMode = {
 };
 
 // ---------------------------------------------------------------------------
-// Pinwheel spawn drag mode — drag to grow a new pinwheel center cell
+// Cut tool mode — persistent razor-blade tool that splits any clicked frame
 // ---------------------------------------------------------------------------
 
-export const pinwheelSpawnDragMode: InteractionMode = {
+interface CutToolState { numCuts: number; nodeId: number; axis: 'v' | 'h' | 'quadrant' | null; ratio: number | null; }
+
+export const cutToolMode: InteractionMode = {
+  onMouseDown(e, ctx) {
+    if (e.button !== 0) return;
+    const { editor, overlays, snapshot, refreshBoxModel, redraw } = ctx;
+    const state = ctx.modeState as CutToolState;
+    if (state.nodeId === NULL_ID || state.axis === null) return;
+
+    snapshot();
+    if (state.axis === 'quadrant') {
+      editor.split_face_into_quadrant_n(state.nodeId, state.numCuts + 1);
+    } else if (state.numCuts > 1) {
+      editor.split_face_into_n(state.nodeId, state.axis, state.numCuts + 1);
+    } else if (state.ratio !== null) {
+      editor.split_face_at(state.nodeId, state.axis, state.ratio);
+    }
+    overlays.splitPreview = null;
+    refreshBoxModel();
+    ctx.setMode(idleMode, {});
+    redraw();
+  },
+
+  onMouseMove(e, ctx) {
+    const { editor, overlays, toSpread, redraw, canvasEl } = ctx;
+    const state = ctx.modeState as CutToolState;
+    const { sr, relX, relY } = toSpread(e);
+
+    editor.set_mouse_pos(relX, relY);
+
+    const nodeId = editor.hit_test(relX, relY, sr.w, sr.h);
+    state.nodeId = nodeId;
+
+    if (nodeId === NULL_ID) {
+      overlays.splitPreview = null;
+      state.axis = null;
+      canvasEl.style.cursor = 'crosshair';
+      redraw();
+      return;
+    }
+
+    const renderList = getRenderList(editor, sr.w, sr.h);
+    const frame = renderList.find(f => f.id === nodeId);
+    if (!frame) return;
+
+    const { x: fx, y: fy, w: fw, h: fh } = frame.rect;
+    const relXInFrame = (relX - fx) / fw;
+    const relYInFrame = (relY - fy) / fh;
+    const QUADRANT_ZONE = 0.10;
+    const nearCenterX = Math.abs(relXInFrame - 0.5) < QUADRANT_ZONE;
+    const nearCenterY = Math.abs(relYInFrame - 0.5) < QUADRANT_ZONE;
+
+    if (nearCenterX && nearCenterY) {
+      state.axis  = 'quadrant';
+      state.ratio = 0.5;
+      overlays.splitPreview = { frameRect: frame.rect, axis: 'quadrant', ratio: 0.5, numCuts: state.numCuts };
+      canvasEl.style.cursor = 'crosshair';
+    } else {
+      const axis = editor.split_axis_hint_for(nodeId, sr.w, sr.h) as 'v' | 'h';
+      const SNAP_PX = 8;
+      const rawRatio = axis === 'v'
+        ? Math.max(0.05, Math.min(0.95, relXInFrame))
+        : Math.max(0.05, Math.min(0.95, relYInFrame));
+      const frameStart  = axis === 'v' ? fx : fy;
+      const frameSize   = axis === 'v' ? fw : fh;
+      const snapThresh  = SNAP_PX / frameSize;
+
+      // Collect snap candidates: frame midpoint + all parallel dividers inside this frame.
+      const snapCandidates: number[] = [0.5];
+      for (const d of getDividers(editor, sr.w, sr.h)) {
+        if (d.axis !== axis) continue;
+        const dpos = axis === 'v' ? d.x : d.y;
+        if (dpos > frameStart && dpos < frameStart + frameSize) {
+          snapCandidates.push((dpos - frameStart) / frameSize);
+        }
+      }
+      let ratio = rawRatio;
+      if (!e.altKey) {
+        let bestDist = snapThresh;
+        for (const c of snapCandidates) {
+          const dist = Math.abs(rawRatio - c);
+          if (dist < bestDist) { bestDist = dist; ratio = c; }
+        }
+      }
+      ratio = Math.max(0.05, Math.min(0.95, ratio));
+
+      state.axis  = axis;
+      state.ratio = ratio;
+      overlays.splitPreview = { frameRect: frame.rect, axis, ratio, numCuts: state.numCuts };
+      canvasEl.style.cursor = axis === 'v' ? 'col-resize' : 'row-resize';
+    }
+    redraw();
+  },
+
+  onMouseUp(_e, _ctx) {},
+
+  onMouseLeave(_e, ctx) {
+    // Don't exit the tool when leaving the canvas; just clear the preview
+    ctx.overlays.splitPreview = null;
+    ctx.redraw();
+  },
+
+  onWheel(e, ctx) {
+    e.preventDefault();
+    const state = ctx.modeState as CutToolState;
+    if (e.deltaY < 0) state.numCuts = Math.min(state.numCuts + 1, 12);
+    else              state.numCuts = Math.max(1, state.numCuts - 1);
+    if (ctx.overlays.splitPreview) {
+      ctx.overlays.splitPreview = { ...ctx.overlays.splitPreview, numCuts: state.numCuts };
+    }
+    ctx.redraw();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Pinwheel spawn mode
+// ---------------------------------------------------------------------------
+
+interface PinwheelSpawnState {
+  junction: XJunction;
+  spreadRect: SpreadRect;
+}
+
+export const pinwheelSpawnMode: InteractionMode = {
   onMouseDown(_e, _ctx) {},
 
   onMouseMove(e, ctx) {
-    const { editor, toSpread, refreshBoxModel, redraw, canvasEl } = ctx;
-    const { relX, relY, sr } = toSpread(e);
-    editor.update_pinwheel_spawn_drag(relX, relY, sr.w, sr.h);
-    canvasEl.style.cursor = 'crosshair';
+    const { editor, refreshBoxModel, redraw, modeState, canvasEl } = ctx;
+    const state  = modeState as PinwheelSpawnState;
+    const sr     = state.spreadRect;
+    const rect   = canvasEl.getBoundingClientRect();
+    const cx     = e.clientX - rect.left;
+    const cy     = e.clientY - rect.top;
+    const nx     = (cx - sr.x) / sr.w;
+    const ny     = (cy - sr.y) / sr.h;
+    editor.update_pinwheel_spawn(nx, ny);
     refreshBoxModel();
     redraw();
   },
 
   onMouseUp(_e, ctx) {
-    const { editor, refreshBoxModel, redraw, setMode, canvasEl } = ctx;
-    editor.end_pinwheel_spawn_drag();
+    const { editor, refreshBoxModel, redraw, setMode } = ctx;
+    editor.end_pinwheel_spawn();
     refreshBoxModel();
-    canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
     redraw();
   },
 
   onMouseLeave(_e, ctx) {
-    const { editor, refreshBoxModel, redraw, setMode, canvasEl } = ctx;
-    editor.cancel_pinwheel_spawn_drag();
+    const { editor, refreshBoxModel, redraw, setMode } = ctx;
+    editor.cancel_pinwheel_spawn();
     refreshBoxModel();
-    canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
     redraw();
   },
 };
+
+

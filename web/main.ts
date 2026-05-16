@@ -3,18 +3,19 @@
 import init, { PhotobookEditor, init_panic_hook } from './pkg/photobook_core.js';
 import { CanvasRenderer } from './canvas.js';
 import { ImageSidebar } from './sidebar-left.js';
-import { BoxModelEditor, SplitterEditor, ProjectSettingsPanel, TextElementEditor } from './sidebar-right.js';
+import { BoxModelEditor, ProjectSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
 import type { ProjectSettingsData } from './sidebar-right.js';
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
-import { idleMode, splitPreviewMode, textPlaceMode } from './interaction.js';
+import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
-import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getDefaultSpreadMargin } from './wasm-bridge.js';
-import type { BoxModel, Overlays } from './types.js';
+import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getDefaultSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
+import type { Overlays } from './types.js';
 import { loadLocalFonts, localFontsSupported } from './fonts.js';
 import { UndoManager } from './undo.js';
 import { InlineEditor } from './inline-editor.js';
 import { exportPdf } from './export.js';
+import { DocsPanel } from './docs-panel.js';
 
 // ---------------------------------------------------------------------------
 // Init
@@ -32,7 +33,7 @@ const editor = new PhotobookEditor(210, 297, 3);
 const canvasEl = document.getElementById('main-canvas') as HTMLCanvasElement;
 const renderer = new CanvasRenderer(canvasEl, () => redraw());
 
-const overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null, crossHandleDragPreview: null };
+const overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null };
 
 function fitCanvas(): void {
   const area = document.getElementById('canvas-area')!;
@@ -57,16 +58,25 @@ function spreadRect() {
 
 const sidebar = new ImageSidebar(
   document.getElementById('image-grid')!,
-  // onSelect: cache the proxy immediately so canvas can render it on drop.
-  (id) => {
-    const proxy = sidebar.getProxy(id);
-    if (proxy) renderer.cacheImage(id, proxy);
+  // onPhotoSelect: cache proxies for all selected images and show photo panel.
+  (ids) => {
+    for (const id of ids) {
+      const proxy = sidebar.getProxy(id);
+      if (proxy) renderer.cacheImage(id, proxy);
+    }
+    if (ids.size > 0) {
+      editor.select_face(NULL_ID);
+      renderer.selectedTextIds.clear();
+      redraw();
+    }
+    refreshBoxModel();
   },
-  // onProxyReady: also cache newly decoded proxies, and redraw in case the
-  // image was already assigned to a frame (e.g. after load_state).
+  // onProxyReady: cache newly decoded proxies and redraw; also refresh the
+  // photo panel if this image is currently selected.
   (id) => {
     const proxy = sidebar.getProxy(id);
     if (proxy) renderer.cacheImage(id, proxy);
+    if (sidebar.getSelectedIds().has(id)) refreshBoxModel();
     redraw();
   },
 );
@@ -81,26 +91,25 @@ document.getElementById('btn-open-folder')!.addEventListener('click', () => {
 
 const sidebarRightHeader = document.getElementById('sidebar-right-header')!;
 const boxModelContainer  = document.getElementById('box-model-editor')!;
+const panelFace          = document.getElementById('panel-face')!;
+const panelText          = document.getElementById('panel-text')!;
+const panelDivider       = document.getElementById('panel-divider')!;
+const panelPhoto         = document.getElementById('panel-photo')!;
+const panelProject       = document.getElementById('panel-project')!;
+
+/** Wrap an editor mutation so it always calls redraw() afterward. */
+function editorCallback<T>(action: (data: T) => void): (data: T) => void {
+  return (data) => { action(data); redraw(); };
+}
 
 const boxEditor = new BoxModelEditor(
-  boxModelContainer,
-  (json) => {
-    editor.set_leaf_box_model(json);
-    redraw();
-  },
-  (field) => {
-    const sel = editor.get_selected();
-    if (sel === NULL_ID) return;
-    undoManager.snapshot();
-    if (field === 'gap') editor.apply_gap_to_subtree(sel);
-    else if (field === 'bg') editor.apply_bg_to_subtree(sel);
-    redraw();
-  },
+  panelFace,
+  editorCallback((json: string) => editor.set_face_box_model(json)),
   (direction) => {
     const sel = editor.get_selected();
     if (sel === NULL_ID) return;
     undoManager.snapshot();
-    editor.move_node_z_order(sel, direction);
+    editor.move_face_z_order(sel, direction);
     redraw();
   },
   (field: 'rotation') => {
@@ -108,20 +117,8 @@ const boxEditor = new BoxModelEditor(
   },
 );
 
-const splitterEditor = new SplitterEditor(
-  boxModelContainer,
-  (json) => {
-    editor.set_split_box_model(json);
-    redraw();
-  },
-  (ratio) => {
-    editor.set_split_ratios(ratio);
-    redraw();
-  },
-);
-
 const projectPanel = new ProjectSettingsPanel(
-  boxModelContainer,
+  panelProject,
   (data: ProjectSettingsData) => {
     undoManager.snapshot();
     editor.set_page_settings(
@@ -144,17 +141,35 @@ const projectPanel = new ProjectSettingsPanel(
   },
 );
 
-projectPanel.setBleedToggleHandler((show) => {
-  renderer.showBleed = show;
-  redraw();
-});
+projectPanel.setBleedToggleHandler(editorCallback((show: boolean) => { renderer.showBleed = show; }));
+projectPanel.setSafeZoneToggleHandler(editorCallback((show: boolean) => { renderer.showSafeZone = show; }));
+
+const photoPanel = new SidebarPhotoInfoPanel(panelPhoto, sidebar);
 
 const textEditor = new TextElementEditor(
-  boxModelContainer,
-  (el) => {
-    updateTextElement(editor, el);
-    redraw();
-  },
+  panelText,
+  editorCallback((updatedEl) => {
+    const textElements = getTextElements(editor);
+    // Apply the full update to the representative (first-selected) element.
+    updateTextElement(editor, updatedEl);
+    // Propagate style properties to every other selected text element.
+    if (renderer.selectedTextIds.size > 1) {
+      for (const id of renderer.selectedTextIds) {
+        if (id === updatedEl.id) continue;
+        const existing = textElements.find(t => t.id === id);
+        if (!existing) continue;
+        updateTextElement(editor, {
+          ...existing,
+          font_family:  updatedEl.font_family,
+          font_size_pt: updatedEl.font_size_pt,
+          bold:         updatedEl.bold,
+          italic:       updatedEl.italic,
+          color:        updatedEl.color,
+          align:        updatedEl.align,
+        });
+      }
+    }
+  }),
 );
 
 boxModelContainer.addEventListener('focusin', (e) => {
@@ -182,81 +197,90 @@ function currentProjectSettings(): ProjectSettingsData {
 }
 
 // ---------------------------------------------------------------------------
-// Right-sidebar tab state
+// Sidebar — shows all applicable panels for the current selection
 // ---------------------------------------------------------------------------
 
-let _sidebarTab: 'frame' | 'splitter' = 'frame';
+function refreshBoxModel(): void {
+  const hasFaces   = editor.get_selection_count() > 0;
+  const hasTexts   = renderer.selectedTextIds.size > 0;
+  const hasDivider = editor.get_selected_segment_count() > 0;
+  if (hasFaces || hasTexts || hasDivider) sidebar.clearSelection();
+  const sidebarIds = sidebar.getSelectedIds();
+  const hasPhotos  = sidebarIds.size > 0;
+  const showPhoto  = hasPhotos;
+  const hasNothing = !hasFaces && !hasTexts && !hasDivider && !showPhoto;
 
-function updateSidebarHeader(hasLeaves: boolean, hasSplits: boolean): void {
-  if (hasLeaves && hasSplits) {
-    if (sidebarRightHeader.dataset.mode !== 'tabs') {
-      sidebarRightHeader.dataset.mode = 'tabs';
-      sidebarRightHeader.innerHTML =
-        '<button class="sidebar-tab" data-tab="frame">Frame</button>' +
-        '<button class="sidebar-tab" data-tab="splitter">Splitter</button>';
-      sidebarRightHeader.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          _sidebarTab = btn.dataset.tab as 'frame' | 'splitter';
-          refreshBoxModel();
-        });
-      });
-    }
-    sidebarRightHeader.querySelectorAll<HTMLElement>('[data-tab]').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.tab === _sidebarTab);
-    });
-  } else {
-    sidebarRightHeader.dataset.mode = 'text';
-    sidebarRightHeader.textContent = hasLeaves ? 'Frame' : 'Splitter';
+  panelFace.hidden    = !hasFaces;
+  panelText.hidden    = !hasTexts;
+  panelDivider.hidden = !hasDivider;
+  panelPhoto.hidden   = !showPhoto;
+  panelProject.hidden = !hasNothing;
+
+  const parts: string[] = [];
+  if (hasFaces)   parts.push('Frame');
+  if (hasTexts)   parts.push('Text');
+  if (hasDivider) parts.push('Divider');
+  if (showPhoto)  parts.push(sidebarIds.size === 1 ? 'Photo' : 'Photos');
+  if (hasNothing) parts.push('Project Settings');
+  sidebarRightHeader.textContent = parts.join(' · ');
+
+  if (hasFaces) {
+    const selectionCount = editor.get_selection_count();
+    const bmJson = editor.get_face_box_model();
+    const sel    = editor.get_selected();
+    const zIndex = (selectionCount === 1 && sel !== NULL_ID)
+      ? editor.get_face_z_index(sel) : undefined;
+    boxEditor.update(bmJson, zIndex, selectionCount);
   }
+
+  if (hasTexts) {
+    const textElements = getTextElements(editor);
+    const firstId = renderer.selectedTextIds.values().next().value as number;
+    const el = textElements.find(t => t.id === firstId);
+    if (el) textEditor.show(el);
+    else renderer.selectedTextIds.clear();
+  }
+
+  if (hasDivider) showDividerPanel();
+  if (showPhoto)  photoPanel.show(sidebarIds);
+  if (hasNothing) projectPanel.show(currentProjectSettings());
+
+  // Keep the green tick badges in sync with placed images.
+  sidebar.updateUsedBadges(getUsedImageIds(editor));
 }
 
-function refreshBoxModel(): void {
-  if (editor.get_selection_count() > 0) {
-    renderer.selectedTextId = null;
+// ---------------------------------------------------------------------------
+// Divider properties panel (shown when a divider is selected)
+// ---------------------------------------------------------------------------
+
+function showDividerPanel(): void {
+  if (panelDivider.dataset.panel !== 'divider') {
+    panelDivider.dataset.panel = 'divider';
+    panelDivider.innerHTML = `
+      <div class="bm-section">
+        <h4>Gap (mm)</h4>
+        <div class="bm-grid">
+          <div class="bm-field">
+            <label>Gap</label>
+            <input id="divider-gap-input" type="number" min="0" max="50" step="0.5" value="0" />
+          </div>
+        </div>
+      </div>`;
+    panelDivider.querySelector('#divider-gap-input')!.addEventListener('change', () => {
+      const input = panelDivider.querySelector('#divider-gap-input') as HTMLInputElement;
+      const gap = parseFloat(input.value);
+      if (!isNaN(gap)) {
+        undoManager.snapshot();
+        editor.set_selected_segment_gap(Math.max(0, gap));
+        redraw();
+      }
+    });
+    panelDivider.querySelector('#divider-gap-input')!.addEventListener('focusin', () => {
+      undoManager.snapshot();
+    });
   }
-
-  if (renderer.selectedTextId !== null) {
-    const textElements = getTextElements(editor);
-    const el = textElements.find(t => t.id === renderer.selectedTextId);
-    if (el) {
-      sidebarRightHeader.dataset.mode = 'text';
-      sidebarRightHeader.textContent = 'Text';
-      textEditor.show(el);
-      return;
-    }
-    renderer.selectedTextId = null;
-  }
-
-  if (editor.get_selection_count() === 0) {
-    sidebarRightHeader.dataset.mode = 'text';
-    sidebarRightHeader.textContent = 'Project Settings';
-    projectPanel.show(currentProjectSettings());
-    return;
-  }
-
-  const leafCount  = editor.get_selection_leaf_count();
-  const splitCount = editor.get_selection_split_count();
-  const hasLeaves  = leafCount  > 0;
-  const hasSplits  = splitCount > 0;
-
-  // Clamp active tab to whatever types are present in this selection.
-  if (!hasLeaves) _sidebarTab = 'splitter';
-  if (!hasSplits) _sidebarTab = 'frame';
-
-  updateSidebarHeader(hasLeaves, hasSplits);
-
-  if (_sidebarTab === 'frame') {
-    const bmJson = editor.get_leaf_box_model();
-    const sel    = editor.get_selected();
-    const zIndex = (leafCount === 1 && splitCount === 0 && sel !== NULL_ID)
-      ? editor.get_node_z_index(sel) : undefined;
-    boxEditor.update(bmJson, zIndex, leafCount);
-  } else {
-    const bm    = JSON.parse(editor.get_split_box_model()) as BoxModel;
-    const ratio = editor.get_split_merged_ratio();
-    const axis  = editor.get_split_merged_axis() as 'v' | 'h' | '';
-    splitterEditor.update(bm, ratio, axis);
-  }
+  const gap = editor.get_selected_segment_gap();
+  (panelDivider.querySelector('#divider-gap-input') as HTMLInputElement).value = gap.toFixed(2);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +348,9 @@ let currentMode: InteractionMode = idleMode;
 let modeState: ModeState = {};
 
 function setMode(mode: InteractionMode, state: ModeState): void {
+  if (currentMode === cutToolMode && mode !== cutToolMode) {
+    updateCutToolButton(false);
+  }
   currentMode = mode;
   modeState = state;
 }
@@ -331,7 +358,9 @@ function setMode(mode: InteractionMode, state: ModeState): void {
 function toSpread(e: MouseEvent) {
   const sr = spreadRect();
   const rect = canvasEl.getBoundingClientRect();
-  return { sr, relX: (e.clientX - rect.left) - sr.x, relY: (e.clientY - rect.top) - sr.y };
+  const relX = (e.clientX - rect.left) - sr.x;
+  const relY = (e.clientY - rect.top)  - sr.y;
+  return { sr, relX, relY, canvasX: sr.x + relX, canvasY: sr.y + relY };
 }
 
 const interactionCtx = (): Omit<InteractionContext, 'modeState'> => ({
@@ -339,14 +368,15 @@ const interactionCtx = (): Omit<InteractionContext, 'modeState'> => ({
   snapshot: () => undoManager.snapshot(), refreshBoxModel, redraw,
   setMode,
   onTextSelected: (id: number) => {
-    renderer.selectedTextId = id;
+    renderer.selectedTextIds = new Set([id]);
     refreshBoxModel();
     redraw();
   },
   onTextChanged: () => {
-    if (renderer.selectedTextId !== null) {
+    const firstId = renderer.selectedTextIds.values().next().value as number | undefined;
+    if (firstId !== undefined) {
       const textElements = getTextElements(editor);
-      const el = textElements.find(t => t.id === renderer.selectedTextId);
+      const el = textElements.find(t => t.id === firstId);
       if (el) textEditor.show(el);
     }
   },
@@ -391,27 +421,63 @@ canvasEl.addEventListener('dragover', (e) => {
 
 canvasEl.addEventListener('drop', (e) => {
   e.preventDefault();
-  const imageId = e.dataTransfer!.getData('text/plain');
-  if (!imageId) return;
+  const raw = e.dataTransfer!.getData('text/plain');
+  if (!raw) return;
+
+  // Payload is always a JSON array of image IDs (one or more).
+  let imageIds: string[];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    imageIds = Array.isArray(parsed) ? (parsed as string[]) : [raw];
+  } catch {
+    imageIds = [raw];
+  }
 
   const sr = spreadRect();
-  const rect = canvasEl.getBoundingClientRect();
-  const relX = (e.clientX - rect.left) - sr.x;
-  const relY = (e.clientY - rect.top) - sr.y;
+  const canvasRect = canvasEl.getBoundingClientRect();
+  const relX = (e.clientX - canvasRect.left) - sr.x;
+  const relY = (e.clientY - canvasRect.top)  - sr.y;
 
   const hitId = editor.hit_test(relX, relY, sr.w, sr.h);
-  if (hitId !== NULL_ID) {
-    undoManager.snapshot();
-    const proxy = sidebar.getProxy(imageId);
-    if (proxy) renderer.cacheImage(imageId, proxy);
-    editor.assign_image(hitId, imageId);
-    editor.select_node(hitId);
+  if (hitId === NULL_ID) return;
+
+  undoManager.snapshot();
+
+  if (imageIds.length === 1) {
+    // Single image — assign directly without splitting.
+    const id = imageIds[0];
+    const proxy = sidebar.getProxy(id);
+    if (proxy) renderer.cacheImage(id, proxy);
+    editor.assign_image(hitId, id);
+    editor.select_face(hitId);
     refreshBoxModel();
     redraw();
-    // Lazily read natural dimensions for DPI checking (off critical path).
-    sidebar.ensureDimensions(imageId).then(dims => {
-      if (dims) { editor.register_image_size(imageId, dims[0], dims[1]); redraw(); }
+    sidebar.ensureDimensions(id).then(dims => {
+      if (dims) { editor.register_image_size(id, dims[0], dims[1]); redraw(); }
     });
+  } else {
+    // Multiple images — split the target frame, then assign one image per leaf.
+    // First cut direction follows the frame's aspect ratio.
+    const frames = getRenderList(editor, sr.w, sr.h);
+    const target = frames.find(f => f.id === hitId);
+    const preferVertical = target ? target.rect.w >= target.rect.h : true;
+
+    const leafIds = splitFaceForMultiDrop(editor, hitId, imageIds.length, preferVertical);
+
+    for (let i = 0; i < leafIds.length && i < imageIds.length; i++) {
+      const imgId  = imageIds[i];
+      const faceId = leafIds[i];
+      const proxy  = sidebar.getProxy(imgId);
+      if (proxy) renderer.cacheImage(imgId, proxy);
+      editor.assign_image(faceId, imgId);
+      sidebar.ensureDimensions(imgId).then(dims => {
+        if (dims) { editor.register_image_size(imgId, dims[0], dims[1]); redraw(); }
+      });
+    }
+
+    if (leafIds.length > 0) editor.select_face(leafIds[0]);
+    refreshBoxModel();
+    redraw();
   }
 });
 
@@ -419,8 +485,8 @@ canvasEl.addEventListener('dblclick', (e) => {
   const rect = canvasEl.getBoundingClientRect();
   const textHit = renderer.hitTestText(e.clientX - rect.left, e.clientY - rect.top);
   if (textHit && textHit.part === 'body') {
-    renderer.selectedTextId = textHit.id;
-    editor.select_node(NULL_ID);
+    renderer.selectedTextIds = new Set([textHit.id]);
+    editor.select_face(NULL_ID);
     refreshBoxModel();
     inlineEditor.start(textHit.id);
   }
@@ -428,9 +494,18 @@ canvasEl.addEventListener('dblclick', (e) => {
 
 canvasEl.addEventListener('mouseleave', (e) => {
   currentMode.onMouseLeave(e, { ...interactionCtx(), modeState });
-  setMode(idleMode, {});
+  // Keep cutToolMode active when leaving the canvas so the tool stays selected
+  if (currentMode !== cutToolMode) setMode(idleMode, {});
   dpiTooltip.hidden = true;
 });
+
+// ---------------------------------------------------------------------------
+// Cut tool state helper
+// ---------------------------------------------------------------------------
+
+function updateCutToolButton(active: boolean): void {
+  document.getElementById('btn-cut-tool')!.classList.toggle('active', active);
+}
 
 // ---------------------------------------------------------------------------
 // Keyboard events
@@ -440,30 +515,59 @@ document.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).tagName === 'INPUT'
     || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
 
-  if ((e.ctrlKey || e.metaKey) && e.key === 'a') { editor.select_all(); refreshBoxModel(); redraw(); e.preventDefault(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+    editor.select_all();
+    renderer.selectedTextIds = new Set(getTextElements(editor).map(t => t.id));
+    refreshBoxModel(); redraw(); e.preventDefault(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) { setZoom(renderer.zoom * 1.25); e.preventDefault(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key === '-') { setZoom(renderer.zoom / 1.25); e.preventDefault(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key === '0') { setZoom(1.0); e.preventDefault(); return; }
 
   let handled = true;
 
   switch (e.key) {
-    case 'x':
-    case 'X': {
-      const targetId = renderer.hoveredLeaf !== NULL_ID ? renderer.hoveredLeaf : editor.get_selected();
-      if (targetId === NULL_ID) break;
-      setMode(splitPreviewMode, { nodeId: targetId, axis: null, ratio: null, numCuts: 1 });
-      redraw();
-      break;
-    }
-    case 'Escape': {
-      if (currentMode === splitPreviewMode) {
+    case 'k':
+    case 'K': {
+      if (currentMode === cutToolMode) {
         overlays.splitPreview = null;
         canvasEl.style.cursor = 'default';
         setMode(idleMode, {});
+        updateCutToolButton(false);
+      } else {
+        setMode(cutToolMode, { numCuts: 1, nodeId: NULL_ID, axis: null, ratio: null });
+        canvasEl.style.cursor = 'crosshair';
+        updateCutToolButton(true);
+      }
+      redraw();
+      break;
+    }
+    case 't':
+    case 'T': {
+      canvasEl.style.cursor = 'crosshair';
+      setMode(textPlaceMode, {});
+      break;
+    }
+    case 'Escape': {
+      if (currentMode === cutToolMode || currentMode === splitPreviewMode) {
+        overlays.splitPreview = null;
+        canvasEl.style.cursor = 'default';
+        setMode(idleMode, {});
+        updateCutToolButton(false);
         redraw();
       } else if (currentMode === textPlaceMode) {
         canvasEl.style.cursor = 'default';
         setMode(idleMode, {});
-      } else if (renderer.selectedTextId !== null) {
-        renderer.selectedTextId = null;
+      } else if (renderer.selectedTextIds.size > 0) {
+        renderer.selectedTextIds.clear();
+        refreshBoxModel();
+        redraw();
+      } else if (editor.get_selected_segment_count() > 0) {
+        editor.select_segment(NULL_ID);
+        refreshBoxModel();
+        redraw();
+      } else {
+        editor.select_face(NULL_ID);
         refreshBoxModel();
         redraw();
       }
@@ -471,10 +575,15 @@ document.addEventListener('keydown', (e) => {
     }
     case 'Delete':
     case 'Backspace': {
-      if (renderer.selectedTextId !== null) {
+      if (renderer.selectedTextIds.size > 0) {
         undoManager.snapshot();
-        deleteTextElement(editor, renderer.selectedTextId);
-        renderer.selectedTextId = null;
+        for (const id of renderer.selectedTextIds) deleteTextElement(editor, id);
+        renderer.selectedTextIds.clear();
+        refreshBoxModel();
+        redraw();
+      } else if (editor.get_selected_segment_count() > 0) {
+        undoManager.snapshot();
+        editor.delete_selected_segment();
         refreshBoxModel();
         redraw();
       } else {
@@ -510,9 +619,35 @@ document.getElementById('btn-add-text')!.addEventListener('click', () => {
   setMode(textPlaceMode, {});
 });
 
+document.getElementById('btn-cut-tool')!.addEventListener('click', () => {
+  if (currentMode === cutToolMode) {
+    overlays.splitPreview = null;
+    canvasEl.style.cursor = 'default';
+    setMode(idleMode, {});
+    updateCutToolButton(false);
+  } else {
+    setMode(cutToolMode, { numCuts: 1, nodeId: NULL_ID, axis: null, ratio: null });
+    canvasEl.style.cursor = 'crosshair';
+    updateCutToolButton(true);
+  }
+  redraw();
+});
+
 document.getElementById('btn-export-pdf')!.addEventListener('click', () => {
   exportPdf(editor, () => sidebar.buffersForExport());
 });
+
+document.getElementById('btn-debug-dump')!.addEventListener('click', () => {
+  const dump = editor.get_debug_layout_dump();
+  const blob = new Blob([dump], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: 'grid-debug.txt' });
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+const docsPanel = new DocsPanel();
+document.getElementById('btn-docs')!.addEventListener('click', () => docsPanel.open());
 
 // ---------------------------------------------------------------------------
 // Zoom
@@ -550,7 +685,7 @@ canvasEl.addEventListener('wheel', (e) => {
 
   e.preventDefault();
 
-  const t = JSON.parse(editor.get_leaf_transform(hitId)) as { pan_x: number; pan_y: number; scale: number; rotation_deg: number };
+  const t = JSON.parse(editor.get_frame_transform(hitId)) as { pan_x: number; pan_y: number; scale: number; rotation_deg: number };
   if (!t) return;
 
   if (e.shiftKey) {
@@ -622,7 +757,7 @@ randomizeDialog.querySelector('#rd-apply')!.addEventListener('click', () => {
   undoManager.snapshot();
   for (const nodeId of selected) {
     const randVal = minVal + Math.random() * (maxVal - minVal);
-    editor.set_node_frame_rotation(nodeId, randVal);
+    editor.set_face_frame_rotation(nodeId, randVal);
   }
   refreshBoxModel();
   redraw();

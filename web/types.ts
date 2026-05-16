@@ -49,60 +49,53 @@ export interface PageSize {
 export type ObjectFit = 'cover' | 'contain' | 'fill';
 export type BorderPosition = 'inner' | 'centered' | 'outer' | 'mixed' | '';
 
-/** A single rendered leaf frame from get_render_list(). */
+/** A single rendered frame from get_render_list(). */
 export interface RenderFrame {
   id: number;
+  /** Inner content rect — after gap and margin insets. */
   rect: Rect;
+  /** Outer face rect — after gap, before margin. Used for selection highlight. */
+  face_rect: Rect;
   image_id?: string;
   pan_x: number;
   pan_y: number;
   scale: number;
   rotation_deg: number;
   is_selected: boolean;
-  is_ancestor: boolean;
   object_fit: ObjectFit;
   border_width: number;
   border_color: string;
   border_position: BorderPosition;
-  node_rotation_deg: number;
+  face_rotation_deg: number;
 }
 
-/** Node background entry from get_node_backgrounds(). */
-export interface NodeBg {
+/** Face background entry from get_face_backgrounds(). */
+export interface FaceBg {
   rect: Rect;
   color: string;
 }
 
-/** Resizable divider line between two BSP children. */
+/** Resizable divider line between two rooms. */
 export interface Divider {
-  node_id: number;
+  segment_id: number;
   axis: 'v' | 'h';
   x: number;
   y: number;
   length: number;
 }
 
-/** Split node border from get_split_node_borders(). */
-export interface SplitBorder {
-  rect: Rect;
-  width_px: number;
-  color: string;
-  position: BorderPosition;
-}
-
-/** All resolved geometry for one spread — produced by a single DFS traversal. */
+/** All resolved geometry for one spread. */
 export interface ResolvedSpread {
-  leaves: RenderFrame[];
+  frames: RenderFrame[];
   dividers: Divider[];
-  backgrounds: NodeBg[];
-  split_borders: SplitBorder[];
-  cross_handles: CrossHandle[];
+  backgrounds: FaceBg[];
+  twin_handles: TwinHandle[];
 }
 
 /** Incremental delta returned by get_resolved_spread_delta(). */
 export interface SpreadDelta {
   full: ResolvedSpread | null;
-  updated_leaves: RenderFrame[] | null;
+  updated_frames: RenderFrame[] | null;
 }
 
 /** DPI warning badge hit area (computed in canvas, not from WASM). */
@@ -139,22 +132,21 @@ export interface Border {
   position: BorderPosition;
 }
 
-/** Full box model for a node or the merged multi-selection. */
+/** Full box model for a face or the merged multi-selection. */
 export interface BoxModel {
   margin: EdgeInsets;
-  gap: number;
   bg: string;
   border: Border;
-  /** Node-level rotation in degrees counter-clockwise. Absent/null = mixed (multi-selection). */
-  node_rotation_deg?: number | null;
+  /** Face-level rotation in degrees counter-clockwise. Absent/null = mixed (multi-selection). */
+  face_rotation_deg?: number | null;
 }
 
 // ---------------------------------------------------------------------------
 // Transform / image placement
 // ---------------------------------------------------------------------------
 
-/** Image transform stored on a leaf node. */
-export interface LeafTransform {
+/** Image transform stored on a frame. */
+export interface FrameTransform {
   pan_x: number;
   pan_y: number;
   scale: number;
@@ -181,7 +173,7 @@ export interface ImageCoverResult {
 // Text elements
 // ---------------------------------------------------------------------------
 
-/** A free-floating text element (not part of the BSP tree). */
+/** A free-floating text element on the spread. */
 export interface TextElement {
   id: number;
   content: string;
@@ -206,17 +198,27 @@ export interface TextElement {
 // Interaction overlays
 // ---------------------------------------------------------------------------
 
-/** A structural-rewire or unlock handle on a quadrant layout divider. */
-export interface CrossHandle {
-  parent_id: number;
+/** A point where two interior chains cross — spawns a pinwheel on drag. */
+export interface XJunction {
+  /** Normalised x (0–1) within the spread. */
+  nx: number;
+  /** Normalised y (0–1) within the spread. */
+  ny: number;
+  tl_id: number;
+  tr_id: number;
+  bl_id: number;
+  br_id: number;
+}
+
+/** Handle for selecting an individual segment in a multi-segment divider chain. */
+export interface TwinHandle {
+  edge_id: number;
+  /** Midpoint of the segment in canvas px (spread origin as 0,0). */
   x: number;
   y: number;
-  /** "rewire" = flip quadrant axes; "unlock" = move divider independently; "pinwheel_spawn" = spawn a pinwheel. */
-  kind: 'rewire' | 'unlock' | 'pinwheel_spawn';
-  /** rewire only: true if this segment is the first child of the parent split. */
-  first_child: boolean;
-  /** Drag direction: 'h' = horizontal (X axis), 'v' = vertical (Y axis). */
-  drag_axis: 'h' | 'v';
+  /** Segment length in canvas px — used to draw the selection highlight. */
+  length: number;
+  axis: 'h' | 'v';
 }
 
 /** Transient visual overlays drawn on top of the spread. */
@@ -225,14 +227,6 @@ export interface Overlays {
   splitPreview: SplitPreview | null;
   swapOverlay: SwapOverlay | null;
   edgeDragPreview: EdgeDragPreview | null;
-  crossHandleDragPreview: CrossHandleDragPreview | null;
-}
-
-export interface CrossHandleDragPreview {
-  /** Axis of the new split ('h' = draw horizontal line, 'v' = draw vertical line). */
-  axis: 'h' | 'v';
-  /** Position in spread-relative px: y for 'h', x for 'v'. */
-  position: number;
 }
 
 export interface EdgeDragPreview {

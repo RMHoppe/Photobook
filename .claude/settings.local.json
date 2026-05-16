@@ -1,7 +1,28 @@
 {
   "permissions": {
     "allow": [
-      "Bash(bash build.sh --dev)"
+      "Bash(bash build.sh --dev)",
+      "Bash(cargo test *)",
+      "Bash(npm install *)",
+      "Bash(python3 -c \"import json,sys; p=json.load\\(sys.stdin\\); print\\('main:', p.get\\('main'\\)\\); print\\('module:', p.get\\('module'\\)\\); print\\('exports:', json.dumps\\(p.get\\('exports', {}\\), indent=2\\)\\)\")",
+      "Bash(npx tsc *)",
+      "Bash(cat)",
+      "Bash(chmod +x /tmp/check_calls.sh)",
+      "Bash(/tmp/check_calls.sh)",
+      "Bash(cargo check *)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(python3 -c ' *)",
+      "Bash(cargo build *)",
+      "Read(//tmp/**)",
+      "Bash(bash build.sh)",
+      "Bash(awk '/#\\\\[test\\\\]/{found=1} found && /fn /{print NR\": \"$0; found=0}' /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/crates/photobook-core/src/pslg.rs)",
+      "Bash(awk '/#\\\\[test\\\\]/{found=1} found && /fn /{print NR\": \"$0; found=0}' /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/crates/photobook-core/src/pdf.rs)",
+      "Bash(grep -E \"^error|^test |FAILED|PASSED|ok$\")",
+      "Bash(grep -B2 \"unused import: \\\\`EPS\\\\`\")",
+      "Bash(grep -B4 \"unused import: \\\\`EPS\\\\`\")",
+      "Bash(grep -A3 \"unused import: \\\\`EPS\\\\`\")",
+      "Bash(npm run *)",
+      "Bash(grep -E \"error|warning.*unused|^$\")"
     ]
   }
 }

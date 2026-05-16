@@ -18,7 +18,8 @@ export interface ProjectSettingsData {
 export class ProjectSettingsPanel {
   private containerEl: HTMLElement;
   private onChange: (data: ProjectSettingsData) => void;
-  private onToggleBleed: ((show: boolean) => void) | null = null;
+  private onToggleBleed:    ((show: boolean) => void) | null = null;
+  private onToggleSafeZone: ((show: boolean) => void) | null = null;
   private _built = false;
   private _emitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -31,8 +32,17 @@ export class ProjectSettingsPanel {
     this.onToggleBleed = handler;
   }
 
+  setSafeZoneToggleHandler(handler: (show: boolean) => void): void {
+    this.onToggleSafeZone = handler;
+  }
+
   setBleedVisible(visible: boolean): void {
     const chk = this.containerEl.querySelector<HTMLInputElement>('#ps-show-bleed');
+    if (chk) chk.checked = visible;
+  }
+
+  setSafeZoneVisible(visible: boolean): void {
+    const chk = this.containerEl.querySelector<HTMLInputElement>('#ps-show-safe-zone');
     if (chk) chk.checked = visible;
   }
 
@@ -92,6 +102,10 @@ export class ProjectSettingsPanel {
           <input type="checkbox" id="ps-show-bleed" checked />
           Show bleed area
         </label>
+        <label class="ps-toggle-row">
+          <input type="checkbox" id="ps-show-safe-zone" checked />
+          Show safe zone
+        </label>
       </div>
     `;
 
@@ -103,6 +117,11 @@ export class ProjectSettingsPanel {
     const bleedChk = this.containerEl.querySelector<HTMLInputElement>('#ps-show-bleed')!;
     bleedChk.addEventListener('change', () => {
       this.onToggleBleed?.(bleedChk.checked);
+    });
+
+    const safeChk = this.containerEl.querySelector<HTMLInputElement>('#ps-show-safe-zone')!;
+    safeChk.addEventListener('change', () => {
+      this.onToggleSafeZone?.(safeChk.checked);
     });
   }
 

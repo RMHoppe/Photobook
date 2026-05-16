@@ -8,10 +8,10 @@
 import { PhotobookEditor, compute_image_cover } from './pkg/photobook_core.js';
 import type {
   SpreadInfo, SpreadSummary, PageSize,
-  RenderFrame, NodeBg, Divider, SplitBorder, LowDpiFrame,
-  BoxModel, LeafTransform, TransformHandles,
-  ImageCoverResult, Rect, TextElement, CrossHandle,
-  ResolvedSpread, SpreadDelta,
+  RenderFrame, FaceBg, Divider, LowDpiFrame,
+  BoxModel, FrameTransform, TransformHandles,
+  ImageCoverResult, TextElement,
+  ResolvedSpread, SpreadDelta, XJunction,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -42,28 +42,28 @@ export function getRenderList(editor: PhotobookEditor, w: number, h: number): Re
   return JSON.parse(editor.get_render_list(w, h)) as RenderFrame[];
 }
 
-export function getNodeBackgrounds(editor: PhotobookEditor, w: number, h: number): NodeBg[] {
-  return JSON.parse(editor.get_node_backgrounds(w, h)) as NodeBg[];
+export function getFaceBackgrounds(editor: PhotobookEditor, w: number, h: number): FaceBg[] {
+  return JSON.parse(editor.get_face_backgrounds(w, h)) as FaceBg[];
 }
 
 export function getDividers(editor: PhotobookEditor, w: number, h: number): Divider[] {
   return JSON.parse(editor.get_dividers(w, h)) as Divider[];
 }
 
-export function getSplitNodeBorders(editor: PhotobookEditor, w: number, h: number): SplitBorder[] {
-  return JSON.parse(editor.get_split_node_borders(w, h)) as SplitBorder[];
-}
-
-export function getCrossHandles(editor: PhotobookEditor, w: number, h: number): CrossHandle[] {
-  return JSON.parse(editor.get_cross_handles(w, h)) as CrossHandle[];
-}
-
 export function getLowDpiFrames(editor: PhotobookEditor, w: number, h: number): LowDpiFrame[] {
   return JSON.parse(editor.get_low_dpi_frames(w, h)) as LowDpiFrame[];
 }
 
-export function getSelectedSplitInfo(editor: PhotobookEditor, w: number, h: number): Rect | null {
-  return JSON.parse(editor.get_selected_split_info(w, h)) as Rect | null;
+// ---------------------------------------------------------------------------
+// Gap (per-chain half_gap)
+// ---------------------------------------------------------------------------
+
+export function getChainGap(editor: PhotobookEditor, edgeId: number): number {
+  return editor.get_chain_gap(edgeId);
+}
+
+export function setChainGap(editor: PhotobookEditor, edgeId: number, gapMm: number): void {
+  editor.set_chain_gap(edgeId, gapMm);
 }
 
 // ---------------------------------------------------------------------------
@@ -74,12 +74,12 @@ export function getBoxModel(editor: PhotobookEditor): BoxModel {
   return JSON.parse(editor.get_box_model()) as BoxModel;
 }
 
-export function getTransformNodeBoxModel(editor: PhotobookEditor): BoxModel {
-  return JSON.parse(editor.get_transform_node_box_model()) as BoxModel;
+export function getTransformBoxModel(editor: PhotobookEditor): BoxModel {
+  return JSON.parse(editor.get_transform_box_model()) as BoxModel;
 }
 
-export function getLeafTransform(editor: PhotobookEditor, nodeId: number): LeafTransform | null {
-  return JSON.parse(editor.get_leaf_transform(nodeId)) as LeafTransform | null;
+export function getFrameTransform(editor: PhotobookEditor, faceId: number): FrameTransform | null {
+  return JSON.parse(editor.get_frame_transform(faceId)) as FrameTransform | null;
 }
 
 export function getSelectedTransformHandles(
@@ -136,6 +136,41 @@ export function getThumbnailData(editor: PhotobookEditor, spreadIdx: number, w: 
 
 export function getDirtySpreadIndices(editor: PhotobookEditor): number[] {
   return JSON.parse(editor.get_dirty_spread_indices()) as number[];
+}
+
+// ---------------------------------------------------------------------------
+// Pinwheel
+// ---------------------------------------------------------------------------
+
+export function getXJunctions(editor: PhotobookEditor): XJunction[] {
+  return JSON.parse(editor.get_xjunctions()) as XJunction[];
+}
+
+// ---------------------------------------------------------------------------
+// Multi-image drop
+// ---------------------------------------------------------------------------
+
+/**
+ * Split `faceId` into `count` leaf faces using recursive binary halving with
+ * alternating axes, and return the leaf face IDs in traversal order.
+ * `preferVertical` controls the first cut direction.
+ */
+export function splitFaceForMultiDrop(
+  editor: PhotobookEditor,
+  faceId: number,
+  count: number,
+  preferVertical: boolean,
+): number[] {
+  return JSON.parse(editor.split_face_for_multi_drop(faceId, count, preferVertical)) as number[];
+}
+
+// ---------------------------------------------------------------------------
+// Image usage query
+// ---------------------------------------------------------------------------
+
+/** Returns the set of image IDs that are placed on at least one spread. */
+export function getUsedImageIds(editor: PhotobookEditor): Set<string> {
+  return new Set(JSON.parse(editor.get_used_image_ids()) as string[]);
 }
 
 // ---------------------------------------------------------------------------

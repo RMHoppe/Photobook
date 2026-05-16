@@ -1,4 +1,4 @@
-// sidebar-box-model.ts — BoxModelEditor panel (shown when a BSP node is selected).
+// sidebar-box-model.ts — BoxModelEditor panel (shown when a frame is selected).
 //
 // Multi-selection sentinel values:
 //   -1          for f32 fields that are always ≥ 0 (Rust skips any value < 0)
@@ -8,15 +8,13 @@
 export class BoxModelEditor {
     containerEl;
     onChange;
-    onApplyToChildren;
     onZOrder;
     onDiceClick;
     _built = false;
     _emitTimer = null;
-    constructor(containerEl, onChange, onApplyToChildren, onZOrder, onDiceClick) {
+    constructor(containerEl, onChange, onZOrder, onDiceClick) {
         this.containerEl = containerEl;
         this.onChange = onChange;
-        this.onApplyToChildren = onApplyToChildren;
         this.onZOrder = onZOrder;
         this.onDiceClick = onDiceClick;
     }
@@ -46,7 +44,7 @@ export class BoxModelEditor {
         this._set('border-color', border.color ?? '#000000');
         this._set('border-position', border.position ?? 'centered');
         // Node transform (undefined/null → show Mixed placeholder)
-        this._setOffset('node-rotation', bm.node_rotation_deg);
+        this._setOffset('node-rotation', bm.face_rotation_deg);
         // Z-order label
         const orderLabel = this.containerEl.querySelector('.bm-z-label');
         if (orderLabel) {
@@ -138,7 +136,7 @@ export class BoxModelEditor {
         <h4>Background</h4>
         <div class="bm-bg-row">
           <input type="color" data-field="bg-color" value="#ffffff" />
-          <button class="bm-apply-btn" data-apply="bg" title="Apply to all children">↓</button>
+
         </div>
       </div>
       <div class="bm-section">
@@ -180,13 +178,6 @@ export class BoxModelEditor {
             el.addEventListener('change', onUserInput);
             el.addEventListener('input', onUserInput);
         });
-        this.containerEl.querySelectorAll('[data-apply]').forEach(btn => {
-            btn.addEventListener('click', () => {
-                this._emit();
-                if (this.onApplyToChildren)
-                    this.onApplyToChildren(btn.dataset.apply);
-            });
-        });
         this.containerEl.querySelectorAll('[data-zorder]').forEach(btn => {
             btn.addEventListener('click', () => {
                 this.onZOrder(btn.dataset.zorder);
@@ -198,82 +189,72 @@ export class BoxModelEditor {
             });
         });
     }
+    // ---------------------------------------------------------------------------
+    // Field HTML builders
+    // ---------------------------------------------------------------------------
+    _wrapField(label, input, fullWidth = false) {
+        return `<div class="bm-field${fullWidth ? ' bm-full-width' : ''}"><label>${label}</label>${input}</div>`;
+    }
     _field(name, label) {
-        return `<div class="bm-field">
-      <label>${label}</label>
-      <input type="number" min="0" max="200" step="0.5" data-field="${name}" value="0" />
-    </div>`;
+        return this._wrapField(label, `<input type="number" min="0" max="200" step="0.5" data-field="${name}" value="0" />`);
     }
     _colorField(name, label) {
-        return `<div class="bm-field">
-      <label>${label}</label>
-      <input type="color" data-field="${name}" value="#000000" />
-    </div>`;
+        return this._wrapField(label, `<input type="color" data-field="${name}" value="#000000" />`);
     }
     _offsetFieldWithDice(name, label, dice) {
-        return `<div class="bm-field">
-      <label>${label}</label>
-      <div class="bm-input-row">
-        <input type="number" step="0.5" data-field="${name}" value="0" />
-        <button class="bm-dice-btn" data-dice="${dice}" title="Randomize across selection" hidden>⚄</button>
-      </div>
-    </div>`;
+        return this._wrapField(label, `<div class="bm-input-row"><input type="number" step="0.5" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${dice}" title="Randomize across selection" hidden>⚄</button></div>`);
     }
     _selectField(name, label, options) {
         const opts = options.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
-        return `<div class="bm-field bm-full-width">
-      <label>${label}</label>
-      <select data-field="${name}">
-        <option value="" hidden>—</option>
-        ${opts}
-      </select>
-    </div>`;
+        return this._wrapField(label, `<select data-field="${name}"><option value="" hidden>—</option>${opts}</select>`, true);
+    }
+    // ---------------------------------------------------------------------------
+    // Field value readers (used by _emit)
+    // ---------------------------------------------------------------------------
+    _gNum(name) {
+        const el = this.containerEl.querySelector(`[data-field="${name}"]`);
+        if (!el || el.dataset.mixed)
+            return -1;
+        const v = parseFloat(el.value);
+        return isNaN(v) ? 0 : v;
+    }
+    _gColor(name) {
+        const el = this.containerEl.querySelector(`[data-field="${name}"]`);
+        if (!el || el.dataset.mixed)
+            return '__mixed__';
+        return el.value || '#ffffff';
+    }
+    _gSel(name) {
+        const el = this.containerEl.querySelector(`[data-field="${name}"]`);
+        if (!el || el.dataset.mixed)
+            return '';
+        return el.value;
+    }
+    _gOffset(name) {
+        const el = this.containerEl.querySelector(`[data-field="${name}"]`);
+        if (!el || el.dataset.mixed)
+            return null;
+        const v = parseFloat(el.value);
+        return isNaN(v) ? 0 : v;
     }
     _emit() {
         if (this._emitTimer !== null)
             clearTimeout(this._emitTimer);
         this._emitTimer = setTimeout(() => {
-            const gNum = (name) => {
-                const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-                if (!el || el.dataset.mixed)
-                    return -1;
-                const v = parseFloat(el.value);
-                return isNaN(v) ? 0 : v;
-            };
-            const gColor = (name) => {
-                const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-                if (!el || el.dataset.mixed)
-                    return '__mixed__';
-                return el.value || '#ffffff';
-            };
-            const gSel = (name) => {
-                const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-                if (!el || el.dataset.mixed)
-                    return '';
-                return el.value;
-            };
-            const gOffset = (name) => {
-                const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-                if (!el || el.dataset.mixed)
-                    return null;
-                const v = parseFloat(el.value);
-                return isNaN(v) ? 0 : v;
-            };
             const bm = {
                 margin: {
-                    top: gNum('margin-top'),
-                    right: gNum('margin-right'),
-                    bottom: gNum('margin-bottom'),
-                    left: gNum('margin-left'),
+                    top: this._gNum('margin-top'),
+                    right: this._gNum('margin-right'),
+                    bottom: this._gNum('margin-bottom'),
+                    left: this._gNum('margin-left'),
                 },
-                gap: gNum('gap'),
-                bg: gColor('bg-color'),
+                bg: this._gColor('bg-color'),
                 border: {
-                    width: gNum('border-width'),
-                    color: gColor('border-color'),
-                    position: gSel('border-position'),
+                    width: this._gNum('border-width'),
+                    color: this._gColor('border-color'),
+                    position: this._gSel('border-position'),
                 },
-                node_rotation_deg: gOffset('node-rotation'),
+                face_rotation_deg: this._gOffset('node-rotation'),
             };
             this.onChange(JSON.stringify(bm));
         }, 150);

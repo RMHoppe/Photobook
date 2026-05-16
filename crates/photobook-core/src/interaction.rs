@@ -1,31 +1,30 @@
-use crate::bsp::{NodeId, SplitAxis};
-use crate::layout::{Rect, ResolvedDivider, ResolvedLeaf};
+use crate::layout::{Rect, ResolvedDivider, ResolvedFrame, SplitAxis};
+use crate::grid_layout::{EdgeId, FaceId, OUTER_FACE};
 
 const DIVIDER_HIT_RADIUS: f32 = 6.0;
 
 pub struct HitTester {
-    leaves: Vec<ResolvedLeaf>,
+    frames: Vec<ResolvedFrame>,
     dividers: Vec<ResolvedDivider>,
 }
 
 impl HitTester {
-    pub fn new(leaves: Vec<ResolvedLeaf>, dividers: Vec<ResolvedDivider>) -> Self {
-        HitTester { leaves, dividers }
+    pub fn new(frames: Vec<ResolvedFrame>, dividers: Vec<ResolvedDivider>) -> Self {
+        HitTester { frames, dividers }
     }
 
-    /// Returns the NodeId of the topmost leaf under (x, y), or NULL_ID.
-    pub fn hit_leaf(&self, x: f32, y: f32) -> NodeId {
-        for leaf in self.leaves.iter().rev() {
-            if leaf.rect.contains(x, y) {
-                return leaf.id;
+    /// Returns the FaceId of the topmost face under (x, y), or OUTER_FACE.
+    pub fn hit_face(&self, x: f32, y: f32) -> FaceId {
+        for frame in self.frames.iter().rev() {
+            if frame.rect.contains(x, y) {
+                return frame.id;
             }
         }
-        crate::bsp::NULL_ID
+        OUTER_FACE
     }
 
-    /// Returns (node_id, axis) of the divider closest to (x,y) within its hit zone.
-    /// The hit zone is at least DIVIDER_HIT_RADIUS wide, but expands to cover the full gap.
-    pub fn hit_divider(&self, x: f32, y: f32) -> Option<(NodeId, SplitAxis)> {
+    /// Returns (edge_id, axis) of the divider closest to (x,y) within its hit zone.
+    pub fn hit_divider(&self, x: f32, y: f32) -> Option<(EdgeId, SplitAxis)> {
         for div in &self.dividers {
             let r = DIVIDER_HIT_RADIUS.max(div.half_gap);
             let hit = match div.axis {
@@ -37,22 +36,20 @@ impl HitTester {
                 }
             };
             if hit {
-                return Some((div.node_id, div.axis));
+                return Some((div.segment_id, div.axis));
             }
         }
         None
     }
 
-    /// Get leaf rect for a given node id.
-    pub fn leaf_rect(&self, id: NodeId) -> Option<Rect> {
-        self.leaves.iter().find(|l| l.id == id).map(|l| l.rect)
+    /// Get frame rect for a given face id.
+    pub fn frame_rect(&self, id: FaceId) -> Option<Rect> {
+        self.frames.iter().find(|f| f.id == id).map(|f| f.rect)
     }
 
-    /// Determine split axis hint from mouse position within a leaf frame.
-    /// Returns Vertical if cursor is in the right half, Horizontal if in the bottom half.
-    /// Tie-break: use the axis that is more extreme.
-    pub fn split_axis_hint(&self, id: NodeId, mx: f32, my: f32) -> &'static str {
-        if let Some(rect) = self.leaf_rect(id) {
+    /// Determine split axis hint from mouse position within a frame.
+    pub fn split_axis_hint(&self, id: FaceId, mx: f32, my: f32) -> &'static str {
+        if let Some(rect) = self.frame_rect(id) {
             let rel_x = (mx - rect.x) / rect.w.max(1.0);
             let rel_y = (my - rect.y) / rect.h.max(1.0);
             let right_bias = (rel_x - 0.5).abs();
@@ -64,10 +61,10 @@ impl HitTester {
     }
 }
 
-/// State machine for dragging a divider border.
+/// State for an in-progress divider drag.
 pub struct DragState {
-    pub node_id: NodeId,
+    pub edge_id: EdgeId,
     pub axis: SplitAxis,
-    /// Other split nodes whose divider is aligned with `node_id` and should move together.
-    pub locked_ids: Vec<NodeId>,
+    /// All edges in the same collinear chain as `edge_id` (for chain-move).
+    pub chain: Vec<EdgeId>,
 }

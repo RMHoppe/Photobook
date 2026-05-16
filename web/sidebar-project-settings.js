@@ -3,6 +3,7 @@ export class ProjectSettingsPanel {
     containerEl;
     onChange;
     onToggleBleed = null;
+    onToggleSafeZone = null;
     _built = false;
     _emitTimer = null;
     constructor(containerEl, onChange) {
@@ -12,8 +13,16 @@ export class ProjectSettingsPanel {
     setBleedToggleHandler(handler) {
         this.onToggleBleed = handler;
     }
+    setSafeZoneToggleHandler(handler) {
+        this.onToggleSafeZone = handler;
+    }
     setBleedVisible(visible) {
         const chk = this.containerEl.querySelector('#ps-show-bleed');
+        if (chk)
+            chk.checked = visible;
+    }
+    setSafeZoneVisible(visible) {
+        const chk = this.containerEl.querySelector('#ps-show-safe-zone');
         if (chk)
             chk.checked = visible;
     }
@@ -72,6 +81,10 @@ export class ProjectSettingsPanel {
           <input type="checkbox" id="ps-show-bleed" checked />
           Show bleed area
         </label>
+        <label class="ps-toggle-row">
+          <input type="checkbox" id="ps-show-safe-zone" checked />
+          Show safe zone
+        </label>
       </div>
     `;
         this.containerEl.querySelectorAll('input[type="number"]').forEach(el => {
@@ -81,6 +94,10 @@ export class ProjectSettingsPanel {
         const bleedChk = this.containerEl.querySelector('#ps-show-bleed');
         bleedChk.addEventListener('change', () => {
             this.onToggleBleed?.(bleedChk.checked);
+        });
+        const safeChk = this.containerEl.querySelector('#ps-show-safe-zone');
+        safeChk.addEventListener('change', () => {
+            this.onToggleSafeZone?.(safeChk.checked);
         });
     }
     _populate(data) {

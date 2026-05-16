@@ -3,7 +3,7 @@
 export const PAD = 24;
 /** Height/width of the ruler strip (px). Must match --ruler-size in CSS. */
 export const RULER_SIZE = 18;
-/** Sentinel node ID meaning "no selection" (matches Rust NULL_ID = u32::MAX). */
+/** Sentinel node ID meaning "no selection" (matches Rust NULL_ROOM = u32::MAX). */
 export const NULL_ID = 0xFFFFFFFF;
 /** Minimum canvas zoom level. */
 export const ZOOM_MIN = 0.1;

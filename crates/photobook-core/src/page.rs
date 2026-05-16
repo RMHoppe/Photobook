@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::bsp::BspTree;
+use crate::grid_layout::GridLayout;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum SpreadKind {
@@ -10,7 +10,7 @@ pub enum SpreadKind {
 }
 
 // ---------------------------------------------------------------------------
-// Text elements — freely positioned, not part of the BSP tree
+// Text elements — freely positioned, not part of the layout
 // ---------------------------------------------------------------------------
 
 /// A free-floating text element on a spread.
@@ -56,15 +56,23 @@ impl TextElement {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Spread
+// ---------------------------------------------------------------------------
+
+/// A single spread (cover or content pair) with its grid layout.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Spread {
     pub id: u32,
-    pub tree: BspTree,
+    #[serde(rename = "grid_layout")]
+    pub layout: GridLayout,
     pub kind: SpreadKind,
     pub label: String,
-    /// Free-floating text elements on this spread (not part of the BSP tree).
     #[serde(default)]
     pub text_elements: Vec<TextElement>,
+    /// Face IDs of pinwheel center panels on this spread.
+    #[serde(default)]
+    pub pinwheel_centers: Vec<u32>,
 }
 
 impl Spread {
@@ -75,11 +83,11 @@ impl Spread {
         };
         Spread {
             id,
-            // Each spread starts its node IDs at id * 1_000_000 — globally unique.
-            tree: BspTree::new_with_start(id * 1_000_000),
+            layout: GridLayout::new(),
             kind,
             label,
             text_elements: Vec::new(),
+            pinwheel_centers: Vec::new(),
         }
     }
 }
@@ -124,7 +132,6 @@ pub struct PhotobookDocument {
     pub default_margin_left: f32,
     next_spread_id: u32,
     /// Counter used to assign globally unique IDs to text elements.
-    /// Starts at 500_000_000 to avoid collision with BSP node IDs.
     #[serde(default = "default_next_text_id")]
     pub next_text_id: u32,
 }

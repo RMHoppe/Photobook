@@ -14,6 +14,10 @@ wasm-pack build crates/photobook-core \
   --out-dir "$(pwd)/web/pkg" \
   ${1:-"--release"}
 
+echo "==> Copying vendor libs..."
+mkdir -p web/lib
+cp node_modules/marked/lib/marked.esm.js web/lib/marked.esm.js
+
 echo "==> Compiling TypeScript..."
 npx tsc
 

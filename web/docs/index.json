@@ -1,0 +1,10 @@
+[
+  { "title": "Getting Started",   "file": "getting-started.md" },
+  { "title": "Working with Images", "file": "images.md" },
+  { "title": "Adjusting Images",   "file": "image-adjustments.md" },
+  { "title": "Text Elements",     "file": "text-elements.md" },
+  { "title": "Spreads & Pages",   "file": "spreads.md" },
+  { "title": "Exporting to PDF",  "file": "export-pdf.md" },
+  { "title": "Keyboard Shortcuts","file": "shortcuts.md" },
+  { "title": "Glossary",          "file": "glossary.md" }
+]

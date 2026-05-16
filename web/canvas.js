@@ -1,49 +1,46 @@
 // canvas.ts — All 2D rendering for the double-page spread canvas.
 // Receives data from the Wasm editor and draws using Canvas 2D API.
 import { PAD, RULER_SIZE, NULL_ID } from './constants.js';
-import { getSpreadInfo, getLowDpiFrames, getSelectedSplitInfo, getSelectedTransformHandles, computeImageCover, getTextElements, getResolvedSpreadDelta, } from './wasm-bridge.js';
+import { getSpreadInfo, getLowDpiFrames, getSelectedTransformHandles, computeImageCover, getTextElements, getResolvedSpreadDelta, getXJunctions, } from './wasm-bridge.js';
 import { drawRulers } from './canvas-draw-rulers.js';
 // ---------------------------------------------------------------------------
 // Geometry cache — avoids repeated JSON parsing on unchanged data
 // ---------------------------------------------------------------------------
 class SpreadGeometryCache {
-    _leavesOrdered = [];
-    _leafIndex = new Map();
+    _frames = [];
+    _frameIndex = new Map();
     dividers = [];
     backgrounds = [];
-    splitBorders = [];
-    crossHandles = [];
+    twinHandles = [];
     applyDelta(delta) {
         if (delta.full !== null) {
             const full = delta.full;
-            this._leavesOrdered = full.leaves;
-            this._leafIndex.clear();
-            for (let i = 0; i < full.leaves.length; i++) {
-                this._leafIndex.set(full.leaves[i].id, i);
+            this._frames = full.frames;
+            this._frameIndex.clear();
+            for (let i = 0; i < full.frames.length; i++) {
+                this._frameIndex.set(full.frames[i].id, i);
             }
             this.dividers = full.dividers;
             this.backgrounds = full.backgrounds;
-            this.splitBorders = full.split_borders;
-            this.crossHandles = full.cross_handles;
+            this.twinHandles = full.twin_handles;
         }
-        else if (delta.updated_leaves !== null) {
-            for (const leaf of delta.updated_leaves) {
-                const idx = this._leafIndex.get(leaf.id);
+        else if (delta.updated_frames !== null) {
+            for (const frame of delta.updated_frames) {
+                const idx = this._frameIndex.get(frame.id);
                 if (idx !== undefined)
-                    this._leavesOrdered[idx] = leaf;
+                    this._frames[idx] = frame;
             }
         }
     }
-    getLeaves() { return this._leavesOrdered; }
+    getFrames() { return this._frames; }
 }
 const BLEED_COLOR = 'rgba(220, 50, 50, 0.35)';
-const SAFE_COLOR = 'rgba(0, 150, 255, 0.25)';
+const SAFE_COLOR = 'rgba(0, 150, 255, 0.65)';
 const FOLD_COLOR = 'rgba(0, 180, 255, 0.85)';
 const SPINE_COLOR = 'rgba(255, 160, 0, 0.85)';
+const FRAME_EMPTY_COLOR = '#ccc';
 const DIVIDER_HOVER_COLOR = '#aaa';
 const SELECTED_COLOR = '#4a90e2';
-const ANCESTOR_COLOR = 'rgba(74, 144, 226, 0.45)';
-const PLACEHOLDER_BORDER = '#444';
 const TRANSFORM_COLOR = '#e8a020';
 const TRANSFORM_FILL = 'rgba(232, 160, 32, 0.10)';
 const HANDLE_RADIUS = 8;
@@ -57,7 +54,9 @@ export class CanvasRenderer {
     imageCache = new Map();
     hoveredDivider = null;
     hoveredEdge = null;
-    hoveredCrossHandle = null;
+    hoveredTwinHandle = null;
+    /** True when the current segment selection was made by clicking a twin handle (not the full-chain divider). */
+    twinSegmentSelected = false;
     hoveredMarginHandle = null;
     hoveredRotationHandle = false;
     hoveredLeaf;
@@ -72,10 +71,16 @@ export class CanvasRenderer {
     _dpiBadges = [];
     /** Hit-test info for all text elements from the last draw call. */
     _textHits = [];
-    /** Cross handles from the last draw call, used for hit-testing in idleMode. */
-    _crossHandles = [];
+    /** Twin handles from the last draw call, used for hit-testing in idleMode. */
+    _twinHandles = [];
+    /** X-junctions from the last draw call, used for hit-testing. */
+    _xJunctions = [];
+    /** Bleed in CSS px as of the last draw — needed for junction hit-testing. */
+    _bleedPx = 0;
+    /** Currently hovered X-junction handle, or null. */
+    hoveredXJunction = null;
     /** ID of the currently selected text element (null = none). */
-    selectedTextId = null;
+    selectedTextIds = new Set();
     /** ID of the text element currently being edited inline (null = none). */
     editingTextId = null;
     _geoCache = new SpreadGeometryCache();
@@ -122,8 +127,8 @@ export class CanvasRenderer {
             h: scaledH,
         };
     }
-    draw(editor, overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null, crossHandleDragPreview: null }) {
-        const { marqueeRect = null, splitPreview = null, swapOverlay = null, edgeDragPreview = null, crossHandleDragPreview = null } = overlays;
+    draw(editor, overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null }) {
+        const { marqueeRect = null, splitPreview = null, swapOverlay = null, edgeDragPreview = null } = overlays;
         const { ctx, dpr, cssW, cssH } = this;
         if (!cssW || !cssH)
             return;
@@ -154,22 +159,9 @@ export class CanvasRenderer {
             ctx.strokeRect(spreadRect.x - bleedPx, spreadRect.y - bleedPx, spreadRect.w + bleedPx * 2, spreadRect.h + bleedPx * 2);
             ctx.setLineDash([]);
         }
-        if (this.showSafeZone) {
-            ctx.strokeStyle = SAFE_COLOR;
-            ctx.lineWidth = 1;
-            ctx.setLineDash([3, 3]);
-            if (spreadInfo.kind === 'cover') {
-                ctx.strokeRect(spreadRect.x + safePx, spreadRect.y + safePx, pageWPx - safePx * 2, pageHPx - safePx * 2);
-                ctx.strokeRect(spreadRect.x + pageWPx + spinePx + safePx, spreadRect.y + safePx, pageWPx - safePx * 2, pageHPx - safePx * 2);
-            }
-            else {
-                ctx.strokeRect(spreadRect.x + safePx, spreadRect.y + safePx, spreadRect.w - safePx * 2, spreadRect.h - safePx * 2);
-            }
-            ctx.setLineDash([]);
-        }
         const delta = getResolvedSpreadDelta(editor, spreadRect.w, spreadRect.h);
         this._geoCache.applyDelta(delta);
-        const renderList = this._geoCache.getLeaves();
+        const renderList = this._geoCache.getFrames();
         const nodeBgs = this._geoCache.backgrounds;
         // Node backgrounds and images share the same clip so neither bleeds outside
         // the visible area. When showBleed is false, visibleBleedPx=0 clips to the
@@ -182,6 +174,7 @@ export class CanvasRenderer {
             ctx.fillStyle = bg.color;
             ctx.fillRect(spreadRect.x + bg.rect.x, spreadRect.y + bg.rect.y, bg.rect.w, bg.rect.h);
         }
+        const selectedSegmentId = editor.get_selected_segment();
         const lowDpiFrames = getLowDpiFrames(editor, spreadRect.w, spreadRect.h);
         const lowDpiMap = new Map(lowDpiFrames.map(f => [f.id, f.effective_dpi]));
         const printDpi = editor.get_print_dpi();
@@ -202,6 +195,19 @@ export class CanvasRenderer {
             ctx.rect(spreadRect.x, spreadRect.y, spreadRect.w, spreadRect.h);
             ctx.fill('evenodd');
             ctx.restore();
+        }
+        if (this.showSafeZone) {
+            ctx.strokeStyle = SAFE_COLOR;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            if (spreadInfo.kind === 'cover') {
+                ctx.strokeRect(spreadRect.x + safePx, spreadRect.y + safePx, pageWPx - safePx * 2, pageHPx - safePx * 2);
+                ctx.strokeRect(spreadRect.x + pageWPx + spinePx + safePx, spreadRect.y + safePx, pageWPx - safePx * 2, pageHPx - safePx * 2);
+            }
+            else {
+                ctx.strokeRect(spreadRect.x + safePx, spreadRect.y + safePx, spreadRect.w - safePx * 2, spreadRect.h - safePx * 2);
+            }
+            ctx.setLineDash([]);
         }
         if (splitPreview) {
             const { frameRect, axis, ratio, numCuts } = splitPreview;
@@ -281,12 +287,20 @@ export class CanvasRenderer {
                 }
             }
         }
+        // If a twin handle was explicitly selected, highlight only that segment — not the full chain.
+        const twinHandles = this._geoCache.twinHandles;
+        const selectedTwin = this.twinSegmentSelected && selectedSegmentId !== NULL_ID
+            ? twinHandles.find(th => th.edge_id === selectedSegmentId) ?? null
+            : null;
         const dividers = this._geoCache.dividers;
         for (const div of dividers) {
-            if (this.hoveredDivider !== div.node_id)
+            // Suppress the full-chain highlight when a specific twin segment is selected.
+            const isSelected = selectedTwin === null && selectedSegmentId !== NULL_ID && div.segment_id === selectedSegmentId;
+            const isHovered = this.hoveredDivider === div.segment_id;
+            if (!isSelected && !isHovered)
                 continue;
-            ctx.strokeStyle = DIVIDER_HOVER_COLOR;
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = isSelected ? SELECTED_COLOR : DIVIDER_HOVER_COLOR;
+            ctx.lineWidth = isSelected ? 2.5 : 1.5;
             ctx.setLineDash([]);
             ctx.beginPath();
             if (div.axis === 'v') {
@@ -301,73 +315,67 @@ export class CanvasRenderer {
             }
             ctx.stroke();
         }
-        // Cross handles — render after dividers so they appear on top.
-        const crossHandles = this._geoCache.crossHandles;
-        this._crossHandles = crossHandles;
-        for (const ch of crossHandles) {
-            const hx = spreadRect.x + ch.x;
-            const hy = spreadRect.y + ch.y;
-            const isHovered = this.hoveredCrossHandle !== null &&
-                this.hoveredCrossHandle.parent_id === ch.parent_id &&
-                Math.abs(this.hoveredCrossHandle.x - ch.x) < 1 &&
-                Math.abs(this.hoveredCrossHandle.y - ch.y) < 1;
-            if (ch.kind === 'pinwheel_spawn') {
-                this._drawPinwheelSpawnHandle(ctx, hx, hy, isHovered);
-            }
-            else {
-                this._drawCrossHandle(ctx, hx, hy, isHovered);
-            }
-        }
-        // Cross handle drag preview — a dashed line across the spread.
-        if (crossHandleDragPreview) {
-            ctx.save();
+        // Draw selected twin segment in the selection colour.
+        if (selectedTwin !== null) {
             ctx.strokeStyle = SELECTED_COLOR;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([6, 4]);
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([]);
             ctx.beginPath();
-            if (crossHandleDragPreview.axis === 'h') {
-                const ly = spreadRect.y + crossHandleDragPreview.position;
-                ctx.moveTo(spreadRect.x, ly);
-                ctx.lineTo(spreadRect.x + spreadRect.w, ly);
+            const hx = spreadRect.x + selectedTwin.x;
+            const hy = spreadRect.y + selectedTwin.y;
+            if (selectedTwin.axis === 'v') {
+                ctx.moveTo(hx, hy - selectedTwin.length / 2);
+                ctx.lineTo(hx, hy + selectedTwin.length / 2);
             }
             else {
-                const lx = spreadRect.x + crossHandleDragPreview.position;
-                ctx.moveTo(lx, spreadRect.y);
-                ctx.lineTo(lx, spreadRect.y + spreadRect.h);
+                ctx.moveTo(hx - selectedTwin.length / 2, hy);
+                ctx.lineTo(hx + selectedTwin.length / 2, hy);
             }
             ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.restore();
         }
-        const splitBorders = this._geoCache.splitBorders;
-        for (const sb of splitBorders) {
-            const lw = sb.width_px;
-            const bx = spreadRect.x + sb.rect.x;
-            const by = spreadRect.y + sb.rect.y;
+        // Room outlines — blue border around the room rect of every selected frame,
+        // drawn above all frame content and dividers but below the transform box.
+        for (const frame of renderList) {
+            if (!frame.is_selected)
+                continue;
+            const rr = frame.face_rect;
+            const rrx = spreadRect.x + rr.x;
+            const rry = spreadRect.y + rr.y;
+            const nodeRad = (frame.face_rotation_deg * Math.PI) / 180;
             ctx.save();
-            ctx.strokeStyle = sb.color;
+            if (nodeRad !== 0) {
+                const rcx = rrx + rr.w / 2;
+                const rcy = rry + rr.h / 2;
+                ctx.translate(rcx, rcy);
+                ctx.rotate(-nodeRad);
+                ctx.translate(-rcx, -rcy);
+            }
+            ctx.strokeStyle = SELECTED_COLOR;
+            const lw = 2;
             ctx.lineWidth = lw;
             ctx.setLineDash([]);
-            if (sb.position === 'inner') {
-                ctx.strokeRect(bx + lw / 2, by + lw / 2, sb.rect.w - lw, sb.rect.h - lw);
-            }
-            else if (sb.position === 'outer') {
-                ctx.strokeRect(bx - lw / 2, by - lw / 2, sb.rect.w + lw, sb.rect.h + lw);
-            }
-            else {
-                ctx.strokeRect(bx, by, sb.rect.w, sb.rect.h);
-            }
+            // Inset by half the stroke width so the border stays fully inside the face
+            // boundary — prevents double-width lines where two selected faces share an edge.
+            ctx.strokeRect(rrx + lw / 2, rry + lw / 2, rr.w - lw, rr.h - lw);
             ctx.restore();
         }
-        const splitInfo = getSelectedSplitInfo(editor, spreadRect.w, spreadRect.h);
-        if (splitInfo) {
-            const sx = spreadRect.x + splitInfo.x;
-            const sy = spreadRect.y + splitInfo.y;
-            ctx.strokeStyle = SELECTED_COLOR;
-            ctx.lineWidth = 2;
-            ctx.setLineDash([6, 3]);
-            ctx.strokeRect(sx, sy, splitInfo.w, splitInfo.h);
-            ctx.setLineDash([]);
+        // Twin handles — shown for multi-segment chains so users can select individual segments.
+        this._twinHandles = twinHandles;
+        for (const th of twinHandles) {
+            const isHovered = this.hoveredTwinHandle !== null && this.hoveredTwinHandle.edge_id === th.edge_id;
+            const hx = spreadRect.x + th.x;
+            const hy = spreadRect.y + th.y;
+            this._drawTwinHandle(ctx, hx, hy, isHovered);
+        }
+        // X-junction handles — indicate that dragging will spawn a pinwheel.
+        this._bleedPx = bleedPx;
+        this._xJunctions = getXJunctions(editor);
+        for (const jx of this._xJunctions) {
+            const cx = spreadRect.x + (-bleedPx + jx.nx * (spreadRect.w + 2 * bleedPx));
+            const cy = spreadRect.y + (-bleedPx + jx.ny * (spreadRect.h + 2 * bleedPx));
+            const isHovered = this.hoveredXJunction !== null
+                && this.hoveredXJunction.tl_id === jx.tl_id;
+            this._drawXJunctionHandle(ctx, cx, cy, isHovered);
         }
         if (marqueeRect) {
             const { x, y, w, h } = marqueeRect;
@@ -383,21 +391,21 @@ export class CanvasRenderer {
             ctx.setLineDash([]);
             ctx.restore();
         }
+        if (this.showRulers) {
+            drawRulers(ctx, cssW, cssH, spreadRect, spreadInfo, mmToPx, rulerOffset);
+        }
         // Text elements — drawn after frames but before transform handles.
         const textElements = getTextElements(editor);
         this._textHits = [];
         for (const el of textElements) {
-            this._drawTextElement(ctx, el, spreadRect, mmToPx, el.id === this.selectedTextId);
+            this._drawTextElement(ctx, el, spreadRect, mmToPx, this.selectedTextIds.has(el.id));
         }
         this._drawTransformBox(ctx, editor, spreadRect);
         this._drawGuides(ctx, spreadInfo, spreadRect, pageWPx, pageHPx, spinePx, mmToPx);
-        if (this.showRulers) {
-            drawRulers(ctx, cssW, cssH, spreadRect, spreadInfo, mmToPx, rulerOffset);
-        }
         ctx.restore();
     }
     _drawFrame(ctx, frame, rx, ry, rw, rh, lowDpiMap, printDpi) {
-        const nodeRad = ((frame.node_rotation_deg ?? 0) * Math.PI) / 180;
+        const nodeRad = ((frame.face_rotation_deg ?? 0) * Math.PI) / 180;
         const hasNodeTransform = nodeRad !== 0;
         const fcx = rx + rw / 2;
         const fcy = ry + rh / 2;
@@ -438,22 +446,10 @@ export class CanvasRenderer {
             }
             ctx.restore();
         }
-        if (frame.is_selected) {
-            ctx.strokeStyle = SELECTED_COLOR;
-            ctx.lineWidth = 2;
+        if (!hasBorder && !frame.image_id) {
+            ctx.strokeStyle = FRAME_EMPTY_COLOR;
+            ctx.lineWidth = 1;
             ctx.setLineDash([]);
-            ctx.strokeRect(rx, ry, rw, rh);
-        }
-        else if (frame.is_ancestor) {
-            ctx.strokeStyle = ANCESTOR_COLOR;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([5, 3]);
-            ctx.strokeRect(rx, ry, rw, rh);
-            ctx.setLineDash([]);
-        }
-        else if (!hasBorder && !frame.image_id) {
-            ctx.strokeStyle = PLACEHOLDER_BORDER;
-            ctx.lineWidth = 0.5;
             ctx.strokeRect(rx, ry, rw, rh);
         }
         if (lowDpiMap && lowDpiMap.has(frame.id)) {
@@ -565,7 +561,7 @@ export class CanvasRenderer {
         off.width = s;
         off.height = s;
         const oc = off.getContext('2d');
-        oc.strokeStyle = 'rgba(180, 50, 50, 0.22)';
+        oc.strokeStyle = 'rgba(180, 50, 50, 0.55)';
         oc.lineWidth = Math.max(1, this.dpr * 0.75);
         oc.beginPath();
         oc.moveTo(0, s);
@@ -670,9 +666,22 @@ export class CanvasRenderer {
         let newRotationHandle = false;
         const handles = getSelectedTransformHandles(editor, spreadRect.w, spreadRect.h);
         if (handles) {
+            // Inverse-rotate the mouse point into the frame's local (unrotated) space so
+            // hit-testing works correctly when face_rotation_deg is non-zero.
+            const selectedLeaf = this._geoCache.getFrames().find(l => l.is_selected);
+            const nodeRotRad = selectedLeaf ? (selectedLeaf.face_rotation_deg * Math.PI) / 180 : 0;
+            let testX = canvasX;
+            let testY = canvasY;
+            if (nodeRotRad !== 0) {
+                const ocx = spreadRect.x + handles.outer.x + handles.outer.w / 2;
+                const ocy = spreadRect.y + handles.outer.y + handles.outer.h / 2;
+                const dx = canvasX - ocx, dy = canvasY - ocy;
+                testX = ocx + dx * Math.cos(nodeRotRad) - dy * Math.sin(nodeRotRad);
+                testY = ocy + dx * Math.sin(nodeRotRad) + dy * Math.cos(nodeRotRad);
+            }
             for (const h of this._handlePositions(handles, spreadRect)) {
-                const dx = canvasX - h.cx;
-                const dy = canvasY - h.cy;
+                const dx = testX - h.cx;
+                const dy = testY - h.cy;
                 if (dx * dx + dy * dy <= HANDLE_RADIUS * HANDLE_RADIUS) {
                     newMarginHandle = h.side;
                     break;
@@ -680,8 +689,8 @@ export class CanvasRenderer {
             }
             if (!newMarginHandle) {
                 const rh = this._rotationHandlePos(handles, spreadRect);
-                const dx = canvasX - rh.x;
-                const dy = canvasY - rh.y;
+                const dx = testX - rh.x;
+                const dy = testY - rh.y;
                 if (dx * dx + dy * dy <= HANDLE_RADIUS * HANDLE_RADIUS)
                     newRotationHandle = true;
             }
@@ -867,12 +876,21 @@ export class CanvasRenderer {
         const handles = getSelectedTransformHandles(editor, spreadRect.w, spreadRect.h);
         if (!handles)
             return;
+        const selectedLeaf = this._geoCache.getFrames().find(l => l.is_selected);
+        const nodeRotRad = selectedLeaf ? (selectedLeaf.face_rotation_deg * Math.PI) / 180 : 0;
         const { outer, inner } = handles;
         const ox = spreadRect.x + outer.x;
         const oy = spreadRect.y + outer.y;
         const ix = spreadRect.x + inner.x;
         const iy = spreadRect.y + inner.y;
+        const ocx = ox + outer.w / 2;
+        const ocy = oy + outer.h / 2;
         ctx.save();
+        if (nodeRotRad !== 0) {
+            ctx.translate(ocx, ocy);
+            ctx.rotate(-nodeRotRad);
+            ctx.translate(-ocx, -ocy);
+        }
         const mTop = inner.y - outer.y;
         const mBottom = outer.h - mTop - inner.h;
         const mLeft = inner.x - outer.x;
@@ -965,7 +983,7 @@ export class CanvasRenderer {
         ctx.setLineDash([]);
         ctx.restore();
     }
-    _drawCrossHandle(ctx, cx, cy, hovered) {
+    _drawTwinHandle(ctx, cx, cy, hovered) {
         const R = 6;
         ctx.save();
         ctx.beginPath();
@@ -974,33 +992,47 @@ export class CanvasRenderer {
         ctx.lineTo(cx, cy + R);
         ctx.lineTo(cx - R, cy);
         ctx.closePath();
-        ctx.fillStyle = hovered ? 'rgba(240,160,48,0.9)' : 'rgba(240,160,48,0.55)';
+        ctx.fillStyle = hovered ? 'rgba(240,160,48,0.9)' : 'rgba(240,160,48,0.40)';
         ctx.fill();
-        ctx.strokeStyle = hovered ? '#f0a030' : 'rgba(240,160,48,0.8)';
+        ctx.strokeStyle = hovered ? '#f0a030' : 'rgba(240,160,48,0.6)';
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.restore();
     }
-    _drawPinwheelSpawnHandle(ctx, cx, cy, hovered) {
+    _drawXJunctionHandle(ctx, cx, cy, hovered) {
         const R = 7;
+        const r = R * 0.45;
         ctx.save();
         ctx.beginPath();
-        ctx.arc(cx, cy, R, 0, Math.PI * 2);
-        ctx.fillStyle = hovered ? 'rgba(64,196,160,0.95)' : 'rgba(64,196,160,0.6)';
+        // 4-pointed star
+        for (let i = 0; i < 8; i++) {
+            const angle = (i * Math.PI) / 4;
+            const rad = i % 2 === 0 ? R : r;
+            const x = cx + Math.cos(angle - Math.PI / 2) * rad;
+            const y = cy + Math.sin(angle - Math.PI / 2) * rad;
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fillStyle = hovered ? 'rgba(80,200,120,0.95)' : 'rgba(80,200,120,0.45)';
+        ctx.strokeStyle = hovered ? '#38b86a' : 'rgba(80,200,120,0.7)';
+        ctx.lineWidth = 1;
         ctx.fill();
-        ctx.strokeStyle = hovered ? '#20c4a0' : 'rgba(32,180,140,0.8)';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        // Small cross inside to hint "add".
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(cx - 3, cy);
-        ctx.lineTo(cx + 3, cy);
-        ctx.moveTo(cx, cy - 3);
-        ctx.lineTo(cx, cy + 3);
         ctx.stroke();
         ctx.restore();
+    }
+    /** Return the X-junction handle at canvas coords (x, y), or null. */
+    xJunctionAt(canvasX, canvasY, spreadRect) {
+        const HIT_R = 11;
+        const bp = this._bleedPx;
+        for (const jx of this._xJunctions) {
+            const cx = spreadRect.x + (-bp + jx.nx * (spreadRect.w + 2 * bp));
+            const cy = spreadRect.y + (-bp + jx.ny * (spreadRect.h + 2 * bp));
+            const dx = canvasX - cx;
+            const dy = canvasY - cy;
+            if (dx * dx + dy * dy <= HIT_R * HIT_R)
+                return jx;
+        }
+        return null;
     }
     _drawEdgeHoverHint(ctx, sr, edge) {
         const STRIP = 3;

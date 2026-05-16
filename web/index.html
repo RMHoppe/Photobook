@@ -14,6 +14,7 @@
       <div class="toolbar-actions">
         <button id="btn-add-spread" title="Add spread">+ Spread</button>
         <button id="btn-add-text" title="Add text element">+ Text</button>
+        <button id="btn-cut-tool" title="Cut tool (X)">&#9986; Cut</button>
         <button id="btn-export-pdf" title="Export PDF">Export PDF</button>
         <div id="export-progress" class="export-progress" hidden>
           <div class="export-progress-bar"></div>
@@ -22,6 +23,8 @@
       <div class="toolbar-right">
         <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>↺ Undo</button>
         <button id="btn-redo" title="Redo (Ctrl+Y)" disabled>↻ Redo</button>
+        <button id="btn-debug-dump" title="Export PSLG debug dump">Debug</button>
+        <button id="btn-docs" title="Documentation">? Docs</button>
       </div>
     </header>
 
@@ -51,7 +54,11 @@
       <aside id="sidebar-right">
         <div id="sidebar-right-header" class="sidebar-header">Project Settings</div>
         <div id="box-model-editor">
-          <p class="no-selection">Select a frame to edit</p>
+          <div id="panel-face"></div>
+          <div id="panel-text"></div>
+          <div id="panel-divider"></div>
+          <div id="panel-photo"></div>
+          <div id="panel-project"><p class="no-selection">Select a frame to edit</p></div>
         </div>
       </aside>
     </div>
@@ -64,6 +71,17 @@
     </footer>
   </div>
 
+  <dialog id="docs-modal" class="docs-modal">
+    <div class="docs-modal-inner">
+      <nav id="docs-nav" class="docs-nav"></nav>
+      <div id="docs-content" class="docs-content"></div>
+    </div>
+    <button id="docs-close" class="docs-close" title="Close">✕</button>
+  </dialog>
+
+  <script type="importmap">
+    { "imports": { "marked": "/lib/marked.esm.js" } }
+  </script>
   <script type="module" src="main.js"></script>
 </body>
 </html>
