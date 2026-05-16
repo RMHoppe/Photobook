@@ -3,7 +3,7 @@
 import init, { PhotobookEditor, init_panic_hook } from './pkg/photobook_core.js';
 import { CanvasRenderer } from './canvas.js';
 import { ImageSidebar } from './sidebar-left.js';
-import { BoxModelEditor, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
+import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
 import type { ProjectSettingsData, SpreadSettingsData } from './sidebar-right.js';
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
@@ -114,6 +114,16 @@ const boxEditor = new BoxModelEditor(
   },
   (field: 'rotation') => {
     showRandomizeDialog(field);
+  },
+);
+
+// Divider panel — shown when a divider chain is selected.
+const dividerPanel = new DividerPanel(
+  panelDivider,
+  (gap) => {
+    undoManager.snapshot();
+    editor.set_selected_segment_gap(gap);
+    redraw();
   },
 );
 
@@ -274,46 +284,12 @@ function refreshBoxModel(): void {
     else renderer.selectedTextIds.clear();
   }
 
-  if (hasDivider) showDividerPanel();
+  if (hasDivider) dividerPanel.show(editor.get_selected_segment_gap());
   if (showPhoto)  photoPanel.show(sidebarIds);
   if (hasNothing) spreadPanel.show(currentSpreadSettings());
 
   // Keep the green tick badges in sync with placed images.
   sidebar.updateUsedBadges(getUsedImageIds(editor));
-}
-
-// ---------------------------------------------------------------------------
-// Divider properties panel (shown when a divider is selected)
-// ---------------------------------------------------------------------------
-
-function showDividerPanel(): void {
-  if (panelDivider.dataset.panel !== 'divider') {
-    panelDivider.dataset.panel = 'divider';
-    panelDivider.innerHTML = `
-      <div class="bm-section">
-        <h4>Gap (mm)</h4>
-        <div class="bm-grid">
-          <div class="bm-field">
-            <label>Gap</label>
-            <input id="divider-gap-input" type="number" min="0" max="50" step="0.5" value="0" />
-          </div>
-        </div>
-      </div>`;
-    panelDivider.querySelector('#divider-gap-input')!.addEventListener('change', () => {
-      const input = panelDivider.querySelector('#divider-gap-input') as HTMLInputElement;
-      const gap = parseFloat(input.value);
-      if (!isNaN(gap)) {
-        undoManager.snapshot();
-        editor.set_selected_segment_gap(Math.max(0, gap));
-        redraw();
-      }
-    });
-    panelDivider.querySelector('#divider-gap-input')!.addEventListener('focusin', () => {
-      undoManager.snapshot();
-    });
-  }
-  const gap = editor.get_selected_segment_gap();
-  (panelDivider.querySelector('#divider-gap-input') as HTMLInputElement).value = gap.toFixed(2);
 }
 
 // ---------------------------------------------------------------------------

@@ -240,3 +240,29 @@ export interface SwapOverlay {
   sourceId: number;
   targetId: number | null;
 }
+
+// ---------------------------------------------------------------------------
+// Settings panel data
+// ---------------------------------------------------------------------------
+
+/** Data exchanged between main.ts and ProjectSettingsPanel. */
+export interface ProjectSettingsData {
+  page_width_mm: number;
+  page_height_mm: number;
+  bleed_mm: number;
+  safe_zone_mm: number;
+  spine_mm_per_page: number;
+  spine_min_mm: number;
+  margin_step_mm: number;
+  print_dpi: number;
+}
+
+/** Data exchanged between main.ts and SpreadSettingsPanel. */
+export interface SpreadSettingsData {
+  margin_top: number;
+  margin_right: number;
+  margin_bottom: number;
+  margin_left: number;
+  left_bg: string;
+  right_bg: string;
+}

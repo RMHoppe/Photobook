@@ -40,8 +40,7 @@ impl PhotobookEditor {
     pub fn set_box_model(&mut self, json: &str) {
         let bm: BoxModel = match serde_json::from_str(json) { Ok(v) => v, Err(_) => return };
         if self.selection.is_empty() { return; }
-        let ids: Vec<FaceId> = self.selection.clone();
-        for id in ids {
+        for id in self.selection.clone() {
             self.apply_box_model_to_node(id, &bm);
         }
         self.mark_structure_dirty();
@@ -80,8 +79,7 @@ impl PhotobookEditor {
 
     /// Sets the gap on all selected divider chains.
     pub fn set_selected_segment_gap(&mut self, gap: f32) {
-        let eids: Vec<_> = self.selected_segments.clone();
-        for eid in eids {
+        for eid in self.selected_segments.clone() {
             self.set_chain_gap(eid, gap);
         }
     }

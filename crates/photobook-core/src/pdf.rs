@@ -5,7 +5,7 @@ use printpdf::{
     path,
 };
 use crate::layout::{Border, BorderPosition, Rect};
-use crate::page::{PhotobookDocument, SpreadKind, TextElement};
+use crate::page::{PhotobookDocument, TextElement};
 use crate::grid_layout::GridLayout;
 use crate::grid_resolver::resolve_frames_mm;
 use crate::utils::image_cover_factors;
@@ -82,7 +82,6 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
             out_h: ph,
             spread_w,
         });
-        let _ = SpreadKind::Content; // suppress unused warning
     }
 
     if out_pages.is_empty() {
@@ -136,12 +135,7 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
             let Some(face) = p.layout.faces.get(face_id) else { continue };
 
             let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
-            let frame_page = Rect::new(
-                spread_rect.x - p.region.x,
-                spread_rect.y,
-                spread_rect.w,
-                spread_rect.h,
-            );
+            let frame_page = frame_page_rect(spread_rect, p.region.x);
 
             if let Some(ref img_id) = face.image.image_id {
                 if let Some(decoded_img) = decoded.get(img_id.as_str()) {
@@ -176,12 +170,7 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         for (face_id, spread_rect) in &rooms_mm {
             let Some(_clipped) = intersect_rect(spread_rect, &p.region) else { continue };
             let Some(face) = p.layout.faces.get(face_id) else { continue };
-            let frame_page = Rect::new(
-                spread_rect.x - p.region.x,
-                spread_rect.y,
-                spread_rect.w,
-                spread_rect.h,
-            );
+            let frame_page = frame_page_rect(spread_rect, p.region.x);
             let border = &face.box_model.border;
             if border.width > 0.0 {
                 let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
@@ -457,10 +446,9 @@ fn apply_node_ctm(
     page_h_mm: f32,
 ) {
     if rotation_deg.abs() < 0.001 { return; }
-    let to_pt = |mm: f32| mm * 72.0 / 25.4;
     // Frame centre in PDF pt coords (bottom-left origin).
-    let cx = to_pt(frame.x + bleed + frame.w / 2.0);
-    let cy = to_pt(page_h_mm + bleed - frame.y - frame.h / 2.0);
+    let cx = mm_to_pt(frame.x + bleed + frame.w / 2.0);
+    let cy = mm_to_pt(page_h_mm + bleed - frame.y - frame.h / 2.0);
     let rad = rotation_deg.to_radians();
     let cos_r = rad.cos();
     let sin_r = rad.sin();
@@ -508,11 +496,10 @@ fn paint_image(
     transforms.push(CurTransMat::Translate(Pt(tx), Pt(ty)));
 
     // Clip to the frame rectangle.
-    let to_pt = |mm: f32| mm * 72.0 / 25.4;
-    let cx = to_pt(frame_rect.x + bleed);
-    let cy = to_pt(page_h_mm + bleed - frame_rect.y - frame_rect.h);
-    let cw = to_pt(frame_rect.w);
-    let ch = to_pt(frame_rect.h);
+    let cx = mm_to_pt(frame_rect.x + bleed);
+    let cy = mm_to_pt(page_h_mm + bleed - frame_rect.y - frame_rect.h);
+    let cw = mm_to_pt(frame_rect.w);
+    let ch = mm_to_pt(frame_rect.h);
 
     use printpdf::lopdf::content::Operation;
     use printpdf::lopdf::Object::Real;
@@ -529,6 +516,13 @@ fn paint_image(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn frame_page_rect(spread_rect: &Rect, region_x: f32) -> Rect {
+    Rect::new(spread_rect.x - region_x, spread_rect.y, spread_rect.w, spread_rect.h)
+}
+
+#[inline]
+fn mm_to_pt(mm: f32) -> f32 { mm * 72.0 / 25.4 }
 
 fn intersect_rect(a: &Rect, b: &Rect) -> Option<Rect> {
     let x1 = a.x.max(b.x);
@@ -715,8 +709,6 @@ fn draw_text_elements(
         // First baseline: one line-height below the top edge.
         let baseline_y_mm = top_y_mm - font_size_pt * (25.4 / 72.0);
 
-        let to_pt = |mm: f32| -> f32 { mm * 72.0 / 25.4 };
-
         // Lines of text.
         let lines: Vec<&str> = el.content.split('\n').collect();
 
@@ -739,8 +731,8 @@ fn draw_text_elements(
             let tx_mm = base_x_mm - line_offset_mm * rad.sin();
             let ty_mm = baseline_y_mm - line_offset_mm * rad.cos();
 
-            let tx_pt = to_pt(tx_mm);
-            let ty_pt = to_pt(ty_mm);
+            let tx_pt = mm_to_pt(tx_mm);
+            let ty_pt = mm_to_pt(ty_mm);
 
             // Tm operator: sets text matrix = rotation + translation.
             use printpdf::lopdf::content::Operation;

@@ -1,13 +1,7 @@
 // sidebar-spread-settings.ts — SpreadSettingsPanel (shown in sidebar when nothing is selected).
 
-export interface SpreadSettingsData {
-  margin_top: number;
-  margin_right: number;
-  margin_bottom: number;
-  margin_left: number;
-  left_bg: string;
-  right_bg: string;
-}
+import type { SpreadSettingsData } from './types.js';
+export type { SpreadSettingsData };
 
 export class SpreadSettingsPanel {
   private containerEl: HTMLElement;
