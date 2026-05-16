@@ -73,15 +73,35 @@ impl PhotobookEditor {
         let h = self.doc.page_size.height_mm;
         let spine = if spread.kind == SpreadKind::Cover { self.doc.spine_mm() } else { 0.0 };
         #[derive(serde::Serialize)]
-        struct Info { kind: &'static str, width_mm: f32, height_mm: f32, spine_mm: f32, page_width_mm: f32 }
+        struct Info<'a> { kind: &'static str, width_mm: f32, height_mm: f32, spine_mm: f32, page_width_mm: f32, left_bg: &'a str, right_bg: &'a str }
         let info = Info {
             kind: if spread.kind == SpreadKind::Cover { "cover" } else { "content" },
             width_mm: w,
             height_mm: h,
             spine_mm: spine,
             page_width_mm: self.doc.page_size.width_mm,
+            left_bg: &spread.left_bg,
+            right_bg: &spread.right_bg,
         };
         serde_json::to_string(&info).unwrap_or_default()
+    }
+
+    pub fn get_spread_left_bg(&self) -> String {
+        self.doc.current_spread().left_bg.clone()
+    }
+
+    pub fn get_spread_right_bg(&self) -> String {
+        self.doc.current_spread().right_bg.clone()
+    }
+
+    pub fn set_spread_left_bg(&mut self, color: &str) {
+        self.doc.current_spread_mut().left_bg = color.to_string();
+        self.mark_structure_dirty();
+    }
+
+    pub fn set_spread_right_bg(&mut self, color: &str) {
+        self.doc.current_spread_mut().right_bg = color.to_string();
+        self.mark_structure_dirty();
     }
 
     // -----------------------------------------------------------------------

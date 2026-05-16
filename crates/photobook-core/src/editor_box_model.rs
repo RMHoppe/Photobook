@@ -100,7 +100,6 @@ impl PhotobookEditor {
             if bm.margin.right  >= 0.0 { r.margin.right  = bm.margin.right; }
             if bm.margin.bottom >= 0.0 { r.margin.bottom = bm.margin.bottom; }
             if bm.margin.left   >= 0.0 { r.margin.left   = bm.margin.left; }
-            if bm.bg != MIXED_STR      { r.bg            = bm.bg.clone(); }
             if bm.border.width  >= 0.0 { r.border.width  = bm.border.width; }
             if bm.border.color != MIXED_STR {
                 r.border.color = bm.border.color.clone();
@@ -134,7 +133,6 @@ impl PhotobookEditor {
                 bottom: mf(f.margin.bottom, rest.iter().all(|b| b.margin.bottom == f.margin.bottom)),
                 left:   mf(f.margin.left,   rest.iter().all(|b| b.margin.left   == f.margin.left)),
             },
-            bg:  ms(&f.bg, rest.iter().all(|b| b.bg  == f.bg)),
             border: Border {
                 width: mf(f.border.width, rest.iter().all(|b| b.border.width == f.border.width)),
                 color: ms(&f.border.color, rest.iter().all(|b| b.border.color == f.border.color)),

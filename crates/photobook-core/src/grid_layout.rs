@@ -425,11 +425,9 @@ impl GridLayout {
                 ),
             };
 
-        // Merged face inherits the face that has content (or f_end by default).
-        let f_end_has = self.faces[&f_end].image.image_id.is_some()
-            || !self.faces[&f_end].box_model.bg.is_empty();
-        let f_start_has = self.faces[&f_start].image.image_id.is_some()
-            || !self.faces[&f_start].box_model.bg.is_empty();
+        // Merged face inherits the face that has an image (or f_end by default).
+        let f_end_has   = self.faces[&f_end].image.image_id.is_some();
+        let f_start_has = self.faces[&f_start].image.image_id.is_some();
         let merged_id = if f_end_has || !f_start_has { f_end } else { f_start };
 
         // Merge the is_boundary flags for the surviving lateral edge pair.

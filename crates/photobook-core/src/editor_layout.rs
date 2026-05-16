@@ -89,15 +89,6 @@ impl PhotobookEditor {
         serde_json::to_string(&divs).unwrap_or_default()
     }
 
-    pub fn get_face_backgrounds(&self, canvas_w: f32, canvas_h: f32) -> String {
-        let spread = self.doc.current_spread();
-        let mm_to_px = self.mm_to_px(canvas_w);
-        let rect = self.root_rect_with_bleed(canvas_w, canvas_h);
-        let bgs = GridResolver::new(&spread.layout, &[], mm_to_px)
-            .resolve_backgrounds(rect);
-        serde_json::to_string(&bgs).unwrap_or_default()
-    }
-
     pub fn get_selected_transform_handles(&self, canvas_w: f32, canvas_h: f32) -> String {
         let Some(id) = self.selected_one() else { return "null".into() };
         let spread = self.doc.current_spread();

@@ -57,9 +57,6 @@ impl Default for Border {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BoxModel {
     pub margin: EdgeInsets,
-    /// Background fill colour for this node's content area. Empty string = transparent.
-    #[serde(default)]
-    pub bg: String,
     #[serde(default)]
     pub border: Border,
     /// Visual rotation of this face in degrees counter-clockwise. None = mixed (multi-selection sentinel).
@@ -71,7 +68,6 @@ impl Default for BoxModel {
     fn default() -> Self {
         BoxModel {
             margin: EdgeInsets::default(),
-            bg: String::new(),
             border: Border::default(),
             face_rotation_deg: Some(0.0),
         }
@@ -156,14 +152,6 @@ pub struct ResolvedFrame {
     pub face_rotation_deg: f32,
 }
 
-/// A resolved background rect — emitted for every node that has a non-empty `bg` colour.
-/// Emitted in z-order (back-to-front) so layering is correct.
-#[derive(Clone, Debug, Serialize)]
-pub struct ResolvedBackground {
-    pub rect: Rect,
-    pub color: String,
-}
-
 /// A resolved divider line for drag-resize.
 #[derive(Clone, Debug, Serialize)]
 pub struct ResolvedDivider {
@@ -181,7 +169,6 @@ pub struct ResolvedDivider {
 pub struct ResolvedSpread {
     pub frames:       Vec<ResolvedFrame>,
     pub dividers:     Vec<ResolvedDivider>,
-    pub backgrounds:  Vec<ResolvedBackground>,
     pub twin_handles: Vec<ResolvedTwinHandle>,
 }
 

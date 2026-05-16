@@ -1,7 +1,7 @@
 //! Canvas render pipeline backed by `GridLayout`.
 
 use crate::layout::{
-    EdgeInsets, Rect, ResolvedBackground, ResolvedDivider, ResolvedFrame,
+    EdgeInsets, Rect, ResolvedDivider, ResolvedFrame,
     ResolvedSpread, ResolvedTwinHandle, SplitAxis,
 };
 use crate::grid_layout::{EdgeId, FaceId, GridLayout, Orientation};
@@ -33,7 +33,6 @@ impl<'a> GridResolver<'a> {
         ResolvedSpread {
             frames:       self.resolve_frames(root_rect),
             dividers:     self.resolve_dividers(root_rect),
-            backgrounds:  self.resolve_backgrounds(root_rect),
             twin_handles: self.resolve_twin_handles(root_rect),
         }
     }
@@ -163,19 +162,6 @@ impl<'a> GridResolver<'a> {
     }
 
     // -----------------------------------------------------------------------
-    // Backgrounds
-    // -----------------------------------------------------------------------
-
-    pub fn resolve_backgrounds(&self, root_rect: Rect) -> Vec<ResolvedBackground> {
-        self.layout.faces.values().filter_map(|face| {
-            if face.box_model.bg.is_empty() { return None; }
-            let (fx, fy, fw, fh) = self.layout.face_rect(face.id)?;
-            let rect = norm_to_px(fx, fy, fw, fh, root_rect);
-            Some(ResolvedBackground { rect, color: face.box_model.bg.clone() })
-        }).collect()
-    }
-
-    // -----------------------------------------------------------------------
     // Twin handles — emitted for chains with > 1 twin pair (for multi-segment
     // chains the TS can show a handle to select / delete individual segments)
     // -----------------------------------------------------------------------
@@ -278,20 +264,6 @@ pub fn resolve_frames_mm(
         .into_iter()
         .map(|f| (f.id, f.rect))
         .collect()
-}
-
-pub fn resolve_backgrounds_mm(
-    layout: &GridLayout,
-    spread_w_mm: f32,
-    spread_h_mm: f32,
-    bleed_mm: f32,
-) -> Vec<crate::layout::ResolvedBackground> {
-    let root = Rect::new(
-        -bleed_mm, -bleed_mm,
-        spread_w_mm + 2.0 * bleed_mm,
-        spread_h_mm + 2.0 * bleed_mm,
-    );
-    GridResolver::new(layout, &[], 1.0).resolve_backgrounds(root)
 }
 
 // ---------------------------------------------------------------------------

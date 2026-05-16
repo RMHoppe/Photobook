@@ -50,9 +50,6 @@ export class BoxModelEditor {
     this._set('margin-bottom', bm.margin?.bottom);
     this._set('margin-left',   bm.margin?.left);
 
-    // Background — "" means transparent/unset; "__mixed__" means disagreeing nodes.
-    this._set('bg-color', bm.bg ?? '');
-
     // Border
     const border = bm.border ?? {};
     this._set('border-width',    border.width    ?? 0);
@@ -146,13 +143,6 @@ export class BoxModelEditor {
           ${this._field('margin-right', 'Right')}
           ${this._field('margin-bottom', 'Bottom')}
           ${this._field('margin-left', 'Left')}
-        </div>
-      </div>
-      <div class="bm-section">
-        <h4>Background</h4>
-        <div class="bm-bg-row">
-          <input type="color" data-field="bg-color" value="#ffffff" />
-
         </div>
       </div>
       <div class="bm-section">
@@ -276,7 +266,6 @@ export class BoxModelEditor {
           bottom: this._gNum('margin-bottom'),
           left:   this._gNum('margin-left'),
         },
-        bg:     this._gColor('bg-color'),
         border: {
           width:    this._gNum('border-width'),
           color:    this._gColor('border-color'),
