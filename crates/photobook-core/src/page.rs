@@ -79,6 +79,15 @@ pub struct Spread {
     /// Background fill colour for the right page (front cover for cover spreads). Empty = transparent.
     #[serde(default)]
     pub right_bg: String,
+    /// Outer layout margin for this spread in mm (shrinks the root layout rect).
+    #[serde(default)]
+    pub margin_top: f32,
+    #[serde(default)]
+    pub margin_right: f32,
+    #[serde(default)]
+    pub margin_bottom: f32,
+    #[serde(default)]
+    pub margin_left: f32,
 }
 
 impl Spread {
@@ -96,6 +105,10 @@ impl Spread {
             pinwheel_centers: Vec::new(),
             left_bg: String::new(),
             right_bg: String::new(),
+            margin_top: 0.0,
+            margin_right: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
         }
     }
 }

@@ -253,11 +253,16 @@ pub fn resolve_frames_mm(
     spread_w_mm: f32,
     spread_h_mm: f32,
     bleed_mm: f32,
+    margin_top: f32,
+    margin_right: f32,
+    margin_bottom: f32,
+    margin_left: f32,
 ) -> Vec<(FaceId, Rect)> {
     let root = Rect::new(
-        -bleed_mm, -bleed_mm,
-        spread_w_mm + 2.0 * bleed_mm,
-        spread_h_mm + 2.0 * bleed_mm,
+        -bleed_mm + margin_left,
+        -bleed_mm + margin_top,
+        spread_w_mm + 2.0 * bleed_mm - margin_left - margin_right,
+        spread_h_mm + 2.0 * bleed_mm - margin_top - margin_bottom,
     );
     GridResolver::new(layout, &[], 1.0)
         .resolve_frames(root)

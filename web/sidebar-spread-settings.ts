@@ -1,10 +1,10 @@
 // sidebar-spread-settings.ts — SpreadSettingsPanel (shown in sidebar when nothing is selected).
 
 export interface SpreadSettingsData {
-  default_margin_top: number;
-  default_margin_right: number;
-  default_margin_bottom: number;
-  default_margin_left: number;
+  margin_top: number;
+  margin_right: number;
+  margin_bottom: number;
+  margin_left: number;
   left_bg: string;
   right_bg: string;
 }
@@ -29,12 +29,12 @@ export class SpreadSettingsPanel {
     this._built = true;
     this.containerEl.innerHTML = `
       <div class="bm-section">
-        <h4>Default margins (mm)</h4>
+        <h4>Spread margin (mm)</h4>
         <div class="bm-grid">
-          ${this._numField('def-margin-top',    'Top')}
-          ${this._numField('def-margin-right',  'Right')}
-          ${this._numField('def-margin-bottom', 'Bottom')}
-          ${this._numField('def-margin-left',   'Left')}
+          ${this._numField('margin-top',    'Top')}
+          ${this._numField('margin-right',  'Right')}
+          ${this._numField('margin-bottom', 'Bottom')}
+          ${this._numField('margin-left',   'Left')}
         </div>
       </div>
       <div class="bm-section">
@@ -59,10 +59,10 @@ export class SpreadSettingsPanel {
   }
 
   private _populate(data: SpreadSettingsData): void {
-    this._setNum('def-margin-top',    data.default_margin_top);
-    this._setNum('def-margin-right',  data.default_margin_right);
-    this._setNum('def-margin-bottom', data.default_margin_bottom);
-    this._setNum('def-margin-left',   data.default_margin_left);
+    this._setNum('margin-top',    data.margin_top);
+    this._setNum('margin-right',  data.margin_right);
+    this._setNum('margin-bottom', data.margin_bottom);
+    this._setNum('margin-left',   data.margin_left);
     this._setColor('left-bg',  data.left_bg  || '#ffffff');
     this._setColor('right-bg', data.right_bg || '#ffffff');
   }
@@ -98,10 +98,10 @@ export class SpreadSettingsPanel {
         return el ? el.value : '#ffffff';
       };
       this.onChange({
-        default_margin_top:    g('def-margin-top'),
-        default_margin_right:  g('def-margin-right'),
-        default_margin_bottom: g('def-margin-bottom'),
-        default_margin_left:   g('def-margin-left'),
+        margin_top:    g('margin-top'),
+        margin_right:  g('margin-right'),
+        margin_bottom: g('margin-bottom'),
+        margin_left:   g('margin-left'),
         left_bg:  gc('left-bg'),
         right_bg: gc('right-bg'),
       });

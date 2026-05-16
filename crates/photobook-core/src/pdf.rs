@@ -119,7 +119,12 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
 
         draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
 
-        let rooms_mm = resolve_frames_mm(p.layout, p.spread_w, ph, bleed);
+        let spread = &doc.spreads[i];
+        let rooms_mm = resolve_frames_mm(
+            p.layout, p.spread_w, ph, bleed,
+            spread.margin_top, spread.margin_right,
+            spread.margin_bottom, spread.margin_left,
+        );
 
         // --- Pass 1: prepare per-frame placement data and deduplicate crops. ---
         type CropKey = (String, u32, u32, u32, u32);

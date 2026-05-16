@@ -9,7 +9,7 @@ import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
 import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
-import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getDefaultSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
+import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
 import type { Overlays } from './types.js';
 import { loadLocalFonts, localFontsSupported } from './fonts.js';
 import { UndoManager } from './undo.js';
@@ -122,11 +122,11 @@ const spreadPanel = new SpreadSettingsPanel(
   panelProject,
   (data: SpreadSettingsData) => {
     undoManager.snapshot();
-    editor.set_default_spread_margin(
-      data.default_margin_top,
-      data.default_margin_right,
-      data.default_margin_bottom,
-      data.default_margin_left,
+    editor.set_spread_margin(
+      data.margin_top,
+      data.margin_right,
+      data.margin_bottom,
+      data.margin_left,
     );
     editor.set_spread_left_bg(data.left_bg);
     editor.set_spread_right_bg(data.right_bg);
@@ -218,12 +218,12 @@ function currentProjectSettings(): ProjectSettingsData {
 }
 
 function currentSpreadSettings(): SpreadSettingsData {
-  const defMargin = getDefaultSpreadMargin(editor);
+  const margin = getSpreadMargin(editor);
   return {
-    default_margin_top:    defMargin.top,
-    default_margin_right:  defMargin.right,
-    default_margin_bottom: defMargin.bottom,
-    default_margin_left:   defMargin.left,
+    margin_top:    margin.top,
+    margin_right:  margin.right,
+    margin_bottom: margin.bottom,
+    margin_left:   margin.left,
     left_bg:  editor.get_spread_left_bg(),
     right_bg: editor.get_spread_right_bg(),
   };

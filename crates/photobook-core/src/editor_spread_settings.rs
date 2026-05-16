@@ -104,6 +104,25 @@ impl PhotobookEditor {
         self.mark_structure_dirty();
     }
 
+    pub fn get_spread_margin(&self) -> String {
+        let s = self.doc.current_spread();
+        serde_json::json!({
+            "top":    s.margin_top,
+            "right":  s.margin_right,
+            "bottom": s.margin_bottom,
+            "left":   s.margin_left,
+        }).to_string()
+    }
+
+    pub fn set_spread_margin(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
+        let s = self.doc.current_spread_mut();
+        s.margin_top    = top.max(0.0);
+        s.margin_right  = right.max(0.0);
+        s.margin_bottom = bottom.max(0.0);
+        s.margin_left   = left.max(0.0);
+        self.mark_structure_dirty();
+    }
+
     // -----------------------------------------------------------------------
     // PDF export + state serialization
     // -----------------------------------------------------------------------
