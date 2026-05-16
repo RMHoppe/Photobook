@@ -205,6 +205,19 @@ export class CanvasRenderer {
       spreadRect.w + visibleBleedPx * 2, spreadRect.h + visibleBleedPx * 2,
     );
 
+    // Page backgrounds (drawn over white, under face node backgrounds).
+    if (spreadInfo.left_bg) {
+      ctx.fillStyle = spreadInfo.left_bg;
+      ctx.fillRect(spreadRect.x, spreadRect.y, pageWPx, pageHPx);
+    }
+    if (spreadInfo.right_bg) {
+      ctx.fillStyle = spreadInfo.right_bg;
+      const rightX = spreadInfo.kind === 'cover'
+        ? spreadRect.x + pageWPx + spinePx
+        : spreadRect.x + pageWPx;
+      ctx.fillRect(rightX, spreadRect.y, pageWPx, pageHPx);
+    }
+
     if (this.showBleed) {
       ctx.strokeStyle = BLEED_COLOR;
       ctx.lineWidth = 1;

@@ -73,6 +73,12 @@ pub struct Spread {
     /// Face IDs of pinwheel center panels on this spread.
     #[serde(default)]
     pub pinwheel_centers: Vec<u32>,
+    /// Background fill colour for the left page (back cover for cover spreads). Empty = transparent.
+    #[serde(default)]
+    pub left_bg: String,
+    /// Background fill colour for the right page (front cover for cover spreads). Empty = transparent.
+    #[serde(default)]
+    pub right_bg: String,
 }
 
 impl Spread {
@@ -88,6 +94,8 @@ impl Spread {
             label,
             text_elements: Vec::new(),
             pinwheel_centers: Vec::new(),
+            left_bg: String::new(),
+            right_bg: String::new(),
         }
     }
 }

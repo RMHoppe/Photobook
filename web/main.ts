@@ -3,8 +3,8 @@
 import init, { PhotobookEditor, init_panic_hook } from './pkg/photobook_core.js';
 import { CanvasRenderer } from './canvas.js';
 import { ImageSidebar } from './sidebar-left.js';
-import { BoxModelEditor, ProjectSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
-import type { ProjectSettingsData } from './sidebar-right.js';
+import { BoxModelEditor, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
+import type { ProjectSettingsData, SpreadSettingsData } from './sidebar-right.js';
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
 import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
@@ -117,8 +117,27 @@ const boxEditor = new BoxModelEditor(
   },
 );
 
-const projectPanel = new ProjectSettingsPanel(
+// Spread settings panel — shown in the sidebar when nothing is selected.
+const spreadPanel = new SpreadSettingsPanel(
   panelProject,
+  (data: SpreadSettingsData) => {
+    undoManager.snapshot();
+    editor.set_default_spread_margin(
+      data.default_margin_top,
+      data.default_margin_right,
+      data.default_margin_bottom,
+      data.default_margin_left,
+    );
+    editor.set_spread_left_bg(data.left_bg);
+    editor.set_spread_right_bg(data.right_bg);
+    redraw();
+  },
+);
+
+// Project settings panel — lives inside the project settings modal.
+const psmContentEl = document.getElementById('psm-content')!;
+const projectPanel = new ProjectSettingsPanel(
+  psmContentEl,
   (data: ProjectSettingsData) => {
     undoManager.snapshot();
     editor.set_page_settings(
@@ -131,18 +150,25 @@ const projectPanel = new ProjectSettingsPanel(
       data.margin_step_mm,
       data.print_dpi,
     );
-    editor.set_default_spread_margin(
-      data.default_margin_top,
-      data.default_margin_right,
-      data.default_margin_bottom,
-      data.default_margin_left,
-    );
     redraw();
   },
 );
 
 projectPanel.setBleedToggleHandler(editorCallback((show: boolean) => { renderer.showBleed = show; }));
 projectPanel.setSafeZoneToggleHandler(editorCallback((show: boolean) => { renderer.showSafeZone = show; }));
+
+// Project settings modal wiring.
+const projectSettingsModal = document.getElementById('project-settings-modal') as HTMLDialogElement;
+document.getElementById('btn-project-settings')!.addEventListener('click', () => {
+  projectPanel.show(currentProjectSettings());
+  projectSettingsModal.showModal();
+});
+document.getElementById('btn-psm-close')!.addEventListener('click', () => {
+  projectSettingsModal.close();
+});
+projectSettingsModal.addEventListener('click', (e) => {
+  if (e.target === projectSettingsModal) projectSettingsModal.close();
+});
 
 const photoPanel = new SidebarPhotoInfoPanel(panelPhoto, sidebar);
 
@@ -178,21 +204,28 @@ boxModelContainer.addEventListener('focusin', (e) => {
 });
 
 function currentProjectSettings(): ProjectSettingsData {
-  const pageSize  = getPageSizeMm(editor);
+  const pageSize = getPageSizeMm(editor);
+  return {
+    page_width_mm:     pageSize.width_mm,
+    page_height_mm:    pageSize.height_mm,
+    bleed_mm:          editor.get_bleed_mm(),
+    safe_zone_mm:      editor.get_safe_zone_mm(),
+    spine_mm_per_page: editor.get_spine_mm_per_page(),
+    spine_min_mm:      editor.get_spine_min_mm(),
+    margin_step_mm:    editor.get_margin_step_mm(),
+    print_dpi:         editor.get_print_dpi(),
+  };
+}
+
+function currentSpreadSettings(): SpreadSettingsData {
   const defMargin = getDefaultSpreadMargin(editor);
   return {
-    page_width_mm:        pageSize.width_mm,
-    page_height_mm:       pageSize.height_mm,
-    bleed_mm:             editor.get_bleed_mm(),
-    safe_zone_mm:         editor.get_safe_zone_mm(),
-    spine_mm_per_page:    editor.get_spine_mm_per_page(),
-    spine_min_mm:         editor.get_spine_min_mm(),
-    margin_step_mm:       editor.get_margin_step_mm(),
-    print_dpi:            editor.get_print_dpi(),
     default_margin_top:    defMargin.top,
     default_margin_right:  defMargin.right,
     default_margin_bottom: defMargin.bottom,
     default_margin_left:   defMargin.left,
+    left_bg:  editor.get_spread_left_bg(),
+    right_bg: editor.get_spread_right_bg(),
   };
 }
 
@@ -221,7 +254,7 @@ function refreshBoxModel(): void {
   if (hasTexts)   parts.push('Text');
   if (hasDivider) parts.push('Divider');
   if (showPhoto)  parts.push(sidebarIds.size === 1 ? 'Photo' : 'Photos');
-  if (hasNothing) parts.push('Project Settings');
+  if (hasNothing) parts.push('Spread Settings');
   sidebarRightHeader.textContent = parts.join(' · ');
 
   if (hasFaces) {
@@ -243,7 +276,7 @@ function refreshBoxModel(): void {
 
   if (hasDivider) showDividerPanel();
   if (showPhoto)  photoPanel.show(sidebarIds);
-  if (hasNothing) projectPanel.show(currentProjectSettings());
+  if (hasNothing) spreadPanel.show(currentSpreadSettings());
 
   // Keep the green tick badges in sync with placed images.
   sidebar.updateUsedBadges(getUsedImageIds(editor));

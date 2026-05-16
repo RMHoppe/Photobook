@@ -27,6 +27,8 @@ export interface SpreadInfo {
   height_mm: number;
   spine_mm: number;
   page_width_mm: number;
+  left_bg: string;
+  right_bg: string;
 }
 
 /** Lightweight summary used in the footer thumbnail strip. */

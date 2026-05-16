@@ -21,6 +21,9 @@ image          = { version = "0.24", default-features = false, features = ["jpeg
 [features]
 default = ["console_error_panic_hook"]
 
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [profile.release]
 opt-level     = "z"
 lto           = true

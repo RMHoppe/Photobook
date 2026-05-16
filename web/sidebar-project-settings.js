@@ -1,4 +1,4 @@
-// sidebar-project-settings.ts — ProjectSettingsPanel (shown when nothing is selected).
+// sidebar-project-settings.ts — ProjectSettingsPanel (rendered inside the project settings modal).
 export class ProjectSettingsPanel {
     containerEl;
     onChange;
@@ -43,15 +43,6 @@ export class ProjectSettingsPanel {
         <div class="bm-grid">
           ${this._field('page-w', 'Width', 1, 600)}
           ${this._field('page-h', 'Height', 1, 600)}
-        </div>
-      </div>
-      <div class="bm-section">
-        <h4>Margins (mm)</h4>
-        <div class="bm-grid">
-          ${this._field('def-margin-top', 'Top')}
-          ${this._field('def-margin-right', 'Right')}
-          ${this._field('def-margin-bottom', 'Bottom')}
-          ${this._field('def-margin-left', 'Left')}
         </div>
       </div>
       <div class="bm-section">
@@ -109,10 +100,6 @@ export class ProjectSettingsPanel {
         this._set('spine-min', data.spine_min_mm);
         this._set('margin-step', data.margin_step_mm);
         this._set('print-dpi', data.print_dpi);
-        this._set('def-margin-top', data.default_margin_top);
-        this._set('def-margin-right', data.default_margin_right);
-        this._set('def-margin-bottom', data.default_margin_bottom);
-        this._set('def-margin-left', data.default_margin_left);
     }
     _set(name, value) {
         const el = this.containerEl.querySelector(`[data-field="${name}"]`);
@@ -146,10 +133,6 @@ export class ProjectSettingsPanel {
                 spine_min_mm: g('spine-min'),
                 margin_step_mm: g('margin-step'),
                 print_dpi: g('print-dpi'),
-                default_margin_top: g('def-margin-top'),
-                default_margin_right: g('def-margin-right'),
-                default_margin_bottom: g('def-margin-bottom'),
-                default_margin_left: g('def-margin-left'),
             });
         }, 150);
     }

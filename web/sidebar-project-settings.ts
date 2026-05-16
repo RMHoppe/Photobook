@@ -1,4 +1,4 @@
-// sidebar-project-settings.ts — ProjectSettingsPanel (shown when nothing is selected).
+// sidebar-project-settings.ts — ProjectSettingsPanel (rendered inside the project settings modal).
 
 export interface ProjectSettingsData {
   page_width_mm: number;
@@ -9,10 +9,6 @@ export interface ProjectSettingsData {
   spine_min_mm: number;
   margin_step_mm: number;
   print_dpi: number;
-  default_margin_top: number;
-  default_margin_right: number;
-  default_margin_bottom: number;
-  default_margin_left: number;
 }
 
 export class ProjectSettingsPanel {
@@ -64,15 +60,6 @@ export class ProjectSettingsPanel {
         <div class="bm-grid">
           ${this._field('page-w', 'Width',  1, 600)}
           ${this._field('page-h', 'Height', 1, 600)}
-        </div>
-      </div>
-      <div class="bm-section">
-        <h4>Margins (mm)</h4>
-        <div class="bm-grid">
-          ${this._field('def-margin-top',    'Top')}
-          ${this._field('def-margin-right',  'Right')}
-          ${this._field('def-margin-bottom', 'Bottom')}
-          ${this._field('def-margin-left',   'Left')}
         </div>
       </div>
       <div class="bm-section">
@@ -134,10 +121,6 @@ export class ProjectSettingsPanel {
     this._set('spine-min',       data.spine_min_mm);
     this._set('margin-step',     data.margin_step_mm);
     this._set('print-dpi',       data.print_dpi);
-    this._set('def-margin-top',    data.default_margin_top);
-    this._set('def-margin-right',  data.default_margin_right);
-    this._set('def-margin-bottom', data.default_margin_bottom);
-    this._set('def-margin-left',   data.default_margin_left);
   }
 
   private _set(name: string, value: number): void {
@@ -169,18 +152,14 @@ export class ProjectSettingsPanel {
         return isNaN(v) ? 0 : v;
       };
       this.onChange({
-        page_width_mm:        g('page-w'),
-        page_height_mm:       g('page-h'),
-        bleed_mm:             g('bleed'),
-        safe_zone_mm:         g('safe'),
-        spine_mm_per_page:    g('spine-per-page'),
-        spine_min_mm:         g('spine-min'),
-        margin_step_mm:       g('margin-step'),
-        print_dpi:            g('print-dpi'),
-        default_margin_top:    g('def-margin-top'),
-        default_margin_right:  g('def-margin-right'),
-        default_margin_bottom: g('def-margin-bottom'),
-        default_margin_left:   g('def-margin-left'),
+        page_width_mm:     g('page-w'),
+        page_height_mm:    g('page-h'),
+        bleed_mm:          g('bleed'),
+        safe_zone_mm:      g('safe'),
+        spine_mm_per_page: g('spine-per-page'),
+        spine_min_mm:      g('spine-min'),
+        margin_step_mm:    g('margin-step'),
+        print_dpi:         g('print-dpi'),
       });
     }, 150);
   }

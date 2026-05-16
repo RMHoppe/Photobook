@@ -25,6 +25,7 @@
         <button id="btn-redo" title="Redo (Ctrl+Y)" disabled>↻ Redo</button>
         <button id="btn-debug-dump" title="Export PSLG debug dump">Debug</button>
         <button id="btn-docs" title="Documentation">? Docs</button>
+        <button id="btn-project-settings" title="Project settings" class="icon-btn">&#9881;</button>
       </div>
     </header>
 
@@ -70,6 +71,14 @@
       <button id="btn-next-spread" title="Next spread">&#8594;</button>
     </footer>
   </div>
+
+  <dialog id="project-settings-modal" class="ps-modal">
+    <div class="ps-modal-header">
+      <h2>Project Settings</h2>
+      <button id="btn-psm-close" class="docs-close" title="Close">&#x2715;</button>
+    </div>
+    <div id="psm-content" class="ps-modal-content"></div>
+  </dialog>
 
   <dialog id="docs-modal" class="docs-modal">
     <div class="docs-modal-inner">
