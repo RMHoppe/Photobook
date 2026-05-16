@@ -590,12 +590,14 @@ button.active { background: var(--accent); border-color: var(--accent); }
   max-height: min(600px, 88vh);
   box-shadow: 0 8px 32px rgba(0,0,0,0.6);
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
   position: fixed;
   top: 50%;
   left: 50%;
   translate: -50% -50%;
+}
+.ps-modal[open] {
+  display: flex;
+  flex-direction: column;
 }
 .ps-modal::backdrop {
   background: rgba(0,0,0,0.5);
