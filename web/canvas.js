@@ -10,7 +10,6 @@ class SpreadGeometryCache {
     _frames = [];
     _frameIndex = new Map();
     dividers = [];
-    backgrounds = [];
     twinHandles = [];
     applyDelta(delta) {
         if (delta.full !== null) {
@@ -21,7 +20,6 @@ class SpreadGeometryCache {
                 this._frameIndex.set(full.frames[i].id, i);
             }
             this.dividers = full.dividers;
-            this.backgrounds = full.backgrounds;
             this.twinHandles = full.twin_handles;
         }
         else if (delta.updated_frames !== null) {
@@ -174,18 +172,13 @@ export class CanvasRenderer {
         const delta = getResolvedSpreadDelta(editor, spreadRect.w, spreadRect.h);
         this._geoCache.applyDelta(delta);
         const renderList = this._geoCache.getFrames();
-        const nodeBgs = this._geoCache.backgrounds;
-        // Node backgrounds and images share the same clip so neither bleeds outside
-        // the visible area. When showBleed is false, visibleBleedPx=0 clips to the
+        // Images and borders share the same clip so neither bleeds outside the
+        // visible area. When showBleed is false, visibleBleedPx=0 clips to the
         // trim boundary; when true, it clips to the full bleed extent.
         ctx.save();
         ctx.beginPath();
         ctx.rect(spreadRect.x - visibleBleedPx, spreadRect.y - visibleBleedPx, spreadRect.w + visibleBleedPx * 2, spreadRect.h + visibleBleedPx * 2);
         ctx.clip();
-        for (const bg of nodeBgs) {
-            ctx.fillStyle = bg.color;
-            ctx.fillRect(spreadRect.x + bg.rect.x, spreadRect.y + bg.rect.y, bg.rect.w, bg.rect.h);
-        }
         const selectedSegmentId = editor.get_selected_segment();
         const lowDpiFrames = getLowDpiFrames(editor, spreadRect.w, spreadRect.h);
         const lowDpiMap = new Map(lowDpiFrames.map(f => [f.id, f.effective_dpi]));

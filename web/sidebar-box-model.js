@@ -239,7 +239,6 @@ export class BoxModelEditor {
                     bottom: this._gNum('margin-bottom'),
                     left: this._gNum('margin-left'),
                 },
-                bg: '__mixed__',
                 border: {
                     width: this._gNum('border-width'),
                     color: this._gColor('border-color'),

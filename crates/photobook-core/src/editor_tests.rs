@@ -186,7 +186,7 @@ mod tests {
         let f = first_face(&ed);
         ed.select_face(f);
 
-        let json = r##"{"margin":{"top":8.0,"right":4.0,"bottom":2.0,"left":1.0},"bg":"","border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":0.0}"##;
+        let json = r##"{"margin":{"top":8.0,"right":4.0,"bottom":2.0,"left":1.0},"border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":0.0}"##;
         ed.set_face_box_model(json);
 
         let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();
@@ -197,25 +197,12 @@ mod tests {
     }
 
     #[test]
-    fn set_background_color_stored_in_box_model() {
-        let mut ed = ed();
-        let f = first_face(&ed);
-        ed.select_face(f);
-
-        let json = r##"{"margin":{"top":0.0,"right":0.0,"bottom":0.0,"left":0.0},"bg":"#ff0000","border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":0.0}"##;
-        ed.set_face_box_model(json);
-
-        let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();
-        assert_eq!(bm["bg"].as_str().unwrap(), "#ff0000");
-    }
-
-    #[test]
     fn set_border_width_stored_in_box_model() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.select_face(f);
 
-        let json = r##"{"margin":{"top":0.0,"right":0.0,"bottom":0.0,"left":0.0},"bg":"","border":{"width":2.5,"color":"#0000ff","position":"inner"},"face_rotation_deg":0.0}"##;
+        let json = r##"{"margin":{"top":0.0,"right":0.0,"bottom":0.0,"left":0.0},"border":{"width":2.5,"color":"#0000ff","position":"inner"},"face_rotation_deg":0.0}"##;
         ed.set_face_box_model(json);
 
         let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();
@@ -230,7 +217,7 @@ mod tests {
         let f = first_face(&ed);
         ed.select_face(f);
 
-        let json = r##"{"margin":{"top":0.0,"right":0.0,"bottom":0.0,"left":0.0},"bg":"","border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":45.0}"##;
+        let json = r##"{"margin":{"top":0.0,"right":0.0,"bottom":0.0,"left":0.0},"border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":45.0}"##;
         ed.set_face_box_model(json);
 
         let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();

@@ -8,7 +8,7 @@
 import { PhotobookEditor, compute_image_cover } from './pkg/photobook_core.js';
 import type {
   SpreadInfo, SpreadSummary, PageSize,
-  RenderFrame, FaceBg, Divider, LowDpiFrame,
+  RenderFrame, Divider, LowDpiFrame,
   BoxModel, FrameTransform, TransformHandles,
   ImageCoverResult, TextElement,
   ResolvedSpread, SpreadDelta, XJunction,
@@ -40,10 +40,6 @@ export function getDefaultSpreadMargin(editor: PhotobookEditor): { top: number; 
 
 export function getRenderList(editor: PhotobookEditor, w: number, h: number): RenderFrame[] {
   return JSON.parse(editor.get_render_list(w, h)) as RenderFrame[];
-}
-
-export function getFaceBackgrounds(editor: PhotobookEditor, w: number, h: number): FaceBg[] {
-  return JSON.parse(editor.get_face_backgrounds(w, h)) as FaceBg[];
 }
 
 export function getDividers(editor: PhotobookEditor, w: number, h: number): Divider[] {

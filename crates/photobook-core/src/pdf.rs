@@ -7,7 +7,7 @@ use printpdf::{
 use crate::layout::{Border, BorderPosition, Rect};
 use crate::page::{PhotobookDocument, SpreadKind, TextElement};
 use crate::grid_layout::GridLayout;
-use crate::grid_resolver::{resolve_backgrounds_mm, resolve_frames_mm};
+use crate::grid_resolver::resolve_frames_mm;
 use crate::utils::image_cover_factors;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -116,15 +116,6 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         // White base background (covers bleed area too).
         layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None)));
         fill_rect(&layer, 0.0, 0.0, total_w, total_h);
-
-        // Room backgrounds, bleed-extended.
-        for bg in resolve_backgrounds_mm(p.layout, p.spread_w, p.out_h, bleed) {
-            let (r, g, b) = parse_hex_color(&bg.color);
-            layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
-            let pdf_x = bg.rect.x + bleed;
-            let pdf_y = p.out_h + bleed - bg.rect.y - bg.rect.h;
-            fill_rect(&layer, pdf_x, pdf_y, bg.rect.w, bg.rect.h);
-        }
 
         draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
 

@@ -71,12 +71,6 @@ export interface RenderFrame {
   face_rotation_deg: number;
 }
 
-/** Face background entry from get_face_backgrounds(). */
-export interface FaceBg {
-  rect: Rect;
-  color: string;
-}
-
 /** Resizable divider line between two rooms. */
 export interface Divider {
   segment_id: number;
@@ -90,7 +84,6 @@ export interface Divider {
 export interface ResolvedSpread {
   frames: RenderFrame[];
   dividers: Divider[];
-  backgrounds: FaceBg[];
   twin_handles: TwinHandle[];
 }
 
@@ -137,7 +130,6 @@ export interface Border {
 /** Full box model for a face or the merged multi-selection. */
 export interface BoxModel {
   margin: EdgeInsets;
-  bg: string;
   border: Border;
   /** Face-level rotation in degrees counter-clockwise. Absent/null = mixed (multi-selection). */
   face_rotation_deg?: number | null;
