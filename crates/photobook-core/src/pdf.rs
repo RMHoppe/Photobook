@@ -116,9 +116,22 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None)));
         fill_rect(&layer, 0.0, 0.0, total_w, total_h);
 
-        draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
-
         let spread = &doc.spreads[i];
+
+        // Per-page background colors.
+        let page_w = doc.page_size.width_mm;
+        if !spread.left_bg.is_empty() {
+            let (r, g, b) = parse_hex_color(&spread.left_bg);
+            layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
+            fill_rect(&layer, 0.0, 0.0, page_w + bleed, total_h);
+        }
+        if !spread.right_bg.is_empty() {
+            let (r, g, b) = parse_hex_color(&spread.right_bg);
+            layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
+            fill_rect(&layer, total_w - page_w - bleed, 0.0, page_w + bleed, total_h);
+        }
+
+        draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
         let rooms_mm = resolve_frames_mm(
             p.layout, p.spread_w, ph, bleed,
             spread.margin_top, spread.margin_right,
@@ -737,8 +750,6 @@ fn draw_text_elements(
     font_bytes_map: &HashMap<String, Vec<u8>>,
 ) {
     for el in elements {
-        // Collect font reference before calling layer methods (borrow-checker).
-        let font_key = format!("{}:{}:{}", el.font_family, el.bold as u8, el.italic as u8);
         let font = resolve_font(pdf_doc, font_cache, &el.font_family, el.bold, el.italic, font_bytes_map).clone();
 
         let (r, g, b) = parse_hex_color(&el.color);
@@ -800,9 +811,6 @@ fn draw_text_elements(
 
         layer.end_text_section();
         layer.restore_graphics_state();
-
-        // Suppress unused-variable warning for font_key (used as cache key above).
-        let _ = font_key;
     }
 }
 
