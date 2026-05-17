@@ -5,7 +5,7 @@ use printpdf::{
     path,
 };
 use crate::layout::{Border, BorderPosition, Rect};
-use crate::page::{PhotobookDocument, SpreadKind, TextElement};
+use crate::page::{PhotobookDocument, TextElement};
 use crate::grid_layout::GridLayout;
 use crate::grid_resolver::resolve_frames_mm;
 use crate::utils::image_cover_factors;
@@ -82,7 +82,6 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
             out_h: ph,
             spread_w,
         });
-        let _ = SpreadKind::Content; // suppress unused warning
     }
 
     if out_pages.is_empty() {
@@ -117,26 +116,40 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None)));
         fill_rect(&layer, 0.0, 0.0, total_w, total_h);
 
-        draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
+        let spread = &doc.spreads[i];
 
-        let rooms_mm = resolve_frames_mm(p.layout, p.spread_w, ph, bleed);
+        // Per-page background colors.
+        let page_w = doc.page_size.width_mm;
+        if !spread.left_bg.is_empty() {
+            let (r, g, b) = parse_hex_color(&spread.left_bg);
+            layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
+            fill_rect(&layer, 0.0, 0.0, page_w + bleed, total_h);
+        }
+        if !spread.right_bg.is_empty() {
+            let (r, g, b) = parse_hex_color(&spread.right_bg);
+            layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
+            fill_rect(&layer, total_w - page_w - bleed, 0.0, page_w + bleed, total_h);
+        }
+
+        draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
+        let rooms_mm = resolve_frames_mm(
+            p.layout, p.spread_w, ph, bleed,
+            spread.margin_top, spread.margin_right,
+            spread.margin_bottom, spread.margin_left,
+        );
 
         // --- Pass 1: prepare per-frame placement data and deduplicate crops. ---
         type CropKey = (String, u32, u32, u32, u32);
         let mut xobj_cache: HashMap<CropKey, XObjectRef> = HashMap::new();
-        let mut pending: Vec<(Rect, f32, Prepared)> = Vec::new();
+        let mut pending: Vec<(Rect, f32, f32, Prepared)> = Vec::new();
 
         for (face_id, spread_rect) in &rooms_mm {
             let Some(_clipped) = intersect_rect(spread_rect, &p.region) else { continue };
             let Some(face) = p.layout.faces.get(face_id) else { continue };
 
             let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
-            let frame_page = Rect::new(
-                spread_rect.x - p.region.x,
-                spread_rect.y,
-                spread_rect.w,
-                spread_rect.h,
-            );
+            let border_radius_mm = face.box_model.border.radius.max(0.0);
+            let frame_page = frame_page_rect(spread_rect, p.region.x);
 
             if let Some(ref img_id) = face.image.image_id {
                 if let Some(decoded_img) = decoded.get(img_id.as_str()) {
@@ -154,7 +167,7 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
                         let xobj_ref = xobj_cache.entry(key).or_insert_with(|| {
                             layer.add_image(prep.xobj.clone())
                         }).clone();
-                        pending.push((frame_page, node_rotation,
+                        pending.push((frame_page, node_rotation, border_radius_mm,
                                       Prepared { xobj_ref: Some(xobj_ref), ..prep }));
                     }
                 }
@@ -162,21 +175,16 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         }
 
         // --- Pass 2: paint all frames (image then border). ---
-        for (frame_page, node_rotation, prep) in &pending {
+        for (frame_page, node_rotation, border_radius_mm, prep) in &pending {
             if let Some(ref xobj_ref) = prep.xobj_ref {
                 paint_image(&layer, xobj_ref.clone(), prep, frame_page,
-                            *node_rotation, bleed, p.out_h);
+                            *node_rotation, *border_radius_mm, bleed, p.out_h);
             }
         }
         for (face_id, spread_rect) in &rooms_mm {
             let Some(_clipped) = intersect_rect(spread_rect, &p.region) else { continue };
             let Some(face) = p.layout.faces.get(face_id) else { continue };
-            let frame_page = Rect::new(
-                spread_rect.x - p.region.x,
-                spread_rect.y,
-                spread_rect.w,
-                spread_rect.h,
-            );
+            let frame_page = frame_page_rect(spread_rect, p.region.x);
             let border = &face.box_model.border;
             if border.width > 0.0 {
                 let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
@@ -452,10 +460,9 @@ fn apply_node_ctm(
     page_h_mm: f32,
 ) {
     if rotation_deg.abs() < 0.001 { return; }
-    let to_pt = |mm: f32| mm * 72.0 / 25.4;
     // Frame centre in PDF pt coords (bottom-left origin).
-    let cx = to_pt(frame.x + bleed + frame.w / 2.0);
-    let cy = to_pt(page_h_mm + bleed - frame.y - frame.h / 2.0);
+    let cx = mm_to_pt(frame.x + bleed + frame.w / 2.0);
+    let cy = mm_to_pt(page_h_mm + bleed - frame.y - frame.h / 2.0);
     let rad = rotation_deg.to_radians();
     let cos_r = rad.cos();
     let sin_r = rad.sin();
@@ -478,6 +485,7 @@ fn paint_image(
     prep: &Prepared,
     frame_rect: &Rect,
     face_rotation_deg: f32,
+    border_radius_mm: f32,
     bleed: f32,
     page_h_mm: f32,
 ) {
@@ -503,18 +511,16 @@ fn paint_image(
     transforms.push(CurTransMat::Translate(Pt(tx), Pt(ty)));
 
     // Clip to the frame rectangle.
-    let to_pt = |mm: f32| mm * 72.0 / 25.4;
-    let cx = to_pt(frame_rect.x + bleed);
-    let cy = to_pt(page_h_mm + bleed - frame_rect.y - frame_rect.h);
-    let cw = to_pt(frame_rect.w);
-    let ch = to_pt(frame_rect.h);
+    let cx = mm_to_pt(frame_rect.x + bleed);
+    let cy = mm_to_pt(page_h_mm + bleed - frame_rect.y - frame_rect.h);
+    let cw = mm_to_pt(frame_rect.w);
+    let ch = mm_to_pt(frame_rect.h);
 
     use printpdf::lopdf::content::Operation;
-    use printpdf::lopdf::Object::Real;
 
     layer.save_graphics_state();
     apply_node_ctm(layer, face_rotation_deg, frame_rect, bleed, page_h_mm);
-    layer.add_operation(Operation::new("re", vec![Real(cx), Real(cy), Real(cw), Real(ch)]));
+    add_rounded_rect_path(layer, cx, cy, cw, ch, mm_to_pt(border_radius_mm));
     layer.add_operation(Operation::new("W", vec![]));
     layer.add_operation(Operation::new("n", vec![]));
     layer.use_xobject(xobj_ref, &transforms);
@@ -524,6 +530,59 @@ fn paint_image(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn frame_page_rect(spread_rect: &Rect, region_x: f32) -> Rect {
+    Rect::new(spread_rect.x - region_x, spread_rect.y, spread_rect.w, spread_rect.h)
+}
+
+/// Emit a rounded-rectangle path into the layer (PDF points, Y-up coords).
+/// Falls back to the `re` operator when radius ≤ 0 for maximum compatibility.
+/// The caller is responsible for the paint/clip operator that follows (S, W+n, etc.).
+fn add_rounded_rect_path(layer: &PdfLayerReference, x: f32, y: f32, w: f32, h: f32, r: f32) {
+    use printpdf::lopdf::content::Operation;
+    use printpdf::lopdf::Object::Real;
+
+    if r <= 0.0 {
+        layer.add_operation(Operation::new("re", vec![Real(x), Real(y), Real(w), Real(h)]));
+        return;
+    }
+    // Clamp so opposite corners don't overlap.
+    let r = r.min(w / 2.0).min(h / 2.0);
+    // Bézier approximation constant for a quarter-circle arc.
+    const K: f32 = 0.5523;
+    let kr = K * r;
+
+    // Clockwise path starting at the bottom-left of the bottom edge (Y-up coordinates).
+    layer.add_operation(Operation::new("m", vec![Real(x + r), Real(y)]));
+    layer.add_operation(Operation::new("l", vec![Real(x + w - r), Real(y)]));
+    layer.add_operation(Operation::new("c", vec![
+        Real(x + w - r + kr), Real(y),
+        Real(x + w), Real(y + kr),
+        Real(x + w), Real(y + r),
+    ]));
+    layer.add_operation(Operation::new("l", vec![Real(x + w), Real(y + h - r)]));
+    layer.add_operation(Operation::new("c", vec![
+        Real(x + w), Real(y + h - r + kr),
+        Real(x + w - r + kr), Real(y + h),
+        Real(x + w - r), Real(y + h),
+    ]));
+    layer.add_operation(Operation::new("l", vec![Real(x + r), Real(y + h)]));
+    layer.add_operation(Operation::new("c", vec![
+        Real(x + r - kr), Real(y + h),
+        Real(x), Real(y + h - r + kr),
+        Real(x), Real(y + h - r),
+    ]));
+    layer.add_operation(Operation::new("l", vec![Real(x), Real(y + r)]));
+    layer.add_operation(Operation::new("c", vec![
+        Real(x), Real(y + r - kr),
+        Real(x + r - kr), Real(y),
+        Real(x + r), Real(y),
+    ]));
+    layer.add_operation(Operation::new("h", vec![]));
+}
+
+#[inline]
+fn mm_to_pt(mm: f32) -> f32 { mm * 72.0 / 25.4 }
 
 fn intersect_rect(a: &Rect, b: &Rect) -> Option<Rect> {
     let x1 = a.x.max(b.x);
@@ -607,24 +666,25 @@ fn draw_border_rect(
         BorderPosition::Centered | BorderPosition::Mixed => (frame.x, frame.y, frame.w, frame.h),
     };
 
+    // Adjust corner radius for border position so the stroke follows the same curve.
+    let base_r = border.radius.max(0.0);
+    let stroke_r = match border.position {
+        BorderPosition::Inner  => (base_r - hw).max(0.0),
+        BorderPosition::Outer  => base_r + hw,
+        BorderPosition::Centered | BorderPosition::Mixed => base_r,
+    };
+
     let (r, g, b) = parse_hex_color(&border.color);
     layer.set_outline_color(Color::Rgb(Rgb::new(r, g, b, None)));
     layer.set_outline_thickness(border.width * 72.0 / 25.4);
 
-    let x1 = fx + bleed;
-    let y1 = page_h_mm + bleed - fy - fh;
-    let x2 = x1 + fw;
-    let y2 = y1 + fh;
-
-    layer.add_line(Line {
-        points: vec![
-            (Point::new(Mm(x1), Mm(y1)), false),
-            (Point::new(Mm(x2), Mm(y1)), false),
-            (Point::new(Mm(x2), Mm(y2)), false),
-            (Point::new(Mm(x1), Mm(y2)), false),
-        ],
-        is_closed: true,
-    });
+    use printpdf::lopdf::content::Operation;
+    let x1_pt = mm_to_pt(fx + bleed);
+    let y1_pt = mm_to_pt(page_h_mm + bleed - fy - fh);
+    let fw_pt = mm_to_pt(fw);
+    let fh_pt = mm_to_pt(fh);
+    add_rounded_rect_path(layer, x1_pt, y1_pt, fw_pt, fh_pt, mm_to_pt(stroke_r));
+    layer.add_operation(Operation::new("S", vec![]));
 }
 
 // ---------------------------------------------------------------------------
@@ -690,8 +750,6 @@ fn draw_text_elements(
     font_bytes_map: &HashMap<String, Vec<u8>>,
 ) {
     for el in elements {
-        // Collect font reference before calling layer methods (borrow-checker).
-        let font_key = format!("{}:{}:{}", el.font_family, el.bold as u8, el.italic as u8);
         let font = resolve_font(pdf_doc, font_cache, &el.font_family, el.bold, el.italic, font_bytes_map).clone();
 
         let (r, g, b) = parse_hex_color(&el.color);
@@ -709,8 +767,6 @@ fn draw_text_elements(
         let top_y_mm  = page_h_mm + bleed - el.y_mm;
         // First baseline: one line-height below the top edge.
         let baseline_y_mm = top_y_mm - font_size_pt * (25.4 / 72.0);
-
-        let to_pt = |mm: f32| -> f32 { mm * 72.0 / 25.4 };
 
         // Lines of text.
         let lines: Vec<&str> = el.content.split('\n').collect();
@@ -734,8 +790,8 @@ fn draw_text_elements(
             let tx_mm = base_x_mm - line_offset_mm * rad.sin();
             let ty_mm = baseline_y_mm - line_offset_mm * rad.cos();
 
-            let tx_pt = to_pt(tx_mm);
-            let ty_pt = to_pt(ty_mm);
+            let tx_pt = mm_to_pt(tx_mm);
+            let ty_pt = mm_to_pt(ty_mm);
 
             // Tm operator: sets text matrix = rotation + translation.
             use printpdf::lopdf::content::Operation;
@@ -755,9 +811,6 @@ fn draw_text_elements(
 
         layer.end_text_section();
         layer.restore_graphics_state();
-
-        // Suppress unused-variable warning for font_key (used as cache key above).
-        let _ = font_key;
     }
 }
 

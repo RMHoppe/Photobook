@@ -164,7 +164,18 @@ impl PhotobookEditor {
 
     pub(crate) fn root_rect_with_bleed(&self, canvas_w: f32, canvas_h: f32) -> Rect {
         let bleed_px = self.doc.bleed_mm * self.mm_to_px(canvas_w);
-        Rect::new(-bleed_px, -bleed_px, canvas_w + 2.0 * bleed_px, canvas_h + 2.0 * bleed_px)
+        let mm_to_px = self.mm_to_px(canvas_w);
+        let spread = self.doc.current_spread();
+        let ml = spread.margin_left   * mm_to_px;
+        let mr = spread.margin_right  * mm_to_px;
+        let mt = spread.margin_top    * mm_to_px;
+        let mb = spread.margin_bottom * mm_to_px;
+        Rect::new(
+            -bleed_px + ml,
+            -bleed_px + mt,
+            canvas_w + 2.0 * bleed_px - ml - mr,
+            canvas_h + 2.0 * bleed_px - mt - mb,
+        )
     }
 
     pub(crate) fn current_resolved(

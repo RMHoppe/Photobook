@@ -206,14 +206,24 @@ export class CanvasRenderer {
     // Page backgrounds (drawn over white, under face node backgrounds).
     if (spreadInfo.left_bg) {
       ctx.fillStyle = spreadInfo.left_bg;
-      ctx.fillRect(spreadRect.x, spreadRect.y, pageWPx, pageHPx);
+      ctx.fillRect(
+        spreadRect.x - visibleBleedPx,
+        spreadRect.y - visibleBleedPx,
+        pageWPx + visibleBleedPx,
+        pageHPx + visibleBleedPx * 2,
+      );
     }
     if (spreadInfo.right_bg) {
       ctx.fillStyle = spreadInfo.right_bg;
       const rightX = spreadInfo.kind === 'cover'
         ? spreadRect.x + pageWPx + spinePx
         : spreadRect.x + pageWPx;
-      ctx.fillRect(rightX, spreadRect.y, pageWPx, pageHPx);
+      ctx.fillRect(
+        rightX,
+        spreadRect.y - visibleBleedPx,
+        pageWPx + visibleBleedPx,
+        pageHPx + visibleBleedPx * 2,
+      );
     }
 
     if (this.showBleed) {
@@ -499,10 +509,12 @@ export class CanvasRenderer {
       ctx.translate(-fcx, -fcy);
     }
 
-    // Image (clipped to frame bounds).
+    const rad = Math.max(0, frame.border_radius ?? 0);
+
+    // Image (clipped to frame bounds, with rounded corners if radius > 0).
     ctx.save();
     ctx.beginPath();
-    ctx.rect(rx, ry, rw, rh);
+    if (rad > 0) ctx.roundRect(rx, ry, rw, rh, rad); else ctx.rect(rx, ry, rw, rh);
     ctx.clip();
 
     if (frame.image_id && this.imageCache.has(frame.image_id)) {
@@ -517,17 +529,24 @@ export class CanvasRenderer {
     const hasBorder = frame.border_width > 0;
     if (hasBorder) {
       const lw = frame.border_width;
+      const hw = lw / 2;
       ctx.save();
       ctx.strokeStyle = frame.border_color;
       ctx.lineWidth = lw;
       ctx.setLineDash([]);
+      ctx.beginPath();
       if (frame.border_position === 'inner') {
-        ctx.strokeRect(rx + lw / 2, ry + lw / 2, rw - lw, rh - lw);
+        const br = Math.max(0, rad - hw);
+        if (br > 0) ctx.roundRect(rx + hw, ry + hw, rw - lw, rh - lw, br);
+        else ctx.rect(rx + hw, ry + hw, rw - lw, rh - lw);
       } else if (frame.border_position === 'outer') {
-        ctx.strokeRect(rx - lw / 2, ry - lw / 2, rw + lw, rh + lw);
+        const br = rad + hw;
+        if (br > 0) ctx.roundRect(rx - hw, ry - hw, rw + lw, rh + lw, br);
+        else ctx.rect(rx - hw, ry - hw, rw + lw, rh + lw);
       } else {
-        ctx.strokeRect(rx, ry, rw, rh);
+        if (rad > 0) ctx.roundRect(rx, ry, rw, rh, rad); else ctx.rect(rx, ry, rw, rh);
       }
+      ctx.stroke();
       ctx.restore();
     }
 
@@ -535,7 +554,9 @@ export class CanvasRenderer {
       ctx.strokeStyle = FRAME_EMPTY_COLOR;
       ctx.lineWidth = 1;
       ctx.setLineDash([]);
-      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.beginPath();
+      if (rad > 0) ctx.roundRect(rx, ry, rw, rh, rad); else ctx.rect(rx, ry, rw, rh);
+      ctx.stroke();
     }
 
     if (lowDpiMap && lowDpiMap.has(frame.id)) {

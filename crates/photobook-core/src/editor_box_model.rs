@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use crate::layout::{Border, BorderPosition, BoxModel, EdgeInsets};
+use crate::layout::{Border, BorderPosition, BoxModel, MarginInsets};
 use crate::grid_layout::FaceId;
 use crate::PhotobookEditor;
 
@@ -40,8 +40,7 @@ impl PhotobookEditor {
     pub fn set_box_model(&mut self, json: &str) {
         let bm: BoxModel = match serde_json::from_str(json) { Ok(v) => v, Err(_) => return };
         if self.selection.is_empty() { return; }
-        let ids: Vec<FaceId> = self.selection.clone();
-        for id in ids {
+        for id in self.selection.clone() {
             self.apply_box_model_to_node(id, &bm);
         }
         self.mark_structure_dirty();
@@ -50,10 +49,10 @@ impl PhotobookEditor {
     pub fn set_node_margin(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
         let Some(id) = self.transform_target_node() else { return };
         if let Some(face) = self.doc.current_spread_mut().layout.faces.get_mut(&id) {
-            face.box_model.margin.top    = top.max(0.0);
-            face.box_model.margin.right  = right.max(0.0);
-            face.box_model.margin.bottom = bottom.max(0.0);
-            face.box_model.margin.left   = left.max(0.0);
+            face.box_model.margin.top    = Some(top);
+            face.box_model.margin.right  = Some(right);
+            face.box_model.margin.bottom = Some(bottom);
+            face.box_model.margin.left   = Some(left);
         }
         self.mark_structure_dirty();
     }
@@ -80,8 +79,7 @@ impl PhotobookEditor {
 
     /// Sets the gap on all selected divider chains.
     pub fn set_selected_segment_gap(&mut self, gap: f32) {
-        let eids: Vec<_> = self.selected_segments.clone();
-        for eid in eids {
+        for eid in self.selected_segments.clone() {
             self.set_chain_gap(eid, gap);
         }
     }
@@ -96,11 +94,12 @@ impl PhotobookEditor {
         const MIXED_STR: &str = "__mixed__";
         if let Some(face) = self.doc.current_spread_mut().layout.faces.get_mut(&id) {
             let r = &mut face.box_model;
-            if bm.margin.top    >= 0.0 { r.margin.top    = bm.margin.top; }
-            if bm.margin.right  >= 0.0 { r.margin.right  = bm.margin.right; }
-            if bm.margin.bottom >= 0.0 { r.margin.bottom = bm.margin.bottom; }
-            if bm.margin.left   >= 0.0 { r.margin.left   = bm.margin.left; }
+            if let Some(v) = bm.margin.top    { r.margin.top    = Some(v); }
+            if let Some(v) = bm.margin.right  { r.margin.right  = Some(v); }
+            if let Some(v) = bm.margin.bottom { r.margin.bottom = Some(v); }
+            if let Some(v) = bm.margin.left   { r.margin.left   = Some(v); }
             if bm.border.width  >= 0.0 { r.border.width  = bm.border.width; }
+            if bm.border.radius >= 0.0 { r.border.radius = bm.border.radius; }
             if bm.border.color != MIXED_STR {
                 r.border.color = bm.border.color.clone();
             }
@@ -122,19 +121,21 @@ impl PhotobookEditor {
         }
         let f = &bms[0];
         let rest = &bms[1..];
-        let mf = |v: f32, agree: bool| -> f32 { if agree { v } else { -1.0 } };
+        let mf  = |v: f32,        agree: bool| -> f32        { if agree { v }    else { -1.0 } };
+        let mfm = |v: Option<f32>, agree: bool| -> Option<f32> { if agree { v } else { None } };
         let ms = |v: &str, agree: bool| -> String {
             if agree { v.to_string() } else { "__mixed__".to_string() }
         };
         let merged = BoxModel {
-            margin: EdgeInsets {
-                top:    mf(f.margin.top,    rest.iter().all(|b| b.margin.top    == f.margin.top)),
-                right:  mf(f.margin.right,  rest.iter().all(|b| b.margin.right  == f.margin.right)),
-                bottom: mf(f.margin.bottom, rest.iter().all(|b| b.margin.bottom == f.margin.bottom)),
-                left:   mf(f.margin.left,   rest.iter().all(|b| b.margin.left   == f.margin.left)),
+            margin: MarginInsets {
+                top:    mfm(f.margin.top,    rest.iter().all(|b| b.margin.top    == f.margin.top)),
+                right:  mfm(f.margin.right,  rest.iter().all(|b| b.margin.right  == f.margin.right)),
+                bottom: mfm(f.margin.bottom, rest.iter().all(|b| b.margin.bottom == f.margin.bottom)),
+                left:   mfm(f.margin.left,   rest.iter().all(|b| b.margin.left   == f.margin.left)),
             },
             border: Border {
-                width: mf(f.border.width, rest.iter().all(|b| b.border.width == f.border.width)),
+                width:  mf(f.border.width,  rest.iter().all(|b| b.border.width  == f.border.width)),
+                radius: mf(f.border.radius, rest.iter().all(|b| b.border.radius == f.border.radius)),
                 color: ms(&f.border.color, rest.iter().all(|b| b.border.color == f.border.color)),
                 position: if rest.iter().all(|b| b.border.position == f.border.position) {
                     f.border.position.clone()

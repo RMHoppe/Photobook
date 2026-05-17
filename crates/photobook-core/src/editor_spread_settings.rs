@@ -18,10 +18,10 @@ impl PhotobookEditor {
         );
         if let Some(spread) = self.doc.spreads.last_mut() {
             for face in spread.layout.faces.values_mut() {
-                face.box_model.margin.top    = t;
-                face.box_model.margin.right  = r;
-                face.box_model.margin.bottom = b;
-                face.box_model.margin.left   = l;
+                face.box_model.margin.top    = Some(t);
+                face.box_model.margin.right  = Some(r);
+                face.box_model.margin.bottom = Some(b);
+                face.box_model.margin.left   = Some(l);
             }
         }
         let n = self.doc.spreads.len();
@@ -104,6 +104,25 @@ impl PhotobookEditor {
         self.mark_structure_dirty();
     }
 
+    pub fn get_spread_margin(&self) -> String {
+        let s = self.doc.current_spread();
+        serde_json::json!({
+            "top":    s.margin_top,
+            "right":  s.margin_right,
+            "bottom": s.margin_bottom,
+            "left":   s.margin_left,
+        }).to_string()
+    }
+
+    pub fn set_spread_margin(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
+        let s = self.doc.current_spread_mut();
+        s.margin_top    = top.max(0.0);
+        s.margin_right  = right.max(0.0);
+        s.margin_bottom = bottom.max(0.0);
+        s.margin_left   = left.max(0.0);
+        self.mark_structure_dirty();
+    }
+
     // -----------------------------------------------------------------------
     // PDF export + state serialization
     // -----------------------------------------------------------------------
@@ -117,20 +136,20 @@ impl PhotobookEditor {
     }
 
     pub fn load_state(&mut self, json: &str) -> bool {
-        match serde_json::from_str(json) {
-            Ok(doc) => {
-                self.doc = doc;
-                self.selection.clear();
-                let n = self.doc.spreads.len();
-                self.structure_dirty = true;
-                self.leaf_dirty.clear();
-                self.low_dpi_dirty = true;
-                self.low_dpi_cache = None;
-                self.spread_dirty = vec![true; n];
-                true
-            }
-            Err(_) => false,
-        }
+        let doc: crate::page::PhotobookDocument = match serde_json::from_str(json) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        if doc.schema_version > 1 { return false; }
+        self.doc = doc;
+        self.selection.clear();
+        let n = self.doc.spreads.len();
+        self.structure_dirty = true;
+        self.leaf_dirty.clear();
+        self.low_dpi_dirty = true;
+        self.low_dpi_cache = None;
+        self.spread_dirty = vec![true; n];
+        true
     }
 
     // -----------------------------------------------------------------------
@@ -163,10 +182,10 @@ impl PhotobookEditor {
         self.doc.default_margin_bottom = bottom.max(0.0);
         self.doc.default_margin_left   = left.max(0.0);
         for face in self.doc.current_spread_mut().layout.faces.values_mut() {
-            face.box_model.margin.top    = top.max(0.0);
-            face.box_model.margin.right  = right.max(0.0);
-            face.box_model.margin.bottom = bottom.max(0.0);
-            face.box_model.margin.left   = left.max(0.0);
+            face.box_model.margin.top    = Some(top.max(0.0));
+            face.box_model.margin.right  = Some(right.max(0.0));
+            face.box_model.margin.bottom = Some(bottom.max(0.0));
+            face.box_model.margin.left   = Some(left.max(0.0));
         }
     }
 

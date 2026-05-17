@@ -12,6 +12,8 @@
     <header id="toolbar">
       <span class="app-title">Photobook</span>
       <div class="toolbar-actions">
+        <button id="btn-open-project" title="Open project file">Open</button>
+        <button id="btn-save-project" title="Save project file">Save</button>
         <button id="btn-add-spread" title="Add spread">+ Spread</button>
         <button id="btn-add-text" title="Add text element">+ Text</button>
         <button id="btn-cut-tool" title="Cut tool (X)">&#9986; Cut</button>
@@ -40,14 +42,27 @@
 
       <!-- Main canvas area -->
       <main id="canvas-area">
-        <div id="canvas-wrapper">
-          <canvas id="main-canvas"></canvas>
+        <div class="canvas-banners">
+          <div id="missing-images-banner" class="missing-images-banner" hidden>
+            <span id="missing-images-text"></span>
+            <button id="btn-open-folder-banner">Open image folder</button>
+            <button id="btn-dismiss-banner" class="banner-dismiss" title="Dismiss">&#x2715;</button>
+          </div>
+          <div id="font-toast" class="font-toast" hidden>
+            <span id="font-toast-text"></span>
+            <button id="btn-dismiss-font-toast" class="banner-dismiss" title="Dismiss">&#x2715;</button>
+          </div>
         </div>
-        <div id="zoom-controls">
-          <button id="btn-zoom-out" title="Zoom out">−</button>
-          <span id="zoom-label">100%</span>
-          <button id="btn-zoom-in" title="Zoom in">+</button>
-          <button id="btn-zoom-fit" title="Fit to window">Fit</button>
+        <div id="canvas-center">
+          <div id="canvas-wrapper">
+            <canvas id="main-canvas"></canvas>
+          </div>
+          <div id="zoom-controls">
+            <button id="btn-zoom-out" title="Zoom out">−</button>
+            <span id="zoom-label">100%</span>
+            <button id="btn-zoom-in" title="Zoom in">+</button>
+            <button id="btn-zoom-fit" title="Fit to window">Fit</button>
+          </div>
         </div>
       </main>
 

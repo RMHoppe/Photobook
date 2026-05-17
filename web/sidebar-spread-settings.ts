@@ -1,19 +1,14 @@
 // sidebar-spread-settings.ts — SpreadSettingsPanel (shown in sidebar when nothing is selected).
 
-export interface SpreadSettingsData {
-  default_margin_top: number;
-  default_margin_right: number;
-  default_margin_bottom: number;
-  default_margin_left: number;
-  left_bg: string;
-  right_bg: string;
-}
+import type { SpreadSettingsData } from './types.js';
+export type { SpreadSettingsData };
 
 export class SpreadSettingsPanel {
   private containerEl: HTMLElement;
   private onChange: (data: SpreadSettingsData) => void;
   private _built = false;
   private _emitTimer: ReturnType<typeof setTimeout> | null = null;
+  private _marginMode: 'all' | 'xy' | 'each' = 'each';
 
   constructor(containerEl: HTMLElement, onChange: (data: SpreadSettingsData) => void) {
     this.containerEl = containerEl;
@@ -29,12 +24,30 @@ export class SpreadSettingsPanel {
     this._built = true;
     this.containerEl.innerHTML = `
       <div class="bm-section">
-        <h4>Default margins (mm)</h4>
-        <div class="bm-grid">
-          ${this._numField('def-margin-top',    'Top')}
-          ${this._numField('def-margin-right',  'Right')}
-          ${this._numField('def-margin-bottom', 'Bottom')}
-          ${this._numField('def-margin-left',   'Left')}
+        <div class="bm-section-header">
+          <h4>Spread margin (mm)</h4>
+          <div class="margin-mode-bar">
+            <button class="margin-mode-btn" data-margin-mode="all"  title="All sides equal">All</button>
+            <button class="margin-mode-btn" data-margin-mode="xy"   title="Vertical / Horizontal">X·Y</button>
+            <button class="margin-mode-btn" data-margin-mode="each" title="Each side individually">Each</button>
+          </div>
+        </div>
+        <div class="margin-pane" data-margin-pane="all">
+          <div class="bm-grid">${this._numField('margin-all', 'All')}</div>
+        </div>
+        <div class="margin-pane" data-margin-pane="xy">
+          <div class="bm-grid">
+            ${this._numField('margin-v', 'Vertical')}
+            ${this._numField('margin-h', 'Horizontal')}
+          </div>
+        </div>
+        <div class="margin-pane" data-margin-pane="each">
+          <div class="bm-grid">
+            ${this._numField('margin-top',    'Top')}
+            ${this._numField('margin-right',  'Right')}
+            ${this._numField('margin-bottom', 'Bottom')}
+            ${this._numField('margin-left',   'Left')}
+          </div>
         </div>
       </div>
       <div class="bm-section">
@@ -56,13 +69,29 @@ export class SpreadSettingsPanel {
       el.addEventListener('change', () => this._emit());
       el.addEventListener('input',  () => this._emit());
     });
+
+    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-margin-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._setMarginMode(btn.dataset.marginMode as 'all' | 'xy' | 'each');
+      });
+    });
   }
 
   private _populate(data: SpreadSettingsData): void {
-    this._setNum('def-margin-top',    data.default_margin_top);
-    this._setNum('def-margin-right',  data.default_margin_right);
-    this._setNum('def-margin-bottom', data.default_margin_bottom);
-    this._setNum('def-margin-left',   data.default_margin_left);
+    const mode = this._detectMarginMode(data);
+    this._marginMode = mode;
+    this._applyMarginMode();
+    if (mode === 'all') {
+      this._setNum('margin-all', data.margin_top);
+    } else if (mode === 'xy') {
+      this._setNum('margin-v', data.margin_top);
+      this._setNum('margin-h', data.margin_right);
+    } else {
+      this._setNum('margin-top',    data.margin_top);
+      this._setNum('margin-right',  data.margin_right);
+      this._setNum('margin-bottom', data.margin_bottom);
+      this._setNum('margin-left',   data.margin_left);
+    }
     this._setColor('left-bg',  data.left_bg  || '#ffffff');
     this._setColor('right-bg', data.right_bg || '#ffffff');
   }
@@ -84,24 +113,81 @@ export class SpreadSettingsPanel {
     </div>`;
   }
 
+  // ---------------------------------------------------------------------------
+  // Margin mode selector helpers
+  // ---------------------------------------------------------------------------
+
+  private _detectMarginMode(data: SpreadSettingsData): 'all' | 'xy' | 'each' {
+    const { margin_top: t, margin_right: r, margin_bottom: b, margin_left: l } = data;
+    if (t === r && r === b && b === l) return 'all';
+    if (t === b && l === r) return 'xy';
+    return 'each';
+  }
+
+  private _setMarginMode(mode: 'all' | 'xy' | 'each'): void {
+    const prev = this._readCurrentMargins();
+    this._marginMode = mode;
+    this._applyMarginMode();
+    if (mode === 'all') {
+      this._setNum('margin-all', prev.top);
+    } else if (mode === 'xy') {
+      this._setNum('margin-v', prev.top);
+      this._setNum('margin-h', prev.right);
+    } else {
+      this._setNum('margin-top',    prev.top);
+      this._setNum('margin-right',  prev.right);
+      this._setNum('margin-bottom', prev.bottom);
+      this._setNum('margin-left',   prev.left);
+    }
+    this._emit();
+  }
+
+  private _readCurrentMargins(): { top: number; right: number; bottom: number; left: number } {
+    const g = (name: string): number => {
+      const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
+      if (!el) return 0;
+      const v = parseFloat(el.value);
+      return isNaN(v) ? 0 : v;
+    };
+    if (this._marginMode === 'all') {
+      const v = g('margin-all');
+      return { top: v, right: v, bottom: v, left: v };
+    }
+    if (this._marginMode === 'xy') {
+      const vert = g('margin-v');
+      const horiz = g('margin-h');
+      return { top: vert, right: horiz, bottom: vert, left: horiz };
+    }
+    return {
+      top:    g('margin-top'),
+      right:  g('margin-right'),
+      bottom: g('margin-bottom'),
+      left:   g('margin-left'),
+    };
+  }
+
+  private _applyMarginMode(): void {
+    this.containerEl.querySelectorAll<HTMLElement>('[data-margin-pane]').forEach(pane => {
+      pane.classList.toggle('active', pane.dataset.marginPane === this._marginMode);
+    });
+    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-margin-mode]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.marginMode === this._marginMode);
+    });
+  }
+
   private _emit(): void {
     if (this._emitTimer !== null) clearTimeout(this._emitTimer);
     this._emitTimer = setTimeout(() => {
-      const g = (name: string): number => {
-        const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-        if (!el) return 0;
-        const v = parseFloat(el.value);
-        return isNaN(v) ? 0 : v;
-      };
       const gc = (name: string): string => {
         const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
         return el ? el.value : '#ffffff';
       };
+      const margins = this._readCurrentMargins();
       this.onChange({
-        default_margin_top:    g('def-margin-top'),
-        default_margin_right:  g('def-margin-right'),
-        default_margin_bottom: g('def-margin-bottom'),
-        default_margin_left:   g('def-margin-left'),
+        margin_top:    margins.top,
+        margin_right:  margins.right,
+        margin_bottom: margins.bottom,
+        margin_left:   margins.left,
         left_bg:  gc('left-bg'),
         right_bg: gc('right-bg'),
       });

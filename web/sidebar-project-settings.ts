@@ -1,15 +1,7 @@
 // sidebar-project-settings.ts — ProjectSettingsPanel (rendered inside the project settings modal).
 
-export interface ProjectSettingsData {
-  page_width_mm: number;
-  page_height_mm: number;
-  bleed_mm: number;
-  safe_zone_mm: number;
-  spine_mm_per_page: number;
-  spine_min_mm: number;
-  margin_step_mm: number;
-  print_dpi: number;
-}
+import type { ProjectSettingsData } from './types.js';
+export type { ProjectSettingsData };
 
 export class ProjectSettingsPanel {
   private containerEl: HTMLElement;

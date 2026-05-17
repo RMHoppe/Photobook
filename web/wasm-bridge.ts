@@ -30,8 +30,8 @@ export function getPageSizeMm(editor: PhotobookEditor): PageSize {
   return JSON.parse(editor.get_page_size_mm()) as PageSize;
 }
 
-export function getDefaultSpreadMargin(editor: PhotobookEditor): { top: number; right: number; bottom: number; left: number } {
-  return JSON.parse(editor.get_default_spread_margin_mm()) as { top: number; right: number; bottom: number; left: number };
+export function getSpreadMargin(editor: PhotobookEditor): { top: number; right: number; bottom: number; left: number } {
+  return JSON.parse(editor.get_spread_margin()) as { top: number; right: number; bottom: number; left: number };
 }
 
 // ---------------------------------------------------------------------------

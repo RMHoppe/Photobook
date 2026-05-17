@@ -51,7 +51,7 @@ impl<'a> GridResolver<'a> {
                 let raw       = norm_to_px(fx, fy, fw, fh, root_rect);
                 let gi        = self.gap_inset_px(face.id);
                 let gapped    = raw.inset(&gi);
-                let margin_px = face.box_model.margin.scale(mm_to_px);
+                let margin_px = face.box_model.margin.resolve().scale(mm_to_px);
                 let inner     = gapped.inset(&margin_px);
                 Some((face.z_index, face.id, ResolvedFrame {
                     id:               face.id,
@@ -67,6 +67,7 @@ impl<'a> GridResolver<'a> {
                     border_width:     face.box_model.border.width * mm_to_px,
                     border_color:     face.box_model.border.color.clone(),
                     border_position:  face.box_model.border.position.clone(),
+                    border_radius:    face.box_model.border.radius * mm_to_px,
                     face_rotation_deg: face.box_model.face_rotation_deg.unwrap_or(0.0),
                 }))
             })
@@ -253,11 +254,16 @@ pub fn resolve_frames_mm(
     spread_w_mm: f32,
     spread_h_mm: f32,
     bleed_mm: f32,
+    margin_top: f32,
+    margin_right: f32,
+    margin_bottom: f32,
+    margin_left: f32,
 ) -> Vec<(FaceId, Rect)> {
     let root = Rect::new(
-        -bleed_mm, -bleed_mm,
-        spread_w_mm + 2.0 * bleed_mm,
-        spread_h_mm + 2.0 * bleed_mm,
+        -bleed_mm + margin_left,
+        -bleed_mm + margin_top,
+        spread_w_mm + 2.0 * bleed_mm - margin_left - margin_right,
+        spread_h_mm + 2.0 * bleed_mm - margin_top - margin_bottom,
     );
     GridResolver::new(layout, &[], 1.0)
         .resolve_frames(root)

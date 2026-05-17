@@ -416,4 +416,32 @@ mod tests {
         assert!(ok);
         assert_eq!(face_count(&ed), 1);
     }
+
+    // -----------------------------------------------------------------------
+    // Save / load state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        let mut orig = ed();
+        orig.add_page();
+        let json = orig.save_state();
+        let mut ed2 = ed();
+        assert!(ed2.load_state(&json));
+        assert_eq!(ed2.doc.spreads.len(), orig.doc.spreads.len());
+    }
+
+    #[test]
+    fn load_state_rejects_future_schema_version() {
+        let mut ed = ed();
+        // Inject a schema_version that doesn't exist yet.
+        let json = ed.save_state().replace("\"schema_version\":1", "\"schema_version\":999");
+        // Also handle the case where schema_version was not present (default), so inject it.
+        let json = if json.contains("schema_version") {
+            json
+        } else {
+            json.replacen('{', "{\"schema_version\":999,", 1)
+        };
+        assert!(!ed.load_state(&json));
+    }
 }

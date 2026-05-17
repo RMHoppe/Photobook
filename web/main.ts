@@ -3,19 +3,20 @@
 import init, { PhotobookEditor, init_panic_hook } from './pkg/photobook_core.js';
 import { CanvasRenderer } from './canvas.js';
 import { ImageSidebar } from './sidebar-left.js';
-import { BoxModelEditor, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
+import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
 import type { ProjectSettingsData, SpreadSettingsData } from './sidebar-right.js';
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
 import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
-import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getDefaultSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
+import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
 import type { Overlays } from './types.js';
 import { loadLocalFonts, localFontsSupported } from './fonts.js';
 import { UndoManager } from './undo.js';
 import { InlineEditor } from './inline-editor.js';
 import { exportPdf } from './export.js';
 import { DocsPanel } from './docs-panel.js';
+import { saveProject, openProject } from './project-io.js';
 
 // ---------------------------------------------------------------------------
 // Init
@@ -36,7 +37,7 @@ const renderer = new CanvasRenderer(canvasEl, () => redraw());
 const overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null };
 
 function fitCanvas(): void {
-  const area = document.getElementById('canvas-area')!;
+  const area = document.getElementById('canvas-center')!;
   renderer.resize(area.clientWidth, area.clientHeight);
   redraw();
 }
@@ -81,8 +82,45 @@ const sidebar = new ImageSidebar(
   },
 );
 
-document.getElementById('btn-open-folder')!.addEventListener('click', () => {
-  sidebar.openFolder();
+// ---------------------------------------------------------------------------
+// Missing-images banner
+// ---------------------------------------------------------------------------
+
+const missingBanner     = document.getElementById('missing-images-banner')!;
+const missingBannerText = document.getElementById('missing-images-text')!;
+
+function showMissingImagesBanner(missingIds: string[]): void {
+  const count = missingIds.length;
+  missingBannerText.textContent = `${count} image${count === 1 ? '' : 's'} used in this project could not be found. Open the image folder to restore them.`;
+  missingBanner.hidden = false;
+}
+
+function hideMissingImagesBanner(): void {
+  missingBanner.hidden = true;
+}
+
+function checkMissingImages(): void {
+  const usedIds: string[] = JSON.parse(editor.get_used_image_ids());
+  const loadedIds = new Set(sidebar.loadedImageIds());
+  const missing = usedIds.filter(id => !loadedIds.has(id));
+  if (missing.length > 0) showMissingImagesBanner(missing);
+  else hideMissingImagesBanner();
+}
+
+document.getElementById('btn-open-folder-banner')!.addEventListener('click', async () => {
+  await sidebar.openFolder();
+  checkMissingImages();
+  redraw();
+});
+
+document.getElementById('btn-dismiss-banner')!.addEventListener('click', () => {
+  hideMissingImagesBanner();
+});
+
+document.getElementById('btn-open-folder')!.addEventListener('click', async () => {
+  await sidebar.openFolder();
+  checkMissingImages();
+  redraw();
 });
 
 // ---------------------------------------------------------------------------
@@ -117,16 +155,26 @@ const boxEditor = new BoxModelEditor(
   },
 );
 
+// Divider panel — shown when a divider chain is selected.
+const dividerPanel = new DividerPanel(
+  panelDivider,
+  (gap) => {
+    undoManager.snapshot();
+    editor.set_selected_segment_gap(gap);
+    redraw();
+  },
+);
+
 // Spread settings panel — shown in the sidebar when nothing is selected.
 const spreadPanel = new SpreadSettingsPanel(
   panelProject,
   (data: SpreadSettingsData) => {
     undoManager.snapshot();
-    editor.set_default_spread_margin(
-      data.default_margin_top,
-      data.default_margin_right,
-      data.default_margin_bottom,
-      data.default_margin_left,
+    editor.set_spread_margin(
+      data.margin_top,
+      data.margin_right,
+      data.margin_bottom,
+      data.margin_left,
     );
     editor.set_spread_left_bg(data.left_bg);
     editor.set_spread_right_bg(data.right_bg);
@@ -218,12 +266,12 @@ function currentProjectSettings(): ProjectSettingsData {
 }
 
 function currentSpreadSettings(): SpreadSettingsData {
-  const defMargin = getDefaultSpreadMargin(editor);
+  const margin = getSpreadMargin(editor);
   return {
-    default_margin_top:    defMargin.top,
-    default_margin_right:  defMargin.right,
-    default_margin_bottom: defMargin.bottom,
-    default_margin_left:   defMargin.left,
+    margin_top:    margin.top,
+    margin_right:  margin.right,
+    margin_bottom: margin.bottom,
+    margin_left:   margin.left,
     left_bg:  editor.get_spread_left_bg(),
     right_bg: editor.get_spread_right_bg(),
   };
@@ -274,46 +322,12 @@ function refreshBoxModel(): void {
     else renderer.selectedTextIds.clear();
   }
 
-  if (hasDivider) showDividerPanel();
+  if (hasDivider) dividerPanel.show(editor.get_selected_segment_gap());
   if (showPhoto)  photoPanel.show(sidebarIds);
   if (hasNothing) spreadPanel.show(currentSpreadSettings());
 
   // Keep the green tick badges in sync with placed images.
   sidebar.updateUsedBadges(getUsedImageIds(editor));
-}
-
-// ---------------------------------------------------------------------------
-// Divider properties panel (shown when a divider is selected)
-// ---------------------------------------------------------------------------
-
-function showDividerPanel(): void {
-  if (panelDivider.dataset.panel !== 'divider') {
-    panelDivider.dataset.panel = 'divider';
-    panelDivider.innerHTML = `
-      <div class="bm-section">
-        <h4>Gap (mm)</h4>
-        <div class="bm-grid">
-          <div class="bm-field">
-            <label>Gap</label>
-            <input id="divider-gap-input" type="number" min="0" max="50" step="0.5" value="0" />
-          </div>
-        </div>
-      </div>`;
-    panelDivider.querySelector('#divider-gap-input')!.addEventListener('change', () => {
-      const input = panelDivider.querySelector('#divider-gap-input') as HTMLInputElement;
-      const gap = parseFloat(input.value);
-      if (!isNaN(gap)) {
-        undoManager.snapshot();
-        editor.set_selected_segment_gap(Math.max(0, gap));
-        redraw();
-      }
-    });
-    panelDivider.querySelector('#divider-gap-input')!.addEventListener('focusin', () => {
-      undoManager.snapshot();
-    });
-  }
-  const gap = editor.get_selected_segment_gap();
-  (panelDivider.querySelector('#divider-gap-input') as HTMLInputElement).value = gap.toFixed(2);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +375,7 @@ document.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 
 const inlineEditor = new InlineEditor(
-  document.getElementById('canvas-area')!,
+  document.getElementById('canvas-center')!,
   editor,
   renderer,
   {
@@ -641,6 +655,55 @@ document.addEventListener('keydown', (e) => {
 // Toolbar
 // ---------------------------------------------------------------------------
 
+document.getElementById('btn-save-project')!.addEventListener('click', async () => {
+  await saveProject(editor);
+});
+
+document.getElementById('btn-open-project')!.addEventListener('click', async () => {
+  const result = await openProject(editor);
+  if (!result.ok) {
+    if (result.reason === 'cancelled') return;
+    if (result.reason === 'version_too_new') {
+      alert('This file was saved by a newer version of Photobook and cannot be opened.');
+    } else if (result.reason === 'wrong_format') {
+      alert('Not a valid Photobook file.');
+    } else {
+      alert('Could not open the project file.');
+    }
+    return;
+  }
+  undoManager.reset();
+  refreshBoxModel();
+  checkMissingImages();
+  checkMissingFonts();
+  footer.update(editor, renderer);
+  redraw();
+});
+
+// ---------------------------------------------------------------------------
+// Missing-font toast
+// ---------------------------------------------------------------------------
+
+const fontToast     = document.getElementById('font-toast')!;
+const fontToastText = document.getElementById('font-toast-text')!;
+
+document.getElementById('btn-dismiss-font-toast')!.addEventListener('click', () => {
+  fontToast.hidden = true;
+});
+
+async function checkMissingFonts(): Promise<void> {
+  if (!localFontsSupported()) return;
+  const textElements = getTextElements(editor);
+  if (textElements.length === 0) return;
+  const usedFamilies = [...new Set(textElements.map(el => el.font_family))];
+  const availableFamilies = await loadLocalFonts();
+  if (availableFamilies.length === 0) return; // permission denied or API unavailable
+  const missing = usedFamilies.filter(f => !availableFamilies.includes(f));
+  if (missing.length === 0) return;
+  fontToastText.textContent = `Font${missing.length === 1 ? '' : 's'} not installed: ${missing.join(', ')}. PDF export will use a fallback font.`;
+  fontToast.hidden = false;
+}
+
 document.getElementById('btn-add-spread')!.addEventListener('click', () => {
   undoManager.snapshot();
   editor.add_page();
@@ -755,7 +818,7 @@ randomizeDialog.innerHTML = `
     <button id="rd-apply">Apply</button>
   </div>
 `;
-document.getElementById('canvas-area')!.appendChild(randomizeDialog);
+document.getElementById('canvas-center')!.appendChild(randomizeDialog);
 
 let _rdField: 'rotation' = 'rotation';
 
