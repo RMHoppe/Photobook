@@ -68,6 +68,7 @@ export interface RenderFrame {
   border_width: number;
   border_color: string;
   border_position: BorderPosition;
+  border_radius: number;
   face_rotation_deg: number;
 }
 
@@ -125,6 +126,8 @@ export interface Border {
   width: number;
   color: string;
   position: BorderPosition;
+  /** Corner radius in mm. 0 = sharp corners. -1 = mixed (multi-selection sentinel). */
+  radius: number;
 }
 
 /** Face margin insets in mm. null = mixed (multi-selection sentinel); allows negative values. */

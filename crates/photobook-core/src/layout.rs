@@ -44,13 +44,16 @@ pub struct Border {
     pub color: String,
     #[serde(default)]
     pub position: BorderPosition,
+    /// Corner radius in mm. 0 = sharp corners.
+    #[serde(default)]
+    pub radius: f32,
 }
 
 fn default_border_color() -> String { "#000000".to_string() }
 
 impl Default for Border {
     fn default() -> Self {
-        Border { width: 0.0, color: default_border_color(), position: BorderPosition::Centered }
+        Border { width: 0.0, color: default_border_color(), position: BorderPosition::Centered, radius: 0.0 }
     }
 }
 
@@ -177,6 +180,8 @@ pub struct ResolvedFrame {
     pub border_width: f32,
     pub border_color: String,
     pub border_position: BorderPosition,
+    /// Corner radius in canvas px (converted from mm). 0 = sharp corners.
+    pub border_radius: f32,
     /// Face-level visual rotation in degrees (counter-clockwise). Always resolved; never None.
     pub face_rotation_deg: f32,
 }

@@ -51,6 +51,7 @@ export class BoxModelEditor {
     // Border
     const border = bm.border ?? {};
     this._set('border-width',    border.width    ?? 0);
+    this._set('border-radius',   border.radius   ?? 0);
     this._set('border-color',    border.color    ?? '#000000');
     this._set('border-position', border.position ?? 'centered');
 
@@ -164,7 +165,8 @@ export class BoxModelEditor {
       <div class="bm-section">
         <h4>Border</h4>
         <div class="bm-grid">
-          ${this._field('border-width', 'Width (mm)')}
+          ${this._field('border-width',  'Width (mm)')}
+          ${this._field('border-radius', 'Radius (mm)')}
           ${this._colorField('border-color', 'Color')}
         </div>
         <div class="bm-grid" style="margin-top:4px">
@@ -360,6 +362,7 @@ export class BoxModelEditor {
         margin: this._readCurrentMargins(),
         border: {
           width:    this._gNum('border-width'),
+          radius:   this._gNum('border-radius'),
           color:    this._gColor('border-color'),
           position: this._gSel('border-position'),
         },

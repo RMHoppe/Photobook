@@ -99,6 +99,7 @@ impl PhotobookEditor {
             if let Some(v) = bm.margin.bottom { r.margin.bottom = Some(v); }
             if let Some(v) = bm.margin.left   { r.margin.left   = Some(v); }
             if bm.border.width  >= 0.0 { r.border.width  = bm.border.width; }
+            if bm.border.radius >= 0.0 { r.border.radius = bm.border.radius; }
             if bm.border.color != MIXED_STR {
                 r.border.color = bm.border.color.clone();
             }
@@ -133,7 +134,8 @@ impl PhotobookEditor {
                 left:   mfm(f.margin.left,   rest.iter().all(|b| b.margin.left   == f.margin.left)),
             },
             border: Border {
-                width: mf(f.border.width, rest.iter().all(|b| b.border.width == f.border.width)),
+                width:  mf(f.border.width,  rest.iter().all(|b| b.border.width  == f.border.width)),
+                radius: mf(f.border.radius, rest.iter().all(|b| b.border.radius == f.border.radius)),
                 color: ms(&f.border.color, rest.iter().all(|b| b.border.color == f.border.color)),
                 position: if rest.iter().all(|b| b.border.position == f.border.position) {
                     f.border.position.clone()

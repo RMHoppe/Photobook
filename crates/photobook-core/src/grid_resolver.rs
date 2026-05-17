@@ -67,6 +67,7 @@ impl<'a> GridResolver<'a> {
                     border_width:     face.box_model.border.width * mm_to_px,
                     border_color:     face.box_model.border.color.clone(),
                     border_position:  face.box_model.border.position.clone(),
+                    border_radius:    face.box_model.border.radius * mm_to_px,
                     face_rotation_deg: face.box_model.face_rotation_deg.unwrap_or(0.0),
                 }))
             })
