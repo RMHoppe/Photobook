@@ -29,6 +29,7 @@ export class ImageSidebar {
   private onPhotoSelect: (ids: ReadonlySet<string>) => void;
   private onProxyReady: (id: string) => void;
 
+  private _rootHandle: FileSystemDirectoryHandle | null = null;
   private _handles  = new Map<string, FileSystemFileHandle>();
   private _proxies  = new Map<string, ImageBitmap>();       // 800px, for canvas rendering
   private _buffers  = new Map<string, ArrayBuffer>();       // lazy, for PDF export
@@ -90,26 +91,37 @@ export class ImageSidebar {
     this._ids = [];
     this._selectedIds = new Set();
     this._lastClickedIdx = null;
+    this._rootHandle = dirHandle;
     this._handles.clear();
     this._proxies.clear();
     this._buffers.clear();
     this._dims.clear();
     this._sizes.clear();
 
+    await this._scanDir(dirHandle);
+  }
+
+  private async _scanDir(dirHandle: FileSystemDirectoryHandle): Promise<void> {
     const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'];
-
     type DirEntries = AsyncIterable<[string, FileSystemHandle]>;
+
     for await (const [name, handle] of (dirHandle as unknown as DirEntries)) {
-      if (handle.kind !== 'file') continue;
-      if (!IMAGE_EXTS.some(ext => name.toLowerCase().endsWith(ext))) continue;
+      if (handle.kind === 'directory') {
+        await this._scanDir(handle as FileSystemDirectoryHandle);
+      } else if (handle.kind === 'file') {
+        if (!IMAGE_EXTS.some(ext => name.toLowerCase().endsWith(ext))) continue;
 
-      const id = name;
-      this._handles.set(id, handle as FileSystemFileHandle);
-      this._ids.push(id);
+        const fileHandle = handle as FileSystemFileHandle;
+        const parts = this._rootHandle ? await this._rootHandle.resolve(fileHandle) : null;
+        const id = parts ? parts.join('/') : name;
 
-      const item = this._makeItem(id, name);
-      this.gridEl.appendChild(item);
-      this._observer.observe(item);
+        this._handles.set(id, fileHandle);
+        this._ids.push(id);
+
+        const item = this._makeItem(id, name);
+        this.gridEl.appendChild(item);
+        this._observer.observe(item);
+      }
     }
   }
 
@@ -317,6 +329,11 @@ export class ImageSidebar {
     bm.close(); // free the full-resolution bitmap immediately
     this._dims.set(id, dims);
     return dims;
+  }
+
+  /** Returns the relative-path IDs of all images currently loaded from the folder. */
+  loadedImageIds(): string[] {
+    return [...this._handles.keys()];
   }
 
   /**

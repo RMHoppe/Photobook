@@ -136,20 +136,20 @@ impl PhotobookEditor {
     }
 
     pub fn load_state(&mut self, json: &str) -> bool {
-        match serde_json::from_str(json) {
-            Ok(doc) => {
-                self.doc = doc;
-                self.selection.clear();
-                let n = self.doc.spreads.len();
-                self.structure_dirty = true;
-                self.leaf_dirty.clear();
-                self.low_dpi_dirty = true;
-                self.low_dpi_cache = None;
-                self.spread_dirty = vec![true; n];
-                true
-            }
-            Err(_) => false,
-        }
+        let doc: crate::page::PhotobookDocument = match serde_json::from_str(json) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        if doc.schema_version > 1 { return false; }
+        self.doc = doc;
+        self.selection.clear();
+        let n = self.doc.spreads.len();
+        self.structure_dirty = true;
+        self.leaf_dirty.clear();
+        self.low_dpi_dirty = true;
+        self.low_dpi_cache = None;
+        self.spread_dirty = vec![true; n];
+        true
     }
 
     // -----------------------------------------------------------------------

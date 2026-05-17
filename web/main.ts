@@ -16,6 +16,7 @@ import { UndoManager } from './undo.js';
 import { InlineEditor } from './inline-editor.js';
 import { exportPdf } from './export.js';
 import { DocsPanel } from './docs-panel.js';
+import { saveProject, openProject } from './project-io.js';
 
 // ---------------------------------------------------------------------------
 // Init
@@ -36,7 +37,7 @@ const renderer = new CanvasRenderer(canvasEl, () => redraw());
 const overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null };
 
 function fitCanvas(): void {
-  const area = document.getElementById('canvas-area')!;
+  const area = document.getElementById('canvas-center')!;
   renderer.resize(area.clientWidth, area.clientHeight);
   redraw();
 }
@@ -81,8 +82,45 @@ const sidebar = new ImageSidebar(
   },
 );
 
-document.getElementById('btn-open-folder')!.addEventListener('click', () => {
-  sidebar.openFolder();
+// ---------------------------------------------------------------------------
+// Missing-images banner
+// ---------------------------------------------------------------------------
+
+const missingBanner     = document.getElementById('missing-images-banner')!;
+const missingBannerText = document.getElementById('missing-images-text')!;
+
+function showMissingImagesBanner(missingIds: string[]): void {
+  const count = missingIds.length;
+  missingBannerText.textContent = `${count} image${count === 1 ? '' : 's'} used in this project could not be found. Open the image folder to restore them.`;
+  missingBanner.hidden = false;
+}
+
+function hideMissingImagesBanner(): void {
+  missingBanner.hidden = true;
+}
+
+function checkMissingImages(): void {
+  const usedIds: string[] = JSON.parse(editor.get_used_image_ids());
+  const loadedIds = new Set(sidebar.loadedImageIds());
+  const missing = usedIds.filter(id => !loadedIds.has(id));
+  if (missing.length > 0) showMissingImagesBanner(missing);
+  else hideMissingImagesBanner();
+}
+
+document.getElementById('btn-open-folder-banner')!.addEventListener('click', async () => {
+  await sidebar.openFolder();
+  checkMissingImages();
+  redraw();
+});
+
+document.getElementById('btn-dismiss-banner')!.addEventListener('click', () => {
+  hideMissingImagesBanner();
+});
+
+document.getElementById('btn-open-folder')!.addEventListener('click', async () => {
+  await sidebar.openFolder();
+  checkMissingImages();
+  redraw();
 });
 
 // ---------------------------------------------------------------------------
@@ -337,7 +375,7 @@ document.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 
 const inlineEditor = new InlineEditor(
-  document.getElementById('canvas-area')!,
+  document.getElementById('canvas-center')!,
   editor,
   renderer,
   {
@@ -617,6 +655,55 @@ document.addEventListener('keydown', (e) => {
 // Toolbar
 // ---------------------------------------------------------------------------
 
+document.getElementById('btn-save-project')!.addEventListener('click', async () => {
+  await saveProject(editor);
+});
+
+document.getElementById('btn-open-project')!.addEventListener('click', async () => {
+  const result = await openProject(editor);
+  if (!result.ok) {
+    if (result.reason === 'cancelled') return;
+    if (result.reason === 'version_too_new') {
+      alert('This file was saved by a newer version of Photobook and cannot be opened.');
+    } else if (result.reason === 'wrong_format') {
+      alert('Not a valid Photobook file.');
+    } else {
+      alert('Could not open the project file.');
+    }
+    return;
+  }
+  undoManager.reset();
+  refreshBoxModel();
+  checkMissingImages();
+  checkMissingFonts();
+  footer.update(editor, renderer);
+  redraw();
+});
+
+// ---------------------------------------------------------------------------
+// Missing-font toast
+// ---------------------------------------------------------------------------
+
+const fontToast     = document.getElementById('font-toast')!;
+const fontToastText = document.getElementById('font-toast-text')!;
+
+document.getElementById('btn-dismiss-font-toast')!.addEventListener('click', () => {
+  fontToast.hidden = true;
+});
+
+async function checkMissingFonts(): Promise<void> {
+  if (!localFontsSupported()) return;
+  const textElements = getTextElements(editor);
+  if (textElements.length === 0) return;
+  const usedFamilies = [...new Set(textElements.map(el => el.font_family))];
+  const availableFamilies = await loadLocalFonts();
+  if (availableFamilies.length === 0) return; // permission denied or API unavailable
+  const missing = usedFamilies.filter(f => !availableFamilies.includes(f));
+  if (missing.length === 0) return;
+  fontToastText.textContent = `Font${missing.length === 1 ? '' : 's'} not installed: ${missing.join(', ')}. PDF export will use a fallback font.`;
+  fontToast.hidden = false;
+}
+
 document.getElementById('btn-add-spread')!.addEventListener('click', () => {
   undoManager.snapshot();
   editor.add_page();
@@ -731,7 +818,7 @@ randomizeDialog.innerHTML = `
     <button id="rd-apply">Apply</button>
   </div>
 `;
-document.getElementById('canvas-area')!.appendChild(randomizeDialog);
+document.getElementById('canvas-center')!.appendChild(randomizeDialog);
 
 let _rdField: 'rotation' = 'rotation';
 

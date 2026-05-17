@@ -115,9 +115,19 @@ aside {
   flex: 1;
   overflow: hidden;
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--canvas-bg);
+}
+
+.canvas-banners { flex-shrink: 0; }
+
+#canvas-center {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--canvas-bg);
   position: relative;
 }
 
@@ -872,6 +882,58 @@ button.primary:hover { background: #5a9fe8; }
   z-index: 10;
 }
 .docs-close:hover { color: var(--text); background: var(--border); }
+
+/* ---- Missing-images banner ---- */
+.missing-images-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #3a2800;
+  border-bottom: 1px solid #7a5000;
+  color: #f0c060;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.missing-images-banner button:not(.banner-dismiss) {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: #7a5000;
+  color: #f0c060;
+  border: 1px solid #a07020;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.missing-images-banner button:not(.banner-dismiss):hover { background: #a07020; }
+
+/* ---- Font toast ---- */
+.font-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #1e2e3a;
+  border-bottom: 1px solid #2e5070;
+  color: #80c8f0;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* ---- Shared banner dismiss button ---- */
+.banner-dismiss {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+.banner-dismiss:hover { opacity: 1; }
 
 /* ---- DPI warning tooltip ---- */
 #dpi-tooltip {

@@ -127,6 +127,9 @@ impl Default for PageSize {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PhotobookDocument {
+    /// File format version. Used to reject files saved by newer application versions.
+    #[serde(default = "PhotobookDocument::schema_v1")]
+    pub schema_version: u32,
     pub spreads: Vec<Spread>,
     pub current_spread: usize,
     pub page_size: PageSize,
@@ -161,8 +164,11 @@ fn default_print_dpi() -> f32 { 300.0 }
 fn default_next_text_id() -> u32 { 500_000_000 }
 
 impl PhotobookDocument {
+    fn schema_v1() -> u32 { 1 }
+
     pub fn new(width_mm: f32, height_mm: f32, bleed_mm: f32) -> Self {
         PhotobookDocument {
+            schema_version: 1,
             spreads: vec![
                 Spread::new(0, SpreadKind::Cover),
                 Spread::new(1, SpreadKind::Content),
