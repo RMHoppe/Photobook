@@ -15,6 +15,7 @@ export class BoxModelEditor {
   private onDiceClick: (field: 'rotation') => void;
   private _built = false;
   private _emitTimer: ReturnType<typeof setTimeout> | null = null;
+  private _marginMode: 'all' | 'xy' | 'each' = 'each';
 
   constructor(
     containerEl: HTMLElement,
@@ -45,10 +46,7 @@ export class BoxModelEditor {
     });
 
     // Margin (null = mixed sentinel; allows negative values)
-    this._setOffset('margin-top',    bm.margin?.top    ?? null);
-    this._setOffset('margin-right',  bm.margin?.right  ?? null);
-    this._setOffset('margin-bottom', bm.margin?.bottom ?? null);
-    this._setOffset('margin-left',   bm.margin?.left   ?? null);
+    this._updateMarginUI(bm.margin);
 
     // Border
     const border = bm.border ?? {};
@@ -137,12 +135,30 @@ export class BoxModelEditor {
     this.containerEl.dataset.panel = 'boxmodel';
     this.containerEl.innerHTML = `
       <div class="bm-section">
-        <h4>Margin (mm)</h4>
-        <div class="bm-grid">
-          ${this._field('margin-top',    'Top',    true)}
-          ${this._field('margin-right',  'Right',  true)}
-          ${this._field('margin-bottom', 'Bottom', true)}
-          ${this._field('margin-left',   'Left',   true)}
+        <div class="bm-section-header">
+          <h4>Margin (mm)</h4>
+          <div class="margin-mode-bar">
+            <button class="margin-mode-btn" data-margin-mode="all"  title="All sides equal">All</button>
+            <button class="margin-mode-btn" data-margin-mode="xy"   title="Vertical / Horizontal">X·Y</button>
+            <button class="margin-mode-btn" data-margin-mode="each" title="Each side individually">Each</button>
+          </div>
+        </div>
+        <div class="margin-pane" data-margin-pane="all">
+          <div class="bm-grid">${this._field('margin-all', 'All', true)}</div>
+        </div>
+        <div class="margin-pane" data-margin-pane="xy">
+          <div class="bm-grid">
+            ${this._field('margin-v', 'Vertical',   true)}
+            ${this._field('margin-h', 'Horizontal', true)}
+          </div>
+        </div>
+        <div class="margin-pane" data-margin-pane="each">
+          <div class="bm-grid">
+            ${this._field('margin-top',    'Top',    true)}
+            ${this._field('margin-right',  'Right',  true)}
+            ${this._field('margin-bottom', 'Bottom', true)}
+            ${this._field('margin-left',   'Left',   true)}
+          </div>
         </div>
       </div>
       <div class="bm-section">
@@ -195,6 +211,12 @@ export class BoxModelEditor {
     this.containerEl.querySelectorAll<HTMLButtonElement>('[data-dice]').forEach(btn => {
       btn.addEventListener('click', () => {
         this.onDiceClick(btn.dataset.dice as 'rotation');
+      });
+    });
+
+    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-margin-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._setMarginMode(btn.dataset.marginMode as 'all' | 'xy' | 'each');
       });
     });
   }
@@ -257,16 +279,85 @@ export class BoxModelEditor {
     return isNaN(v) ? 0 : v;
   }
 
+  // ---------------------------------------------------------------------------
+  // Margin mode selector helpers
+  // ---------------------------------------------------------------------------
+
+  private _detectMarginMode(m: { top: number | null; right: number | null; bottom: number | null; left: number | null }): 'all' | 'xy' | 'each' {
+    const { top: t, right: r, bottom: b, left: l } = m;
+    if (t == null || r == null || b == null || l == null) return 'each';
+    if (t === r && r === b && b === l) return 'all';
+    if (t === b && l === r) return 'xy';
+    return 'each';
+  }
+
+  private _updateMarginUI(margin: { top: number | null; right: number | null; bottom: number | null; left: number | null } | undefined): void {
+    const m = margin ?? { top: null, right: null, bottom: null, left: null };
+    this._marginMode = this._detectMarginMode(m);
+    this._applyMarginMode();
+    if (this._marginMode === 'all') {
+      this._setOffset('margin-all', m.top);
+    } else if (this._marginMode === 'xy') {
+      this._setOffset('margin-v', m.top);
+      this._setOffset('margin-h', m.right);
+    } else {
+      this._setOffset('margin-top',    m.top);
+      this._setOffset('margin-right',  m.right);
+      this._setOffset('margin-bottom', m.bottom);
+      this._setOffset('margin-left',   m.left);
+    }
+  }
+
+  private _setMarginMode(mode: 'all' | 'xy' | 'each'): void {
+    const prev = this._readCurrentMargins();
+    this._marginMode = mode;
+    this._applyMarginMode();
+    if (mode === 'all') {
+      this._setOffset('margin-all', prev.top ?? prev.right ?? prev.bottom ?? prev.left ?? 0);
+    } else if (mode === 'xy') {
+      this._setOffset('margin-v', prev.top);
+      this._setOffset('margin-h', prev.right);
+    } else {
+      this._setOffset('margin-top',    prev.top);
+      this._setOffset('margin-right',  prev.right);
+      this._setOffset('margin-bottom', prev.bottom);
+      this._setOffset('margin-left',   prev.left);
+    }
+    this._emit();
+  }
+
+  private _readCurrentMargins(): { top: number | null; right: number | null; bottom: number | null; left: number | null } {
+    if (this._marginMode === 'all') {
+      const v = this._gOffset('margin-all');
+      return { top: v, right: v, bottom: v, left: v };
+    }
+    if (this._marginMode === 'xy') {
+      const v = this._gOffset('margin-v');
+      const h = this._gOffset('margin-h');
+      return { top: v, right: h, bottom: v, left: h };
+    }
+    return {
+      top:    this._gOffset('margin-top'),
+      right:  this._gOffset('margin-right'),
+      bottom: this._gOffset('margin-bottom'),
+      left:   this._gOffset('margin-left'),
+    };
+  }
+
+  private _applyMarginMode(): void {
+    this.containerEl.querySelectorAll<HTMLElement>('[data-margin-pane]').forEach(pane => {
+      pane.classList.toggle('active', pane.dataset.marginPane === this._marginMode);
+    });
+    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-margin-mode]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.marginMode === this._marginMode);
+    });
+  }
+
   private _emit(): void {
     if (this._emitTimer !== null) clearTimeout(this._emitTimer);
     this._emitTimer = setTimeout(() => {
       const bm = {
-        margin: {
-          top:    this._gOffset('margin-top'),
-          right:  this._gOffset('margin-right'),
-          bottom: this._gOffset('margin-bottom'),
-          left:   this._gOffset('margin-left'),
-        },
+        margin: this._readCurrentMargins(),
         border: {
           width:    this._gNum('border-width'),
           color:    this._gColor('border-color'),

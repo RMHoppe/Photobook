@@ -309,6 +309,13 @@ button.active { background: var(--accent); border-color: var(--accent); }
 
 .bm-section { margin-bottom: 14px; }
 .bm-section h4 { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.bm-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.bm-section-header h4 { margin: 0; }
+.margin-mode-bar { display: flex; gap: 2px; }
+.margin-mode-btn { font-size: 10px; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; line-height: 1.4; }
+.margin-mode-btn.active { background: var(--accent); color: #fff; border-color: transparent; }
+.margin-pane { display: none; }
+.margin-pane.active { display: block; }
 .ps-toggle-row { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; user-select: none; }
 
 .bm-grid {
