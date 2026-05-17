@@ -56,7 +56,7 @@ impl Default for Border {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BoxModel {
-    pub margin: EdgeInsets,
+    pub margin: MarginInsets,
     #[serde(default)]
     pub border: Border,
     /// Visual rotation of this face in degrees counter-clockwise. None = mixed (multi-selection sentinel).
@@ -67,9 +67,38 @@ pub struct BoxModel {
 impl Default for BoxModel {
     fn default() -> Self {
         BoxModel {
-            margin: EdgeInsets::default(),
+            margin: MarginInsets::default(),
             border: Border::default(),
             face_rotation_deg: Some(0.0),
+        }
+    }
+}
+
+/// Per-face margin insets in mm. `None` = "mixed" sentinel for multi-selection;
+/// `None` resolves to 0 mm for layout purposes. Allows negative values so frames
+/// can overlap with their neighbours.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MarginInsets {
+    pub top:    Option<f32>,
+    pub right:  Option<f32>,
+    pub bottom: Option<f32>,
+    pub left:   Option<f32>,
+}
+
+impl Default for MarginInsets {
+    fn default() -> Self {
+        MarginInsets { top: Some(0.0), right: Some(0.0), bottom: Some(0.0), left: Some(0.0) }
+    }
+}
+
+impl MarginInsets {
+    /// Convert to concrete `EdgeInsets` by replacing `None` with 0.
+    pub fn resolve(&self) -> EdgeInsets {
+        EdgeInsets {
+            top:    self.top.unwrap_or(0.0),
+            right:  self.right.unwrap_or(0.0),
+            bottom: self.bottom.unwrap_or(0.0),
+            left:   self.left.unwrap_or(0.0),
         }
     }
 }

@@ -234,8 +234,8 @@ export const idleMode: InteractionMode = {
       const corner = renderer.hoveredMarginHandle! as MarginCorner;
       const bm = getTransformBoxModel(editor);
       const startMargins: Record<MarginKey, number> = {
-        top: bm.margin.top, right: bm.margin.right,
-        bottom: bm.margin.bottom, left: bm.margin.left,
+        top: bm.margin.top ?? 0, right: bm.margin.right ?? 0,
+        bottom: bm.margin.bottom ?? 0, left: bm.margin.left ?? 0,
       };
       const spreadInfo = getSpreadInfo(editor);
       const mmToPx = sr.w / spreadInfo.width_mm;

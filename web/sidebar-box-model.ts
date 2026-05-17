@@ -1,8 +1,8 @@
 // sidebar-box-model.ts — BoxModelEditor panel (shown when a frame is selected).
 //
 // Multi-selection sentinel values:
-//   -1          for f32 fields that are always ≥ 0 (Rust skips any value < 0)
-//   null/absent for offset fields that can be negative (Rust Option::None → skip)
+//   -1          for f32 fields that are always ≥ 0, e.g. border.width (Rust skips value < 0)
+//   null/absent for fields that can be negative, e.g. margins and rotation (Rust Option::None → skip)
 //   "__mixed__" for color fields (Rust skips this exact string)
 //   ""          for border-position (Rust deserialises as BorderPosition::Mixed → skip)
 
@@ -44,11 +44,11 @@ export class BoxModelEditor {
       btn.hidden = !multiSel;
     });
 
-    // Margin
-    this._set('margin-top',    bm.margin?.top);
-    this._set('margin-right',  bm.margin?.right);
-    this._set('margin-bottom', bm.margin?.bottom);
-    this._set('margin-left',   bm.margin?.left);
+    // Margin (null = mixed sentinel; allows negative values)
+    this._setOffset('margin-top',    bm.margin?.top    ?? null);
+    this._setOffset('margin-right',  bm.margin?.right  ?? null);
+    this._setOffset('margin-bottom', bm.margin?.bottom ?? null);
+    this._setOffset('margin-left',   bm.margin?.left   ?? null);
 
     // Border
     const border = bm.border ?? {};
@@ -139,10 +139,10 @@ export class BoxModelEditor {
       <div class="bm-section">
         <h4>Margin (mm)</h4>
         <div class="bm-grid">
-          ${this._field('margin-top', 'Top')}
-          ${this._field('margin-right', 'Right')}
-          ${this._field('margin-bottom', 'Bottom')}
-          ${this._field('margin-left', 'Left')}
+          ${this._field('margin-top',    'Top',    true)}
+          ${this._field('margin-right',  'Right',  true)}
+          ${this._field('margin-bottom', 'Bottom', true)}
+          ${this._field('margin-left',   'Left',   true)}
         </div>
       </div>
       <div class="bm-section">
@@ -207,8 +207,9 @@ export class BoxModelEditor {
     return `<div class="bm-field${fullWidth ? ' bm-full-width' : ''}"><label>${label}</label>${input}</div>`;
   }
 
-  private _field(name: string, label: string): string {
-    return this._wrapField(label, `<input type="number" min="0" max="200" step="0.5" data-field="${name}" value="0" />`);
+  private _field(name: string, label: string, allowNegative = false): string {
+    const minAttr = allowNegative ? '' : 'min="0" ';
+    return this._wrapField(label, `<input type="number" ${minAttr}max="200" step="0.5" data-field="${name}" value="0" />`);
   }
 
   private _colorField(name: string, label: string): string {
@@ -261,10 +262,10 @@ export class BoxModelEditor {
     this._emitTimer = setTimeout(() => {
       const bm = {
         margin: {
-          top:    this._gNum('margin-top'),
-          right:  this._gNum('margin-right'),
-          bottom: this._gNum('margin-bottom'),
-          left:   this._gNum('margin-left'),
+          top:    this._gOffset('margin-top'),
+          right:  this._gOffset('margin-right'),
+          bottom: this._gOffset('margin-bottom'),
+          left:   this._gOffset('margin-left'),
         },
         border: {
           width:    this._gNum('border-width'),

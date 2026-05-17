@@ -51,7 +51,7 @@ impl<'a> GridResolver<'a> {
                 let raw       = norm_to_px(fx, fy, fw, fh, root_rect);
                 let gi        = self.gap_inset_px(face.id);
                 let gapped    = raw.inset(&gi);
-                let margin_px = face.box_model.margin.scale(mm_to_px);
+                let margin_px = face.box_model.margin.resolve().scale(mm_to_px);
                 let inner     = gapped.inset(&margin_px);
                 Some((face.z_index, face.id, ResolvedFrame {
                     id:               face.id,

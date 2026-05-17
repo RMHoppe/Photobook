@@ -18,10 +18,10 @@ impl PhotobookEditor {
         );
         if let Some(spread) = self.doc.spreads.last_mut() {
             for face in spread.layout.faces.values_mut() {
-                face.box_model.margin.top    = t;
-                face.box_model.margin.right  = r;
-                face.box_model.margin.bottom = b;
-                face.box_model.margin.left   = l;
+                face.box_model.margin.top    = Some(t);
+                face.box_model.margin.right  = Some(r);
+                face.box_model.margin.bottom = Some(b);
+                face.box_model.margin.left   = Some(l);
             }
         }
         let n = self.doc.spreads.len();
@@ -182,10 +182,10 @@ impl PhotobookEditor {
         self.doc.default_margin_bottom = bottom.max(0.0);
         self.doc.default_margin_left   = left.max(0.0);
         for face in self.doc.current_spread_mut().layout.faces.values_mut() {
-            face.box_model.margin.top    = top.max(0.0);
-            face.box_model.margin.right  = right.max(0.0);
-            face.box_model.margin.bottom = bottom.max(0.0);
-            face.box_model.margin.left   = left.max(0.0);
+            face.box_model.margin.top    = Some(top.max(0.0));
+            face.box_model.margin.right  = Some(right.max(0.0));
+            face.box_model.margin.bottom = Some(bottom.max(0.0));
+            face.box_model.margin.left   = Some(left.max(0.0));
         }
     }
 

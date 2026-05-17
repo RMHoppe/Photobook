@@ -127,9 +127,17 @@ export interface Border {
   position: BorderPosition;
 }
 
+/** Face margin insets in mm. null = mixed (multi-selection sentinel); allows negative values. */
+export interface MarginInsets {
+  top:    number | null;
+  right:  number | null;
+  bottom: number | null;
+  left:   number | null;
+}
+
 /** Full box model for a face or the merged multi-selection. */
 export interface BoxModel {
-  margin: EdgeInsets;
+  margin: MarginInsets;
   border: Border;
   /** Face-level rotation in degrees counter-clockwise. Absent/null = mixed (multi-selection). */
   face_rotation_deg?: number | null;
