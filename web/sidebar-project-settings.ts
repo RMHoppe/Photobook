@@ -1,6 +1,8 @@
 // sidebar-project-settings.ts — ProjectSettingsPanel (rendered inside the project settings modal).
 
 import type { ProjectSettingsData } from './types.js';
+import { debounce } from './utils.js';
+import { numField } from './ui-fields.js';
 export type { ProjectSettingsData };
 
 export class ProjectSettingsPanel {
@@ -8,8 +10,8 @@ export class ProjectSettingsPanel {
   private onChange: (data: ProjectSettingsData) => void;
   private onToggleBleed:    ((show: boolean) => void) | null = null;
   private onToggleSafeZone: ((show: boolean) => void) | null = null;
+  private onToggleEndpapers: ((enabled: boolean) => void) | null = null;
   private _built = false;
-  private _emitTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(containerEl: HTMLElement, onChange: (data: ProjectSettingsData) => void) {
     this.containerEl = containerEl;
@@ -24,6 +26,10 @@ export class ProjectSettingsPanel {
     this.onToggleSafeZone = handler;
   }
 
+  setEndpapersToggleHandler(handler: (enabled: boolean) => void): void {
+    this.onToggleEndpapers = handler;
+  }
+
   setBleedVisible(visible: boolean): void {
     const chk = this.containerEl.querySelector<HTMLInputElement>('#ps-show-bleed');
     if (chk) chk.checked = visible;
@@ -32,6 +38,11 @@ export class ProjectSettingsPanel {
   setSafeZoneVisible(visible: boolean): void {
     const chk = this.containerEl.querySelector<HTMLInputElement>('#ps-show-safe-zone');
     if (chk) chk.checked = visible;
+  }
+
+  setEndpapersEnabled(enabled: boolean): void {
+    const chk = this.containerEl.querySelector<HTMLInputElement>('#ps-endpapers');
+    if (chk) chk.checked = enabled;
   }
 
   show(data: ProjectSettingsData): void {
@@ -50,30 +61,37 @@ export class ProjectSettingsPanel {
       <div class="bm-section">
         <h4>Page size (mm)</h4>
         <div class="bm-grid">
-          ${this._field('page-w', 'Width',  1, 600)}
-          ${this._field('page-h', 'Height', 1, 600)}
+          ${numField('page-w', 'Width',  { min: 1, max: 600, step: 1 })}
+          ${numField('page-h', 'Height', { min: 1, max: 600, step: 1 })}
         </div>
       </div>
       <div class="bm-section">
         <h4>Print</h4>
         <div class="bm-grid">
-          ${this._field('bleed',     'Bleed (mm)',    0, 20,   0.5)}
-          ${this._field('safe',      'Safe zone (mm)',0, 30,   0.5)}
-          ${this._field('print-dpi', 'DPI',          72, 1200, 1)}
+          ${numField('bleed',     'Bleed (mm)',     { min: 0, max: 20,   step: 0.5 })}
+          ${numField('safe',      'Safe zone (mm)', { min: 0, max: 30,   step: 0.5 })}
+          ${numField('print-dpi', 'DPI',            { min: 72, max: 1200, step: 1  })}
         </div>
       </div>
       <div class="bm-section">
         <h4>Spine</h4>
         <div class="bm-grid">
-          ${this._field('spine-per-page', 'Per page (mm)', 0, 2,  0.01)}
-          ${this._field('spine-min',      'Minimum (mm)',  0, 50, 0.5)}
+          ${numField('spine-per-page', 'Per page (mm)', { min: 0, max: 2,  step: 0.01 })}
+          ${numField('spine-min',      'Minimum (mm)',  { min: 0, max: 50, step: 0.5  })}
         </div>
       </div>
       <div class="bm-section">
         <h4>Editing</h4>
         <div class="bm-grid">
-          ${this._field('margin-step', 'Margin step (mm)', 0, 20, 0.5)}
+          ${numField('margin-step', 'Margin step (mm)', { min: 0, max: 20, step: 0.5 })}
         </div>
+      </div>
+      <div class="bm-section">
+        <h4>Binding</h4>
+        <label class="ps-toggle-row">
+          <input type="checkbox" id="ps-endpapers" />
+          Endpapers (non-printable inner pages)
+        </label>
       </div>
       <div class="bm-section">
         <h4>View</h4>
@@ -102,6 +120,11 @@ export class ProjectSettingsPanel {
     safeChk.addEventListener('change', () => {
       this.onToggleSafeZone?.(safeChk.checked);
     });
+
+    const endpapersChk = this.containerEl.querySelector<HTMLInputElement>('#ps-endpapers')!;
+    endpapersChk.addEventListener('change', () => {
+      this.onToggleEndpapers?.(endpapersChk.checked);
+    });
   }
 
   private _populate(data: ProjectSettingsData): void {
@@ -121,38 +144,23 @@ export class ProjectSettingsPanel {
     el.value = value.toFixed(el.step && parseFloat(el.step) < 1 ? 2 : 0);
   }
 
-  private _field(
-    name: string,
-    label: string,
-    min = 0,
-    max = 9999,
-    step = 1,
-  ): string {
-    return `<div class="bm-field">
-      <label>${label}</label>
-      <input type="number" min="${min}" max="${max}" step="${step}" data-field="${name}" value="0" />
-    </div>`;
-  }
-
-  private _emit(): void {
-    if (this._emitTimer !== null) clearTimeout(this._emitTimer);
-    this._emitTimer = setTimeout(() => {
-      const g = (name: string): number => {
-        const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-        if (!el) return 0;
-        const v = parseFloat(el.value);
-        return isNaN(v) ? 0 : v;
-      };
-      this.onChange({
-        page_width_mm:     g('page-w'),
-        page_height_mm:    g('page-h'),
-        bleed_mm:          g('bleed'),
-        safe_zone_mm:      g('safe'),
-        spine_mm_per_page: g('spine-per-page'),
-        spine_min_mm:      g('spine-min'),
-        margin_step_mm:    g('margin-step'),
-        print_dpi:         g('print-dpi'),
-      });
-    }, 150);
-  }
+  private _emit = debounce(() => {
+    const g = (name: string): number => {
+      const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
+      if (!el) return 0;
+      const v = parseFloat(el.value);
+      return isNaN(v) ? 0 : v;
+    };
+    this.onChange({
+      page_width_mm:     g('page-w'),
+      page_height_mm:    g('page-h'),
+      bleed_mm:          g('bleed'),
+      safe_zone_mm:      g('safe'),
+      spine_mm_per_page: g('spine-per-page'),
+      spine_min_mm:      g('spine-min'),
+      margin_step_mm:    g('margin-step'),
+      print_dpi:         g('print-dpi'),
+      endpapers:         this.containerEl.querySelector<HTMLInputElement>('#ps-endpapers')?.checked ?? false,
+    });
+  }, 150);
 }

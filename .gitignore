@@ -1,14 +1,8 @@
 target/
 web/pkg/
+web/fontawesome/
+node_modules/@fortawesome/
 Cargo.lock
 
 # TypeScript compilation output
-web/canvas.js
-web/constants.js
-web/footer.js
-web/interaction.js
-web/main.js
-web/sidebar-left.js
-web/sidebar-right.js
-web/types.js
-web/wasm-bridge.js
+**.js

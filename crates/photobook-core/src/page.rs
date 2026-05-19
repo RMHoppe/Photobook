@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::grid_layout::GridLayout;
+use crate::layout::SplitAxis;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum SpreadKind {
@@ -96,9 +97,13 @@ impl Spread {
             SpreadKind::Cover   => "Cover".into(),
             SpreadKind::Content => format!("Spread {}", id),
         };
+        let mut layout = GridLayout::new();
+        let face_id = *layout.faces.keys().next().unwrap();
+        layout.split_face(face_id, 0.5, SplitAxis::Vertical);
+
         Spread {
             id,
-            layout: GridLayout::new(),
+            layout,
             kind,
             label,
             text_elements: Vec::new(),
@@ -158,6 +163,9 @@ pub struct PhotobookDocument {
     /// Counter used to assign globally unique IDs to text elements.
     #[serde(default = "default_next_text_id")]
     pub next_text_id: u32,
+    /// When true, the first and last content spread each have one non-printable inner page.
+    #[serde(default)]
+    pub endpapers: bool,
 }
 
 fn default_print_dpi() -> f32 { 300.0 }
@@ -187,6 +195,7 @@ impl PhotobookDocument {
             default_margin_left: 0.0,
             next_spread_id: 2,
             next_text_id: 500_000_000,
+            endpapers: false,
         }
     }
 
@@ -198,7 +207,8 @@ impl PhotobookDocument {
 
     pub fn remove_spread(&mut self, spread_idx: usize) {
         if spread_idx == 0 { return; } // never remove cover
-        if self.content_spread_count() <= 1 { return; } // keep at least one content spread
+        let min = if self.endpapers { 2 } else { 1 };
+        if self.content_spread_count() <= min { return; }
         self.spreads.remove(spread_idx);
         if self.current_spread >= self.spreads.len() {
             self.current_spread = self.spreads.len().saturating_sub(1);
@@ -220,6 +230,20 @@ impl PhotobookDocument {
     /// Total interior page count (each content spread = 2 pages).
     pub fn interior_page_count(&self) -> u32 {
         self.content_spread_count() as u32 * 2
+    }
+
+    /// Returns "left", "right", or None for the given spread index.
+    /// "left"  → left page is non-printable (Spread 1 with endpapers enabled).
+    /// "right" → right page is non-printable (last content spread with endpapers enabled).
+    pub fn endpaper_side(&self, spread_idx: usize) -> Option<&'static str> {
+        if !self.endpapers || spread_idx == 0 { return None; }
+        let last = self.spreads.len().saturating_sub(1);
+        match (spread_idx == 1, spread_idx == last) {
+            (true, false)  => Some("left"),
+            (false, true)  => Some("right"),
+            (true, true)   => None, // only one content spread — shouldn't happen when endpapers are on
+            (false, false) => None,
+        }
     }
 
     /// Computed spine thickness in mm.

@@ -1,9 +1,12 @@
 // sidebar-spread-settings.ts — SpreadSettingsPanel (shown in sidebar when nothing is selected).
+import { debounce } from './utils.js';
+import { numField, colorField } from './ui-fields.js';
+import { MarginModeController, marginSectionHtml } from './margin-mode-controller.js';
 export class SpreadSettingsPanel {
     containerEl;
     onChange;
     _built = false;
-    _emitTimer = null;
+    _marginCtrl;
     constructor(containerEl, onChange) {
         this.containerEl = containerEl;
         this.onChange = onChange;
@@ -16,26 +19,12 @@ export class SpreadSettingsPanel {
     _build() {
         this._built = true;
         this.containerEl.innerHTML = `
-      <div class="bm-section">
-        <h4>Default margins (mm)</h4>
-        <div class="bm-grid">
-          ${this._numField('def-margin-top', 'Top')}
-          ${this._numField('def-margin-right', 'Right')}
-          ${this._numField('def-margin-bottom', 'Bottom')}
-          ${this._numField('def-margin-left', 'Left')}
-        </div>
-      </div>
+      ${marginSectionHtml('Spread margin (mm)', (name, label) => numField(name, label))}
       <div class="bm-section">
         <h4>Page backgrounds</h4>
         <div class="bm-grid">
-          <div class="bm-field">
-            <label>Left page</label>
-            <input type="color" data-field="left-bg" value="#ffffff" />
-          </div>
-          <div class="bm-field">
-            <label>Right page</label>
-            <input type="color" data-field="right-bg" value="#ffffff" />
-          </div>
+          ${colorField('left-bg', 'Left page')}
+          ${colorField('right-bg', 'Right page')}
         </div>
       </div>
     `;
@@ -43,12 +32,25 @@ export class SpreadSettingsPanel {
             el.addEventListener('change', () => this._emit());
             el.addEventListener('input', () => this._emit());
         });
+        this._marginCtrl = new MarginModeController(this.containerEl);
+        this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
     }
     _populate(data) {
-        this._setNum('def-margin-top', data.default_margin_top);
-        this._setNum('def-margin-right', data.default_margin_right);
-        this._setNum('def-margin-bottom', data.default_margin_bottom);
-        this._setNum('def-margin-left', data.default_margin_left);
+        const mode = this._detectMarginMode(data);
+        this._marginCtrl.setMode(mode);
+        if (mode === 'all') {
+            this._setNum('margin-all', data.margin_top);
+        }
+        else if (mode === 'xy') {
+            this._setNum('margin-v', data.margin_top);
+            this._setNum('margin-h', data.margin_right);
+        }
+        else {
+            this._setNum('margin-top', data.margin_top);
+            this._setNum('margin-right', data.margin_right);
+            this._setNum('margin-bottom', data.margin_bottom);
+            this._setNum('margin-left', data.margin_left);
+        }
         this._setColor('left-bg', data.left_bg || '#ffffff');
         this._setColor('right-bg', data.right_bg || '#ffffff');
     }
@@ -62,35 +64,72 @@ export class SpreadSettingsPanel {
         if (el)
             el.value = value;
     }
-    _numField(name, label) {
-        return `<div class="bm-field">
-      <label>${label}</label>
-      <input type="number" min="0" max="200" step="0.5" data-field="${name}" value="0" />
-    </div>`;
+    // ---------------------------------------------------------------------------
+    // Margin mode selector helpers
+    // ---------------------------------------------------------------------------
+    _detectMarginMode(data) {
+        const { margin_top: t, margin_right: r, margin_bottom: b, margin_left: l } = data;
+        if (t === r && r === b && b === l)
+            return 'all';
+        if (t === b && l === r)
+            return 'xy';
+        return 'each';
     }
-    _emit() {
-        if (this._emitTimer !== null)
-            clearTimeout(this._emitTimer);
-        this._emitTimer = setTimeout(() => {
-            const g = (name) => {
-                const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-                if (!el)
-                    return 0;
-                const v = parseFloat(el.value);
-                return isNaN(v) ? 0 : v;
-            };
-            const gc = (name) => {
-                const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-                return el ? el.value : '#ffffff';
-            };
-            this.onChange({
-                default_margin_top: g('def-margin-top'),
-                default_margin_right: g('def-margin-right'),
-                default_margin_bottom: g('def-margin-bottom'),
-                default_margin_left: g('def-margin-left'),
-                left_bg: gc('left-bg'),
-                right_bg: gc('right-bg'),
-            });
-        }, 150);
+    _setMarginMode(mode) {
+        const prev = this._readCurrentMargins();
+        this._marginCtrl.setMode(mode);
+        if (mode === 'all') {
+            this._setNum('margin-all', prev.top);
+        }
+        else if (mode === 'xy') {
+            this._setNum('margin-v', prev.top);
+            this._setNum('margin-h', prev.right);
+        }
+        else {
+            this._setNum('margin-top', prev.top);
+            this._setNum('margin-right', prev.right);
+            this._setNum('margin-bottom', prev.bottom);
+            this._setNum('margin-left', prev.left);
+        }
+        this._emit();
     }
+    _readCurrentMargins() {
+        const g = (name) => {
+            const el = this.containerEl.querySelector(`[data-field="${name}"]`);
+            if (!el)
+                return 0;
+            const v = parseFloat(el.value);
+            return isNaN(v) ? 0 : v;
+        };
+        if (this._marginCtrl.mode === 'all') {
+            const v = g('margin-all');
+            return { top: v, right: v, bottom: v, left: v };
+        }
+        if (this._marginCtrl.mode === 'xy') {
+            const vert = g('margin-v');
+            const horiz = g('margin-h');
+            return { top: vert, right: horiz, bottom: vert, left: horiz };
+        }
+        return {
+            top: g('margin-top'),
+            right: g('margin-right'),
+            bottom: g('margin-bottom'),
+            left: g('margin-left'),
+        };
+    }
+    _emit = debounce(() => {
+        const gc = (name) => {
+            const el = this.containerEl.querySelector(`[data-field="${name}"]`);
+            return el ? el.value : '#ffffff';
+        };
+        const margins = this._readCurrentMargins();
+        this.onChange({
+            margin_top: margins.top,
+            margin_right: margins.right,
+            margin_bottom: margins.bottom,
+            margin_left: margins.left,
+            left_bg: gc('left-bg'),
+            right_bg: gc('right-bg'),
+        });
+    }, 150);
 }

@@ -29,6 +29,8 @@ export interface SpreadInfo {
   page_width_mm: number;
   left_bg: string;
   right_bg: string;
+  /** Which page is non-printable, or null for normal spreads. */
+  endpaper_side: 'left' | 'right' | null;
 }
 
 /** Lightweight summary used in the footer thumbnail strip. */
@@ -36,6 +38,7 @@ export interface SpreadSummary {
   id: number;
   label: string;
   kind: 'cover' | 'content';
+  endpaper_side: 'left' | 'right' | null;
 }
 
 /** Page dimensions in mm (get_page_size_mm). */
@@ -266,6 +269,7 @@ export interface ProjectSettingsData {
   spine_min_mm: number;
   margin_step_mm: number;
   print_dpi: number;
+  endpapers: boolean;
 }
 
 /** Data exchanged between main.ts and SpreadSettingsPanel. */

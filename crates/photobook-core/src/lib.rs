@@ -8,6 +8,7 @@ pub mod grid_layout;
 pub mod grid_resolver;
 
 mod editor_layout;
+mod editor_layout_transform;
 mod editor_selection;
 mod editor_box_model;
 mod editor_image_ops;
@@ -73,6 +74,7 @@ pub struct PhotobookEditor {
     pub(crate) last_delta_canvas_w_bits: u32,
     pub(crate) last_delta_canvas_h_bits: u32,
     pub(crate) snap_disabled: bool,
+    pub(crate) pdf_state: Option<Box<crate::pdf::PdfExportState>>,
 }
 
 #[wasm_bindgen]
@@ -98,6 +100,7 @@ impl PhotobookEditor {
             last_delta_canvas_w_bits: 0,
             last_delta_canvas_h_bits: 0,
             snap_disabled: false,
+            pdf_state: None,
         }
     }
 

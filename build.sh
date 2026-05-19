@@ -14,9 +14,17 @@ wasm-pack build crates/photobook-core \
   --out-dir "$(pwd)/web/pkg" \
   ${1:-"--release"}
 
+if [ ! -d "node_modules/@fortawesome" ]; then
+  echo "==> Installing npm dependencies..."
+  npm install
+fi
+
 echo "==> Copying vendor libs..."
 mkdir -p web/lib
 cp node_modules/marked/lib/marked.esm.js web/lib/marked.esm.js
+mkdir -p web/fontawesome
+cp -r node_modules/@fortawesome/fontawesome-free/css web/fontawesome/css
+cp -r node_modules/@fortawesome/fontawesome-free/webfonts web/fontawesome/webfonts
 
 echo "==> Compiling TypeScript..."
 npx tsc

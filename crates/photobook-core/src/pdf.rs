@@ -6,7 +6,6 @@ use printpdf::{
 };
 use crate::layout::{Border, BorderPosition, Rect};
 use crate::page::{PhotobookDocument, TextElement};
-use crate::grid_layout::GridLayout;
 use crate::grid_resolver::resolve_frames_mm;
 use crate::utils::image_cover_factors;
 use serde::{Deserialize, Serialize};
@@ -29,28 +28,41 @@ pub struct FontEntry {
 }
 
 /// Decoded image ready for cropping.
-struct DecodedImage {
+pub(crate) struct DecodedImage {
     img: image::DynamicImage,
     is_jpeg: bool,
 }
 
-/// One output PDF page derived from a spread.
-struct OutputPage<'a> {
-    layout: &'a GridLayout,
-    /// Which horizontal slice of the spread (in spread-mm) this page covers.
-    region: Rect,
-    /// Trimmed page size on paper.
-    out_w: f32,
-    out_h: f32,
-    /// Full spread width in mm (needed for resolve_rooms_mm).
-    spread_w: f32,
+// ---------------------------------------------------------------------------
+// Staged export state
+// ---------------------------------------------------------------------------
+
+/// Mutable state shared across the three-phase stateful export:
+/// `pdf_export_begin` → N × `pdf_export_spread_one` → `pdf_export_finish`.
+/// Stored in `PhotobookEditor` so TypeScript can drive the loop with `await`
+/// between spreads, allowing the browser to repaint the progress bar.
+pub(crate) struct PdfExportState {
+    pub pdf_doc:       PdfDocumentReference,
+    pub layers:        Vec<PdfLayerReference>,
+    pub decoded:       HashMap<String, DecodedImage>,
+    pub font_bytes_map: HashMap<String, Vec<u8>>,
+    pub font_cache:    HashMap<String, IndirectFontRef>,
+    pub bleed:         f32,
+    pub ph:            f32,
+    pub print_dpi:     f32,
+    pub next_spread:   usize,
+    pub total:         usize,
 }
 
-pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) -> Vec<u8> {
-    let image_entries: Vec<ImageEntry> = serde_json::from_str(images_json).unwrap_or_default();
-
-    // Decode font bytes keyed by "family:bold:italic".
+/// Phase 1 — decode images/fonts, allocate one PDF page per spread.
+/// Returns `None` only if the document has no spreads.
+pub(crate) fn pdf_export_begin(
+    doc: &PhotobookDocument,
+    images_json: &str,
+    fonts_json: &str,
+) -> Option<PdfExportState> {
     use base64::Engine;
+
     let font_entries: Vec<FontEntry> = serde_json::from_str(fonts_json).unwrap_or_default();
     let mut font_bytes_map: HashMap<String, Vec<u8>> = HashMap::new();
     for fe in font_entries {
@@ -60,160 +72,206 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         }
     }
 
-    // Decode each image once, keyed by id.
-    let decoded: HashMap<&str, DecodedImage> = image_entries
-        .iter()
-        .filter_map(|e| decode_image(&e.data_base64).map(|d| (e.id.as_str(), d)))
+    let image_entries: Vec<ImageEntry> = serde_json::from_str(images_json).unwrap_or_default();
+    let decoded: HashMap<String, DecodedImage> = image_entries
+        .into_iter()
+        .filter_map(|e| decode_image(&e.data_base64).map(|d| (e.id, d)))
         .collect();
 
-    let ph = doc.page_size.height_mm;
-    let bleed = doc.bleed_mm;
+    let total = doc.spreads.len();
+    if total == 0 { return None; }
+
+    let bleed     = doc.bleed_mm;
+    let ph        = doc.page_size.height_mm;
     let print_dpi = doc.print_dpi;
 
-    // Build list of output pages (one per spread).
-    let mut out_pages: Vec<OutputPage> = Vec::new();
-
-    for spread in &doc.spreads {
-        let spread_w = doc.spread_width_mm(spread);
-        out_pages.push(OutputPage {
-            layout: &spread.layout,
-            region: Rect::new(0.0, 0.0, spread_w, ph),
-            out_w: spread_w,
-            out_h: ph,
-            spread_w,
-        });
-    }
-
-    if out_pages.is_empty() {
-        return Vec::new();
-    }
-
-    let first = &out_pages[0];
+    let first_spread_w = doc.spread_width_mm(&doc.spreads[0]);
     let (pdf_doc, first_pi, first_li) = PdfDocument::new(
         "Photobook",
-        Mm(first.out_w + 2.0 * bleed),
-        Mm(first.out_h + 2.0 * bleed),
+        Mm(first_spread_w + 2.0 * bleed),
+        Mm(ph + 2.0 * bleed),
         "Layer 1",
     );
+    pdf_doc.get_page(first_pi).extend_with(page_box_extension(first_spread_w, ph, bleed));
+    let mut layers = vec![pdf_doc.get_page(first_pi).get_layer(first_li)];
 
-    let mut page_layer_pairs = vec![(first_pi, first_li)];
-    for p in out_pages.iter().skip(1) {
+    for spread in doc.spreads.iter().skip(1) {
+        let spread_w = doc.spread_width_mm(spread);
         let (pi, li) = pdf_doc.add_page(
-            Mm(p.out_w + 2.0 * bleed),
-            Mm(p.out_h + 2.0 * bleed),
+            Mm(spread_w + 2.0 * bleed),
+            Mm(ph + 2.0 * bleed),
             "Layer 1",
         );
-        page_layer_pairs.push((pi, li));
+        pdf_doc.get_page(pi).extend_with(page_box_extension(spread_w, ph, bleed));
+        layers.push(pdf_doc.get_page(pi).get_layer(li));
     }
 
-    for (i, p) in out_pages.iter().enumerate() {
-        let (pi, li) = page_layer_pairs[i];
-        let layer = pdf_doc.get_page(pi).get_layer(li);
-        let total_w = p.out_w + 2.0 * bleed;
-        let total_h = p.out_h + 2.0 * bleed;
+    Some(PdfExportState {
+        pdf_doc,
+        layers,
+        decoded,
+        font_bytes_map,
+        font_cache: HashMap::new(),
+        bleed,
+        ph,
+        print_dpi,
+        next_spread: 0,
+        total,
+    })
+}
 
-        // White base background (covers bleed area too).
-        layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None)));
-        fill_rect(&layer, 0.0, 0.0, total_w, total_h);
+/// Phase 2 — render the next pending spread into the PDF.
+/// Call this `total` times (once per spread).
+pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookDocument) {
+    let i = state.next_spread;
+    if i >= state.total { return; }
 
-        let spread = &doc.spreads[i];
+    let spread   = &doc.spreads[i];
+    let spread_w = doc.spread_width_mm(spread);
+    let bleed    = state.bleed;
+    let ph       = state.ph;
+    let total_w  = spread_w + 2.0 * bleed;
+    let total_h  = ph + 2.0 * bleed;
+    let page_w   = doc.page_size.width_mm;
 
-        // Per-page background colors.
-        let page_w = doc.page_size.width_mm;
-        if !spread.left_bg.is_empty() {
-            let (r, g, b) = parse_hex_color(&spread.left_bg);
-            layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
-            fill_rect(&layer, 0.0, 0.0, page_w + bleed, total_h);
-        }
-        if !spread.right_bg.is_empty() {
-            let (r, g, b) = parse_hex_color(&spread.right_bg);
-            layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
-            fill_rect(&layer, total_w - page_w - bleed, 0.0, page_w + bleed, total_h);
-        }
+    let layer = state.layers[i].clone();
 
-        draw_crop_marks(&layer, bleed, p.out_w, p.out_h);
-        let rooms_mm = resolve_frames_mm(
-            p.layout, p.spread_w, ph, bleed,
-            spread.margin_top, spread.margin_right,
-            spread.margin_bottom, spread.margin_left,
-        );
+    // Determine the printable layout region for endpaper spreads.
+    // layout_w: width passed to the resolver (one page for endpapers, full spread otherwise).
+    // layout_offset_x: x offset to shift resolved frames into the printable half.
+    let endpaper_side = doc.endpaper_side(i);
+    let (layout_w, layout_offset_x) = match endpaper_side {
+        Some("left")  => (page_w, page_w), // right half is printable
+        Some("right") => (page_w, 0.0),    // left half is printable
+        _             => (spread_w, 0.0),
+    };
+    let region = Rect::new(layout_offset_x, 0.0, layout_w, ph);
 
-        // --- Pass 1: prepare per-frame placement data and deduplicate crops. ---
-        type CropKey = (String, u32, u32, u32, u32);
-        let mut xobj_cache: HashMap<CropKey, XObjectRef> = HashMap::new();
-        let mut pending: Vec<(Rect, f32, f32, Prepared)> = Vec::new();
+    // White base background.
+    layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None)));
+    fill_rect(&layer, 0.0, 0.0, total_w, total_h);
 
-        for (face_id, spread_rect) in &rooms_mm {
-            let Some(_clipped) = intersect_rect(spread_rect, &p.region) else { continue };
-            let Some(face) = p.layout.faces.get(face_id) else { continue };
+    // Per-page background colors — skip the non-printable side for endpaper spreads.
+    let draw_left_bg  = endpaper_side != Some("left");
+    let draw_right_bg = endpaper_side != Some("right");
+    if draw_left_bg && !spread.left_bg.is_empty() {
+        let (r, g, b) = parse_hex_color(&spread.left_bg);
+        layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
+        fill_rect(&layer, 0.0, 0.0, page_w + bleed, total_h);
+    }
+    if draw_right_bg && !spread.right_bg.is_empty() {
+        let (r, g, b) = parse_hex_color(&spread.right_bg);
+        layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
+        fill_rect(&layer, total_w - page_w - bleed, 0.0, page_w + bleed, total_h);
+    }
 
-            let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
-            let border_radius_mm = face.box_model.border.radius.max(0.0);
-            let frame_page = frame_page_rect(spread_rect, p.region.x);
+    draw_crop_marks(&layer, bleed, spread_w, ph);
 
-            if let Some(ref img_id) = face.image.image_id {
-                if let Some(decoded_img) = decoded.get(img_id.as_str()) {
-                    if let Some(prep) = prepare_image(
-                        decoded_img, &frame_page, bleed, p.out_h,
-                        face.image.pan_x, face.image.pan_y,
-                        face.image.scale, face.image.rotation_deg,
-                        print_dpi,
-                    ) {
-                        let key: CropKey = (
-                            img_id.clone(),
-                            prep.crop.left, prep.crop.top,
-                            prep.crop.width, prep.crop.height,
-                        );
-                        let xobj_ref = xobj_cache.entry(key).or_insert_with(|| {
-                            layer.add_image(prep.xobj.clone())
-                        }).clone();
-                        pending.push((frame_page, node_rotation, border_radius_mm,
-                                      Prepared { xobj_ref: Some(xobj_ref), ..prep }));
-                    }
+    // Resolve frames against the printable page width, then shift into spread-mm space.
+    let rooms_mm_raw = resolve_frames_mm(
+        &spread.layout, layout_w, ph, bleed,
+        spread.margin_top, spread.margin_right,
+        spread.margin_bottom, spread.margin_left,
+    );
+    let rooms_mm: Vec<_> = rooms_mm_raw.iter().map(|(id, r)| {
+        (*id, Rect::new(r.x + layout_offset_x, r.y, r.w, r.h))
+    }).collect();
+
+    // Pass 1: prepare per-frame placement data and deduplicate crops.
+    type CropKey = (String, u32, u32, u32, u32);
+    let mut xobj_cache: HashMap<CropKey, XObjectRef> = HashMap::new();
+    let mut pending: Vec<(Rect, f32, f32, Prepared)> = Vec::new();
+
+    for (face_id, spread_rect) in &rooms_mm {
+        let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
+        let Some(face) = spread.layout.faces.get(face_id) else { continue };
+
+        let node_rotation    = face.box_model.face_rotation_deg.unwrap_or(0.0);
+        let border_radius_mm = face.box_model.border.radius.max(0.0);
+        let frame_page       = frame_page_rect(spread_rect, region.x);
+
+        if let Some(ref img_id) = face.image.image_id {
+            if let Some(decoded_img) = state.decoded.get(img_id.as_str()) {
+                if let Some(prep) = prepare_image(
+                    decoded_img, &frame_page, bleed, ph,
+                    face.image.pan_x, face.image.pan_y,
+                    face.image.scale, face.image.rotation_deg,
+                    state.print_dpi,
+                ) {
+                    let key: CropKey = (
+                        img_id.clone(),
+                        prep.crop.left, prep.crop.top,
+                        prep.crop.width, prep.crop.height,
+                    );
+                    let xobj_ref = xobj_cache.entry(key).or_insert_with(|| {
+                        layer.add_image(prep.xobj.clone())
+                    }).clone();
+                    pending.push((frame_page, node_rotation, border_radius_mm,
+                                  Prepared { xobj_ref: Some(xobj_ref), ..prep }));
                 }
             }
         }
+    }
 
-        // --- Pass 2: paint all frames (image then border). ---
-        for (frame_page, node_rotation, border_radius_mm, prep) in &pending {
-            if let Some(ref xobj_ref) = prep.xobj_ref {
-                paint_image(&layer, xobj_ref.clone(), prep, frame_page,
-                            *node_rotation, *border_radius_mm, bleed, p.out_h);
-            }
+    // Pass 2: paint all frames (image then border).
+    for (frame_page, node_rotation, border_radius_mm, prep) in &pending {
+        if let Some(ref xobj_ref) = prep.xobj_ref {
+            paint_image(&layer, xobj_ref.clone(), prep, frame_page,
+                        *node_rotation, *border_radius_mm, bleed, ph);
         }
-        for (face_id, spread_rect) in &rooms_mm {
-            let Some(_clipped) = intersect_rect(spread_rect, &p.region) else { continue };
-            let Some(face) = p.layout.faces.get(face_id) else { continue };
-            let frame_page = frame_page_rect(spread_rect, p.region.x);
-            let border = &face.box_model.border;
-            if border.width > 0.0 {
-                let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
-                layer.save_graphics_state();
-                apply_node_ctm(&layer, node_rotation, &frame_page, bleed, p.out_h);
-                draw_border_rect(&layer, &frame_page, bleed, p.out_h, border);
-                layer.restore_graphics_state();
-            }
+    }
+    for (face_id, spread_rect) in &rooms_mm {
+        let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
+        let Some(face) = spread.layout.faces.get(face_id) else { continue };
+        let frame_page = frame_page_rect(spread_rect, region.x);
+        let border = &face.box_model.border;
+        if border.width > 0.0 {
+            let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
+            layer.save_graphics_state();
+            apply_node_ctm(&layer, node_rotation, &frame_page, bleed, ph);
+            draw_border_rect(&layer, &frame_page, bleed, ph, border);
+            layer.restore_graphics_state();
         }
     }
 
-    // --- Pass 3: paint text elements (per-spread) ---
-    let mut font_cache: HashMap<String, IndirectFontRef> = HashMap::new();
-    for (i, p) in out_pages.iter().enumerate() {
-        let (pi, li) = page_layer_pairs[i];
-        let layer = pdf_doc.get_page(pi).get_layer(li);
-        let spread = &doc.spreads[i];
-        if !spread.text_elements.is_empty() {
-            draw_text_elements(
-                &layer, &spread.text_elements,
-                p.region.x, bleed, p.out_h,
-                &pdf_doc, &mut font_cache, &font_bytes_map,
-            );
+    // Pass 3: text elements (skip any that fall on the non-printable page).
+    let printable_texts: Vec<_> = spread.text_elements.iter().filter(|t| {
+        match endpaper_side {
+            Some("left")  => t.x_mm >= page_w,
+            Some("right") => t.x_mm < page_w,
+            _             => true,
         }
+    }).cloned().collect();
+    if !printable_texts.is_empty() {
+        draw_text_elements(
+            &layer, &printable_texts,
+            region.x, bleed, ph,
+            &state.pdf_doc, &mut state.font_cache, &state.font_bytes_map,
+        );
     }
 
+    state.next_spread += 1;
+}
+
+/// Phase 3 — serialize the finished PDF to bytes.
+pub(crate) fn pdf_export_finish(state: PdfExportState) -> Vec<u8> {
     let mut buf = std::io::BufWriter::new(Vec::new());
-    let _ = pdf_doc.save(&mut buf);
+    let _ = state.pdf_doc.save(&mut buf);
     buf.into_inner().unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// Convenience wrapper (used by tests and the old single-call path)
+// ---------------------------------------------------------------------------
+
+pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) -> Vec<u8> {
+    let Some(mut state) = pdf_export_begin(doc, images_json, fonts_json) else {
+        return Vec::new();
+    };
+    while state.next_spread < state.total {
+        pdf_export_spread_one(&mut state, doc);
+    }
+    pdf_export_finish(state)
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +671,31 @@ fn fill_rect(layer: &PdfLayerReference, x: f32, y: f32, w: f32, h: f32) {
     });
 }
 
+/// Build a lopdf dictionary that overrides TrimBox and adds BleedBox on a page.
+///
+/// The printpdf serializer writes TrimBox = MediaBox by default, which incorrectly
+/// includes the bleed area. We replace it with the actual trim (content) rectangle and
+/// add the BleedBox that preflighting tools use to identify the bleed extent.
+///
+/// All coordinates are in PDF user-space points (1 pt = 1/72 inch).
+///   MediaBox / BleedBox: [0, 0, total_w_pt, total_h_pt]
+///   TrimBox:             [bleed_pt, bleed_pt, total_w_pt − bleed_pt, total_h_pt − bleed_pt]
+fn page_box_extension(spread_w: f32, ph: f32, bleed: f32) -> printpdf::lopdf::Dictionary {
+    const PT_PER_MM: f32 = 72.0 / 25.4;
+    let bleed_pt  = bleed * PT_PER_MM;
+    let total_w   = (spread_w + 2.0 * bleed) * PT_PER_MM;
+    let total_h   = (ph      + 2.0 * bleed) * PT_PER_MM;
+
+    use printpdf::lopdf::Object::{Array, Real};
+    let trim_box  = Array(vec![Real(bleed_pt), Real(bleed_pt), Real(total_w - bleed_pt), Real(total_h - bleed_pt)]);
+    let bleed_box = Array(vec![Real(0.0),      Real(0.0),      Real(total_w),             Real(total_h)]);
+
+    let mut dict = printpdf::lopdf::Dictionary::new();
+    dict.set("TrimBox",  trim_box);
+    dict.set("BleedBox", bleed_box);
+    dict
+}
+
 fn draw_crop_marks(layer: &PdfLayerReference, bleed: f32, pw: f32, ph: f32) {
     let mark_len = 5.0_f32;
     let offset = bleed;
@@ -863,6 +946,93 @@ mod tests {
     use super::*;
     use crate::page::PhotobookDocument;
 
+    fn assert_valid_pdf(bytes: &[u8]) {
+        assert!(!bytes.is_empty(), "PDF must not be empty");
+        assert!(bytes.starts_with(b"%PDF-"), "PDF must start with %PDF- header");
+    }
+
+    /// Build a one-spread document with a single unsplit frame, optionally
+    /// with an image assigned.
+    fn doc_single_frame(img_id: Option<&str>) -> PhotobookDocument {
+        let mut doc = PhotobookDocument::new(210.0, 297.0, 3.0);
+        if let Some(id) = img_id {
+            let spread = &mut doc.spreads[1];
+            let face_id = *spread.layout.faces.keys().next().unwrap();
+            spread.layout.faces.get_mut(&face_id).unwrap().image.image_id = Some(id.to_string());
+            doc.current_spread = 1;
+        }
+        doc
+    }
+
+    #[test]
+    fn pdf_empty_frame_produces_valid_pdf() {
+        let doc = doc_single_frame(None);
+        let pdf = export_pdf(&doc, "[]", "[]");
+        assert_valid_pdf(&pdf);
+    }
+
+    #[test]
+    fn pdf_single_jpeg_produces_valid_pdf() {
+        let (b64, _) = make_jpeg(100, 100);
+        let doc = doc_single_frame(Some("img"));
+        let pdf = run_export(&doc, "img", &b64, 100, 100);
+        assert_valid_pdf(&pdf);
+    }
+
+    #[test]
+    fn pdf_single_png_produces_valid_pdf() {
+        let (b64, _) = make_png(100, 100);
+        let doc = doc_single_frame(Some("img"));
+        let pdf = run_export(&doc, "img", &b64, 100, 100);
+        assert_valid_pdf(&pdf);
+    }
+
+    #[test]
+    fn pdf_tiny_image_produces_valid_pdf() {
+        // 1×1 pixel is the smallest valid image.
+        let (b64, _) = make_jpeg(1, 1);
+        let doc = doc_single_frame(Some("img"));
+        let pdf = run_export(&doc, "img", &b64, 1, 1);
+        assert_valid_pdf(&pdf);
+    }
+
+    #[test]
+    fn pdf_unknown_image_id_produces_valid_pdf() {
+        // Frame references an image that isn't in the images JSON → should not
+        // crash; the frame is rendered as empty.
+        let (b64, _) = make_jpeg(100, 100);
+        let doc = doc_single_frame(Some("missing_id"));
+        let pdf = run_export(&doc, "other_id", &b64, 100, 100);
+        assert_valid_pdf(&pdf);
+    }
+
+    #[test]
+    fn pdf_single_jpeg_is_larger_than_empty() {
+        let (b64, _) = make_jpeg(300, 300);
+        let empty_pdf  = export_pdf(&doc_single_frame(None), "[]", "[]");
+        let filled_pdf = run_export(&doc_single_frame(Some("img")), "img", &b64, 300, 300);
+        assert!(filled_pdf.len() > empty_pdf.len(),
+            "PDF with an image should be larger than one without");
+    }
+
+    /// Generate a synthetic PNG of size `w × h` pixels and return it as a
+    /// base64-encoded string together with the raw byte length.
+    fn make_png(w: u32, h: u32) -> (String, usize) {
+        use image::{RgbaImage, Rgba};
+        let mut img = RgbaImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.put_pixel(x, y, Rgba([(x * 255 / w.max(1)) as u8, (y * 255 / h.max(1)) as u8, 128, 255]));
+            }
+        }
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let raw_len = png_bytes.len();
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+        (b64, raw_len)
+    }
+
     /// Generate a synthetic JPEG of size `w × h` pixels and return it as a
     /// base64-encoded string together with the raw byte length for comparison.
     fn make_jpeg(w: u32, h: u32) -> (String, usize) {
@@ -961,6 +1131,65 @@ mod tests {
             "4-frame PDF is {:.2}× the 1-frame size — cropping is not working correctly",
             ratio
         );
+    }
+
+    /// Verify that TrimBox and BleedBox are correctly set in the exported PDF.
+    ///
+    /// The exact page width varies per spread (cover includes spine), so we derive
+    /// expected values from the MediaBox rather than hard-coding mm arithmetic.
+    /// Invariants that must hold for every page:
+    ///   BleedBox == MediaBox          (full bleed-extended page)
+    ///   TrimBox  == MediaBox inset by bleed_pt on all four sides
+    #[test]
+    fn pdf_page_boxes_trimbox_and_bleedbox() {
+        const PT_PER_MM: f32 = 72.0 / 25.4;
+        let bleed_pt = 3.0_f32 * PT_PER_MM; // doc uses 3mm bleed
+
+        let doc = doc_single_frame(None);
+        let pdf = export_pdf(&doc, "[]", "[]");
+
+        let parsed = printpdf::lopdf::Document::load_mem(&pdf)
+            .expect("PDF should be parseable by lopdf");
+
+        let pages = parsed.get_pages();
+        assert!(!pages.is_empty(), "PDF should have at least one page");
+
+        let tol = 0.01_f32;
+        for (_page_num, page_id) in pages {
+            let page_dict = parsed.get_object(page_id)
+                .and_then(|o| o.as_dict())
+                .expect("page object should be a dictionary");
+
+            let get_box = |key: &[u8]| -> Vec<f32> {
+                page_dict.get(key)
+                    .unwrap_or_else(|_| panic!("/{} should be present", String::from_utf8_lossy(key)))
+                    .as_array()
+                    .unwrap_or_else(|_| panic!("/{} should be an array", String::from_utf8_lossy(key)))
+                    .iter()
+                    .map(|o| o.as_float().expect("box element should be numeric"))
+                    .collect()
+            };
+
+            let media  = get_box(b"MediaBox");
+            let trim   = get_box(b"TrimBox");
+            let bleed  = get_box(b"BleedBox");
+
+            assert_eq!(media.len(), 4);
+            assert_eq!(trim.len(),  4);
+            assert_eq!(bleed.len(), 4);
+
+            // BleedBox == MediaBox
+            for i in 0..4 {
+                assert!((bleed[i] - media[i]).abs() < tol,
+                    "BleedBox[{i}] ({}) should equal MediaBox[{i}] ({})", bleed[i], media[i]);
+            }
+
+            // TrimBox is MediaBox inset by bleed_pt
+            assert!((trim[0] - bleed_pt).abs() < tol,          "TrimBox x0 wrong: got {}", trim[0]);
+            assert!((trim[1] - bleed_pt).abs() < tol,          "TrimBox y0 wrong: got {}", trim[1]);
+            assert!((trim[2] - (media[2] - bleed_pt)).abs() < tol, "TrimBox x1 wrong: got {}", trim[2]);
+            assert!((trim[3] - (media[3] - bleed_pt)).abs() < tol, "TrimBox y1 wrong: got {}", trim[3]);
+        }
     }
 
 }

@@ -4,17 +4,54 @@ export class Footer {
     thumbsEl;
     prevBtn;
     nextBtn;
+    addSpreadBtn;
+    removeSpreadBtn;
+    spreadCountLabel;
     onSwitch;
+    onReorder;
     _thumbDivs = [];
     _renderedCount = -1;
+    _indicator;
+    _dragSourceIdx = -1;
     currentIdx = 0;
-    constructor(thumbsEl, prevBtn, nextBtn, onSwitch) {
+    constructor(thumbsEl, prevBtn, nextBtn, addSpreadBtn, removeSpreadBtn, spreadCountLabel, onSwitch, onReorder) {
         this.thumbsEl = thumbsEl;
         this.prevBtn = prevBtn;
         this.nextBtn = nextBtn;
+        this.addSpreadBtn = addSpreadBtn;
+        this.removeSpreadBtn = removeSpreadBtn;
+        this.spreadCountLabel = spreadCountLabel;
         this.onSwitch = onSwitch;
+        this.onReorder = onReorder ?? null;
         prevBtn.addEventListener('click', () => this.onSwitch(this.currentIdx - 1));
         nextBtn.addEventListener('click', () => this.onSwitch(this.currentIdx + 1));
+        this._indicator = document.createElement('div');
+        this._indicator.className = 'spread-drop-indicator';
+        this._indicator.hidden = true;
+        thumbsEl.addEventListener('dragover', (e) => {
+            if (this._dragSourceIdx < 0)
+                return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            this._showIndicator(this._hitTestGap(e.clientX));
+        });
+        thumbsEl.addEventListener('dragleave', (e) => {
+            if (!thumbsEl.contains(e.relatedTarget)) {
+                this._indicator.hidden = true;
+            }
+        });
+        thumbsEl.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (this._dragSourceIdx < 0)
+                return;
+            const from = this._dragSourceIdx;
+            const gapIdx = this._hitTestGap(e.clientX);
+            const to = from < gapIdx ? gapIdx - 1 : gapIdx;
+            this._indicator.hidden = true;
+            this._dragSourceIdx = -1;
+            if (from !== to && to > 0 && this.onReorder)
+                this.onReorder(from, to);
+        });
     }
     update(editor, renderer) {
         const count = editor.get_spread_count();
@@ -26,7 +63,8 @@ export class Footer {
         const thumbW = Math.round(thumbH * spreadAspect);
         const cssW = Math.round(thumbW / 2) + 'px';
         // Rebuild DOM only when the spread count changes.
-        if (count !== this._renderedCount) {
+        const countChanged = count !== this._renderedCount;
+        if (countChanged) {
             this.thumbsEl.innerHTML = '';
             this._thumbDivs = [];
             for (let i = 0; i < count; i++) {
@@ -43,8 +81,22 @@ export class Footer {
                 label.className = 'spread-label';
                 label.textContent = this._spreadLabel(spread, i, count);
                 div.appendChild(label);
-                const idx = i;
-                div.addEventListener('click', () => this.onSwitch(idx));
+                div.addEventListener('click', () => this.onSwitch(i));
+                // Cover (index 0) is not draggable.
+                if (i > 0 && this.onReorder) {
+                    div.draggable = true;
+                    div.addEventListener('dragstart', (e) => {
+                        this._dragSourceIdx = i;
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', String(i));
+                        div.classList.add('dragging');
+                    });
+                    div.addEventListener('dragend', () => {
+                        div.classList.remove('dragging');
+                        this._indicator.hidden = true;
+                        this._dragSourceIdx = -1;
+                    });
+                }
                 this.thumbsEl.appendChild(div);
                 this._thumbDivs.push(div);
             }
@@ -54,14 +106,52 @@ export class Footer {
         for (let i = 0; i < this._thumbDivs.length; i++) {
             this._thumbDivs[i].classList.toggle('active', i === this.currentIdx);
         }
-        // Render only dirty thumbnails.
-        const dirtyIndices = getDirtySpreadIndices(editor);
-        for (const idx of dirtyIndices) {
-            this._renderThumbnail(idx, editor, renderer);
+        // When the DOM was rebuilt all canvases are blank — re-render every spread.
+        // Otherwise render only the ones the editor flagged dirty.
+        if (countChanged) {
+            getDirtySpreadIndices(editor); // drain flags so nothing double-renders later
+            for (let i = 0; i < count; i++) {
+                this._renderThumbnail(i, editor, renderer);
+            }
         }
+        else {
+            const dirtyIndices = getDirtySpreadIndices(editor);
+            for (const idx of dirtyIndices) {
+                this._renderThumbnail(idx, editor, renderer);
+            }
+        }
+        const endpapers = editor.get_endpapers();
         this.prevBtn.disabled = this.currentIdx <= 0;
         this.nextBtn.disabled = this.currentIdx >= count - 1;
+        this.removeSpreadBtn.disabled = this.currentIdx <= 0 || count <= (endpapers ? 3 : 2);
+        this.spreadCountLabel.textContent = `${count} spread${count === 1 ? '' : 's'}`;
     }
+    // -------------------------------------------------------------------------
+    // Drag helpers
+    // -------------------------------------------------------------------------
+    /** Returns the gap index (0..count) closest to clientX. */
+    _hitTestGap(clientX) {
+        for (let i = 0; i < this._thumbDivs.length; i++) {
+            const rect = this._thumbDivs[i].getBoundingClientRect();
+            if (clientX < rect.left + rect.width / 2)
+                return i;
+        }
+        return this._thumbDivs.length;
+    }
+    /** Inserts the drop indicator at gap position g (clamped to never precede the cover). */
+    _showIndicator(gapIdx) {
+        const g = Math.max(1, gapIdx);
+        if (g >= this._thumbDivs.length) {
+            this.thumbsEl.appendChild(this._indicator);
+        }
+        else {
+            this.thumbsEl.insertBefore(this._indicator, this._thumbDivs[g]);
+        }
+        this._indicator.hidden = false;
+    }
+    // -------------------------------------------------------------------------
+    // Rendering
+    // -------------------------------------------------------------------------
     _spreadLabel(spread, _idx, _total) {
         if (spread.kind === 'cover')
             return 'Cover';
@@ -87,12 +177,18 @@ export class Footer {
             return;
         const ctx = canvas.getContext('2d');
         const W = canvas.width, H = canvas.height;
+        // For endpaper spreads, resolve the layout against half the thumbnail width.
+        const spreadsInfo = getSpreadsInfo(editor);
+        const endpaperSide = spreadsInfo[spreadIdx]?.endpaper_side ?? null;
+        const layoutW = endpaperSide ? Math.floor(W / 2) : W;
+        const layoutOffX = endpaperSide === 'left' ? W - layoutW : 0;
         // Pure read — does not mutate current_spread or selection.
-        const renderList = getThumbnailData(editor, spreadIdx, W, H);
+        const renderList = getThumbnailData(editor, spreadIdx, layoutW, H);
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, W, H);
         for (const frame of renderList) {
-            const { x, y, w, h } = frame.rect;
+            const x = frame.rect.x + layoutOffX;
+            const { y, w, h } = frame.rect;
             ctx.save();
             ctx.globalAlpha = 0.9;
             ctx.beginPath();
@@ -115,6 +211,12 @@ export class Footer {
             ctx.strokeStyle = '#aaa';
             ctx.lineWidth = 0.5;
             ctx.strokeRect(x, y, w, h);
+        }
+        // Non-printable overlay on the thumbnail.
+        if (endpaperSide) {
+            const npX = endpaperSide === 'left' ? 0 : W - layoutW;
+            ctx.fillStyle = 'rgba(80, 80, 80, 0.35)';
+            ctx.fillRect(npX, 0, layoutW, H);
         }
         ctx.strokeStyle = 'rgba(100,100,100,0.4)';
         ctx.lineWidth = 0.5;

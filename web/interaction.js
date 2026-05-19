@@ -33,7 +33,7 @@ export const marqueeMode = {
     onMouseMove(e, ctx) {
         const { overlays, redraw, modeState, toSpread } = ctx;
         const state = modeState;
-        const { relX, relY } = toSpread(e);
+        const { relX, relY, sr } = toSpread(e);
         const x = Math.min(state.startX, relX);
         const y = Math.min(state.startY, relY);
         const w = Math.abs(relX - state.startX);
@@ -80,235 +80,235 @@ const MARGIN_HANDLE_CURSORS = {
     tl: 'nwse-resize', tr: 'nesw-resize',
     bl: 'nesw-resize', br: 'nwse-resize',
 };
+function idleHandleEdgeHit(e, ctx, _geo) {
+    const { snapshot, setMode } = ctx;
+    const edge = _hoveredEdge;
+    const axis = (edge === 'top' || edge === 'bottom') ? 'h' : 'v';
+    snapshot();
+    setMode(edgeLiveDragMode, {
+        edge, axis, newIsFirst: edge === 'top' || edge === 'left', spawned: false, segmentId: NULL_ID,
+    });
+    e.preventDefault();
+}
+function idleHandleRotationHandle(e, ctx, geo) {
+    const { editor, snapshot, setMode } = ctx;
+    const { sr, canvasX, canvasY } = geo;
+    const handles = getSelectedTransformHandles(editor, sr.w, sr.h);
+    if (!handles)
+        return;
+    const { outer } = handles;
+    const cx = sr.x + outer.x + outer.w / 2;
+    const cy = sr.y + outer.y + outer.h / 2;
+    const bm = getTransformBoxModel(editor);
+    snapshot();
+    setMode(nodeRotateDragMode, {
+        cx, cy,
+        startAngle: Math.atan2(canvasY - cy, canvasX - cx),
+        startRotDeg: bm.face_rotation_deg ?? 0,
+        hasMoved: false,
+    });
+    e.preventDefault();
+}
+function idleHandleMarginHandle(e, ctx, geo) {
+    const { editor, renderer, snapshot, setMode } = ctx;
+    const { sr, relX, relY } = geo;
+    const corner = renderer.hoveredMarginHandle;
+    const bm = getTransformBoxModel(editor);
+    const startMargins = {
+        top: bm.margin.top ?? 0, right: bm.margin.right ?? 0,
+        bottom: bm.margin.bottom ?? 0, left: bm.margin.left ?? 0,
+    };
+    snapshot();
+    const spreadInfo = getSpreadInfo(editor);
+    const layoutMm = spreadInfo.endpaper_side ? spreadInfo.page_width_mm : spreadInfo.width_mm;
+    setMode(marginDragMode, {
+        corner, startMouseX: relX, startMouseY: relY, startMargins,
+        mmToPx: sr.w / layoutMm,
+        marginStepMm: editor.get_margin_step_mm(),
+    });
+    e.preventDefault();
+}
+function idleHandleDividerHit(e, ctx, geo) {
+    const { editor, renderer, snapshot, refreshBoxModel, redraw, setMode } = ctx;
+    const { sr, relX, relY } = geo;
+    const divId = renderer.hoveredDivider;
+    if (renderer.twinSegmentSelected && divId === _selectedTwinChainId && _selectedTwinEdgeId !== null) {
+        const selTh = renderer._twinHandles.find(h => h.edge_id === _selectedTwinEdgeId);
+        if (selTh) {
+            const HIT_R = 8;
+            const onSegment = selTh.axis === 'v'
+                ? Math.abs(relX - selTh.x) < HIT_R && relY >= selTh.y - selTh.length / 2 && relY <= selTh.y + selTh.length / 2
+                : Math.abs(relY - selTh.y) < HIT_R && relX >= selTh.x - selTh.length / 2 && relX <= selTh.x + selTh.length / 2;
+            if (onSegment) {
+                snapshot();
+                editor.begin_divider_drag(_selectedTwinEdgeId, false, sr.w, sr.h);
+                setMode(dividerDragMode, { nodeId: _selectedTwinEdgeId });
+                e.preventDefault();
+                return;
+            }
+        }
+        // Clicking elsewhere on the same chain → fall through to select the full chain.
+    }
+    _selectedTwinChainId = null;
+    _selectedTwinEdgeId = null;
+    renderer.twinSegmentSelected = false;
+    if (e.metaKey || e.ctrlKey) {
+        editor.toggle_segment(divId);
+        refreshBoxModel();
+        redraw();
+        e.preventDefault();
+        return;
+    }
+    renderer.selectedTextIds.clear();
+    editor.select_segment(divId);
+    refreshBoxModel();
+    snapshot();
+    editor.begin_divider_drag(divId, true, sr.w, sr.h);
+    setMode(dividerDragMode, { nodeId: divId });
+    e.preventDefault();
+}
+function idleHandleImageSwapHit(e, ctx, geo) {
+    const { editor, overlays, setMode } = ctx;
+    const { relX, relY, sr } = geo;
+    editor.set_mouse_pos(relX, relY);
+    const hitId = editor.hit_test(relX, relY, sr.w, sr.h);
+    if (hitId === NULL_ID)
+        return false;
+    overlays.swapOverlay = { sourceId: hitId, targetId: null };
+    setMode(imageSwapMode, { sourceId: hitId, targetId: null });
+    e.preventDefault();
+    return true;
+}
+function idleHandleTextHit(e, ctx, geo) {
+    const { editor, renderer, refreshBoxModel, redraw, setMode } = ctx;
+    const { sr, relX, relY, canvasX, canvasY } = geo;
+    const textHit = renderer.hitTestText(canvasX, canvasY);
+    if (!textHit)
+        return false;
+    const el = getTextElements(editor).find(t => t.id === textHit.id);
+    if (!el)
+        return false;
+    if (e.metaKey || e.ctrlKey) {
+        if (renderer.selectedTextIds.has(textHit.id))
+            renderer.selectedTextIds.delete(textHit.id);
+        else
+            renderer.selectedTextIds.add(textHit.id);
+        refreshBoxModel();
+        redraw();
+        e.preventDefault();
+        return true;
+    }
+    editor.select_face(NULL_ID);
+    renderer.selectedTextIds = new Set([textHit.id]);
+    ctx.onTextSelected?.(textHit.id);
+    const spreadInfo = getSpreadInfo(editor);
+    const layoutMm = spreadInfo.endpaper_side ? spreadInfo.page_width_mm : spreadInfo.width_mm;
+    const mmToPx = sr.w / layoutMm;
+    if (textHit.part === 'rotate') {
+        const hit = renderer._textHits.find(h => h.id === textHit.id);
+        setMode(textRotateMode, {
+            el, cx: hit.cx, cy: hit.cy,
+            startAngle: Math.atan2(canvasY - hit.cy, canvasX - hit.cx),
+            startRot: el.rotation_deg, hasMoved: false,
+        });
+    }
+    else if (textHit.part === 'corner') {
+        const hit2 = renderer._textHits.find(h => h.id === textHit.id);
+        const ci = textHit.cornerIndex;
+        // Corner local-space signs: 0=TL(-,-), 1=TR(+,-), 2=BR(+,+), 3=BL(-,+)
+        const cornerSigns = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+        const [sdx, sdy] = cornerSigns[ci]; // dragged corner signs
+        const sfx = -sdx, sfy = -sdy; // fixed (opposite) corner signs
+        const θ = el.rotation_deg * Math.PI / 180;
+        const cos_t = Math.cos(θ), sin_t = Math.sin(θ);
+        const hw = hit2.hw, hh = hit2.hh;
+        // Fixed corner in canvas px (rotation: x'=x·cos-y·sin, y'=x·sin+y·cos)
+        const fx = hit2.cx + sfx * hw * cos_t - sfy * hh * sin_t;
+        const fy = hit2.cy + sfx * hw * sin_t + sfy * hh * cos_t;
+        // Vector from fixed corner to dragged corner at scale=1
+        const ddx = -2 * sfx * hw * cos_t + 2 * sfy * hh * sin_t;
+        const ddy = -2 * sfx * hw * sin_t - 2 * sfy * hh * cos_t;
+        setMode(textResizeMode, {
+            el, cornerIndex: ci, fx, fy, ddx, ddy, d2: ddx * ddx + ddy * ddy,
+            hw0: hw, hh0: hh, sign_fx: sfx, sign_fy: sfy, cos_t, sin_t,
+            startFontSize: el.font_size_pt, mmToPx,
+            spreadOriginX: ctx.renderer.fullSpreadOriginX, srY: sr.y, hasMoved: false,
+        });
+    }
+    else {
+        setMode(textDragMode, {
+            el, startMouseX: relX, startMouseY: relY,
+            startX: el.x_mm, startY: el.y_mm, mmToPx, hasMoved: false,
+        });
+    }
+    redraw();
+    e.preventDefault();
+    return true;
+}
+function idleHandleLeafHit(e, ctx, geo) {
+    const { editor, renderer, refreshBoxModel, redraw, setMode } = ctx;
+    const { sr, relX, relY } = geo;
+    editor.set_mouse_pos(relX, relY);
+    const insideSpread = relX >= 0 && relX <= sr.w && relY >= 0 && relY <= sr.h;
+    const hitId = insideSpread ? editor.hit_test(relX, relY, sr.w, sr.h) : NULL_ID;
+    if (hitId !== NULL_ID) {
+        if (e.metaKey || e.ctrlKey) {
+            editor.toggle_selection(hitId);
+            refreshBoxModel();
+            redraw();
+            e.preventDefault();
+            return;
+        }
+        renderer.selectedTextIds.clear();
+        if (!editor.is_selected(hitId) || editor.get_selection_count() > 1 || editor.get_selected_segment() !== NULL_ID) {
+            editor.select_face(hitId);
+            refreshBoxModel();
+            redraw();
+        }
+        const t = getFrameTransform(editor, hitId);
+        if (t) {
+            const frame = getRenderList(editor, sr.w, sr.h).find(f => f.id === hitId);
+            if (frame && frame.image_id && renderer.imageCache.has(frame.image_id)) {
+                const img = renderer.imageCache.get(frame.image_id);
+                const iw = img instanceof ImageBitmap ? img.width : img.naturalWidth;
+                const ih = img instanceof ImageBitmap ? img.height : img.naturalHeight;
+                if (img && iw) {
+                    const cov = computeImageCover(frame.rect.w, frame.rect.h, iw, ih, t.pan_x, t.pan_y, t.scale ?? 1.0, t.rotation_deg ?? 0);
+                    if (!cov)
+                        return;
+                    setMode(imagePanMode, {
+                        nodeId: hitId, startX: relX, startY: relY,
+                        startPanX: t.pan_x, startPanY: t.pan_y,
+                        overflowX: cov.overflow_x, overflowY: cov.overflow_y, hasMoved: false,
+                    });
+                    e.preventDefault();
+                }
+            }
+        }
+    }
+    else {
+        editor.select_face(NULL_ID);
+        renderer.selectedTextIds.clear();
+        refreshBoxModel();
+        redraw();
+        setMode(marqueeMode, { startX: relX, startY: relY, shiftKey: false });
+        ctx.canvasEl.style.cursor = 'crosshair';
+        e.preventDefault();
+    }
+}
 // ---------------------------------------------------------------------------
 // Idle mode
 // ---------------------------------------------------------------------------
 export const idleMode = {
     onMouseDown(e, ctx) {
-        const { editor, renderer, overlays, toSpread, snapshot, refreshBoxModel, redraw, setMode } = ctx;
-        const { sr, relX, relY, canvasX, canvasY } = toSpread(e);
-        function handleRotationHandle() {
-            const handles = getSelectedTransformHandles(editor, sr.w, sr.h);
-            if (!handles)
-                return;
-            const { outer } = handles;
-            const cx = sr.x + outer.x + outer.w / 2;
-            const cy = sr.y + outer.y + outer.h / 2;
-            const startAngle = Math.atan2(canvasY - cy, canvasX - cx);
-            const bm = getTransformBoxModel(editor);
-            snapshot();
-            setMode(nodeRotateDragMode, {
-                cx, cy, startAngle,
-                startRotDeg: bm.face_rotation_deg ?? 0,
-                hasMoved: false,
-            });
-            e.preventDefault();
-        }
-        function handleMarginHandle() {
-            const corner = renderer.hoveredMarginHandle;
-            const bm = getTransformBoxModel(editor);
-            const startMargins = {
-                top: bm.margin.top, right: bm.margin.right,
-                bottom: bm.margin.bottom, left: bm.margin.left,
-            };
-            const spreadInfo = getSpreadInfo(editor);
-            const mmToPx = sr.w / spreadInfo.width_mm;
-            const marginStepMm = editor.get_margin_step_mm();
-            snapshot();
-            setMode(marginDragMode, {
-                corner, startMouseX: relX, startMouseY: relY,
-                startMargins, mmToPx, marginStepMm,
-            });
-            e.preventDefault();
-        }
-        function handleDividerHit() {
-            const divId = renderer.hoveredDivider;
-            if (renderer.twinSegmentSelected && divId === _selectedTwinChainId && _selectedTwinEdgeId !== null) {
-                const selTh = renderer._twinHandles.find(h => h.edge_id === _selectedTwinEdgeId);
-                if (selTh) {
-                    const HIT_R = 8;
-                    const onSegment = selTh.axis === 'v'
-                        ? Math.abs(relX - selTh.x) < HIT_R && relY >= selTh.y - selTh.length / 2 && relY <= selTh.y + selTh.length / 2
-                        : Math.abs(relY - selTh.y) < HIT_R && relX >= selTh.x - selTh.length / 2 && relX <= selTh.x + selTh.length / 2;
-                    if (onSegment) {
-                        // Clicking on the highlighted twin segment → drag it as a twin pair.
-                        snapshot();
-                        editor.begin_divider_drag(_selectedTwinEdgeId, false, sr.w, sr.h);
-                        setMode(dividerDragMode, { nodeId: _selectedTwinEdgeId });
-                        e.preventDefault();
-                        return;
-                    }
-                }
-                // Clicking elsewhere on the same chain → fall through to select the full chain.
-            }
-            _selectedTwinChainId = null;
-            _selectedTwinEdgeId = null;
-            renderer.twinSegmentSelected = false;
-            if (e.metaKey || e.ctrlKey) {
-                // cmd/ctrl+click — toggle this segment without clearing faces or texts.
-                editor.toggle_segment(divId);
-                refreshBoxModel();
-                redraw();
-                e.preventDefault();
-                return;
-            }
-            // Plain click — select only this segment, clear faces and texts.
-            renderer.selectedTextIds.clear();
-            editor.select_segment(divId);
-            refreshBoxModel();
-            snapshot();
-            editor.begin_divider_drag(divId, true, sr.w, sr.h);
-            setMode(dividerDragMode, { nodeId: divId });
-            e.preventDefault();
-        }
-        function handleImageSwapHit() {
-            editor.set_mouse_pos(relX, relY);
-            const hitId = editor.hit_test(relX, relY, sr.w, sr.h);
-            if (hitId === NULL_ID)
-                return false;
-            overlays.swapOverlay = { sourceId: hitId, targetId: null };
-            setMode(imageSwapMode, { sourceId: hitId, targetId: null });
-            e.preventDefault();
-            return true;
-        }
-        function handleTextHit() {
-            const textHit = renderer.hitTestText(canvasX, canvasY);
-            if (!textHit)
-                return false;
-            const el = getTextElements(editor).find(t => t.id === textHit.id);
-            if (!el)
-                return false;
-            if (e.metaKey || e.ctrlKey) {
-                // cmd/ctrl+click — toggle this text without clearing faces or segments.
-                if (renderer.selectedTextIds.has(textHit.id)) {
-                    renderer.selectedTextIds.delete(textHit.id);
-                }
-                else {
-                    renderer.selectedTextIds.add(textHit.id);
-                }
-                refreshBoxModel();
-                redraw();
-                e.preventDefault();
-                return true;
-            }
-            // Plain click — select only this text, clear faces and segments.
-            editor.select_face(NULL_ID); // clears faces + segments
-            renderer.selectedTextIds = new Set([textHit.id]);
-            ctx.onTextSelected?.(textHit.id);
-            const mmToPx = sr.w / getSpreadInfo(editor).width_mm;
-            if (textHit.part === 'rotate') {
-                const hit = renderer._textHits.find(h => h.id === textHit.id);
-                const angle = Math.atan2(canvasY - hit.cy, canvasX - hit.cx);
-                setMode(textRotateMode, {
-                    el, cx: hit.cx, cy: hit.cy,
-                    startAngle: angle, startRot: el.rotation_deg, hasMoved: false,
-                });
-            }
-            else if (textHit.part === 'corner') {
-                const hit2 = renderer._textHits.find(h => h.id === textHit.id);
-                const ci = textHit.cornerIndex;
-                // Corner local-space signs: 0=TL(-,-), 1=TR(+,-), 2=BR(+,+), 3=BL(-,+)
-                const cornerSigns = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
-                const [sdx, sdy] = cornerSigns[ci]; // dragged corner signs
-                const sfx = -sdx, sfy = -sdy; // fixed (opposite) corner signs
-                const θ = el.rotation_deg * Math.PI / 180;
-                const cos_t = Math.cos(θ), sin_t = Math.sin(θ);
-                const hw = hit2.hw, hh = hit2.hh;
-                // Fixed corner in canvas px (canvas rotation: x'=x·cos-y·sin, y'=x·sin+y·cos)
-                const fx = hit2.cx + sfx * hw * cos_t - sfy * hh * sin_t;
-                const fy = hit2.cy + sfx * hw * sin_t + sfy * hh * cos_t;
-                // Direction vector from fixed corner to dragged corner at scale=1
-                const ddx = -2 * sfx * hw * cos_t + 2 * sfy * hh * sin_t;
-                const ddy = -2 * sfx * hw * sin_t - 2 * sfy * hh * cos_t;
-                setMode(textResizeMode, {
-                    el, cornerIndex: ci, fx, fy, ddx, ddy, d2: ddx * ddx + ddy * ddy,
-                    hw0: hw, hh0: hh, sign_fx: sfx, sign_fy: sfy, cos_t, sin_t,
-                    startFontSize: el.font_size_pt, mmToPx, srX: sr.x, srY: sr.y, hasMoved: false,
-                });
-            }
-            else {
-                setMode(textDragMode, {
-                    el, startMouseX: relX, startMouseY: relY,
-                    startX: el.x_mm, startY: el.y_mm, mmToPx, hasMoved: false,
-                });
-            }
-            redraw();
-            e.preventDefault();
-            return true;
-        }
-        function handleLeafHit() {
-            editor.set_mouse_pos(relX, relY);
-            const insideSpread = relX >= 0 && relX <= sr.w && relY >= 0 && relY <= sr.h;
-            const hitId = insideSpread ? editor.hit_test(relX, relY, sr.w, sr.h) : NULL_ID;
-            if (hitId !== NULL_ID) {
-                if (e.metaKey || e.ctrlKey) {
-                    // cmd/ctrl+click — toggle this face without clearing segments or texts.
-                    editor.toggle_selection(hitId);
-                    refreshBoxModel();
-                    redraw();
-                    e.preventDefault();
-                    return;
-                }
-                // Plain click — clear texts and segments, select only this face.
-                renderer.selectedTextIds.clear();
-                if (!editor.is_selected(hitId) || editor.get_selection_count() > 1 || editor.get_selected_segment() !== NULL_ID) {
-                    editor.select_face(hitId);
-                    refreshBoxModel();
-                    redraw();
-                }
-                const t = getFrameTransform(editor, hitId);
-                if (t) {
-                    const frame = getRenderList(editor, sr.w, sr.h).find(f => f.id === hitId);
-                    if (frame && frame.image_id && renderer.imageCache.has(frame.image_id)) {
-                        const img = renderer.imageCache.get(frame.image_id);
-                        const iw = img instanceof ImageBitmap ? img.width : img.naturalWidth;
-                        const ih = img instanceof ImageBitmap ? img.height : img.naturalHeight;
-                        if (img && iw) {
-                            const { w: rw, h: rh } = frame.rect;
-                            const cov = computeImageCover(rw, rh, iw, ih, t.pan_x, t.pan_y, t.scale ?? 1.0, t.rotation_deg ?? 0);
-                            if (!cov)
-                                return;
-                            setMode(imagePanMode, {
-                                nodeId: hitId, startX: relX, startY: relY,
-                                startPanX: t.pan_x, startPanY: t.pan_y,
-                                overflowX: cov.overflow_x, overflowY: cov.overflow_y, hasMoved: false,
-                            });
-                            e.preventDefault();
-                        }
-                    }
-                }
-            }
-            else {
-                editor.select_face(NULL_ID); // clears faces + segments
-                renderer.selectedTextIds.clear();
-                refreshBoxModel();
-                redraw();
-                setMode(marqueeMode, { startX: relX, startY: relY, shiftKey: false });
-                ctx.canvasEl.style.cursor = 'crosshair';
-                e.preventDefault();
-            }
-        }
-        function handleEdgeHit() {
-            const edge = _hoveredEdge;
-            const axis = (edge === 'top' || edge === 'bottom') ? 'h' : 'v';
-            const newIsFirst = edge === 'top' || edge === 'left';
-            snapshot();
-            setMode(edgeLiveDragMode, { edge, axis, newIsFirst, spawned: false, segmentId: NULL_ID });
-            e.preventDefault();
-        }
+        const { editor, renderer, snapshot, refreshBoxModel, redraw, setMode } = ctx;
+        const geo = ctx.toSpread(e);
+        const { sr, relX, relY } = geo;
         if (_hoveredEdge !== null) {
-            handleEdgeHit();
+            idleHandleEdgeHit(e, ctx, geo);
             return;
         }
-        // X-junction handle → begin pinwheel spawn drag.
-        if (renderer.hoveredXJunction !== null) {
-            const jx = renderer.hoveredXJunction;
-            snapshot();
-            editor.begin_pinwheel_spawn(jx.tl_id, jx.tr_id, jx.bl_id, jx.br_id, jx.nx, jx.ny);
-            setMode(pinwheelSpawnMode, { junction: jx, spreadRect: sr });
-            e.preventDefault();
-            return;
-        }
+        // Transform box handles take precedence over X-junction pinwheel handles.
         if (renderer.hoveredTwinHandle !== null) {
             const th = renderer.hoveredTwinHandle;
             editor.select_segment(th.edge_id);
@@ -323,20 +323,29 @@ export const idleMode = {
             return;
         }
         if (renderer.hoveredRotationHandle) {
-            handleRotationHandle();
+            idleHandleRotationHandle(e, ctx, geo);
             return;
         }
         if (renderer.hoveredMarginHandle !== null) {
-            handleMarginHandle();
+            idleHandleMarginHandle(e, ctx, geo);
+            return;
+        }
+        // X-junction handle → begin pinwheel spawn drag.
+        if (renderer.hoveredXJunction !== null) {
+            const jx = renderer.hoveredXJunction;
+            snapshot();
+            editor.begin_pinwheel_spawn(jx.tl_id, jx.tr_id, jx.bl_id, jx.br_id, jx.nx, jx.ny);
+            setMode(pinwheelSpawnMode, { junction: jx, spreadRect: sr });
+            e.preventDefault();
             return;
         }
         if (renderer.hoveredDivider !== null) {
-            handleDividerHit();
+            idleHandleDividerHit(e, ctx, geo);
             return;
         }
-        if (e.altKey && handleImageSwapHit())
+        if (e.altKey && idleHandleImageSwapHit(e, ctx, geo))
             return;
-        if (handleTextHit())
+        if (idleHandleTextHit(e, ctx, geo))
             return;
         if (e.shiftKey) {
             setMode(marqueeMode, { startX: relX, startY: relY, shiftKey: true });
@@ -344,7 +353,7 @@ export const idleMode = {
             e.preventDefault();
             return;
         }
-        handleLeafHit();
+        idleHandleLeafHit(e, ctx, geo);
     },
     onMouseMove(e, ctx) {
         const { editor, renderer, spreadRect, redraw, canvasEl } = ctx;
@@ -353,12 +362,14 @@ export const idleMode = {
         const cx = e.clientX - rect.left;
         const cy = e.clientY - rect.top;
         editor.set_mouse_pos(cx - sr.x, cy - sr.y);
-        const changed = renderer.updateHover(editor, cx, cy, sr);
+        const changed = renderer.updateHover(editor, cx, cy);
         // Twin handle hit test (uses cached handles from last draw).
+        // Twin handles are positioned relative to the layout rect origin, not the full spread origin.
         const TWIN_HIT_R = 11;
+        const layoutX = renderer.lastLayoutRect.x;
         let newTwinHover = null;
         for (const th of renderer._twinHandles) {
-            const dx = cx - (sr.x + th.x);
+            const dx = cx - (layoutX + th.x);
             const dy = cy - (sr.y + th.y);
             if (dx * dx + dy * dy <= TWIN_HIT_R * TWIN_HIT_R) {
                 newTwinHover = th;
@@ -369,8 +380,11 @@ export const idleMode = {
             (newTwinHover !== null && renderer.hoveredTwinHandle !== null &&
                 newTwinHover.edge_id !== renderer.hoveredTwinHandle.edge_id);
         renderer.hoveredTwinHandle = newTwinHover;
-        // X-junction handle hit test.
-        const newXJunction = renderer.xJunctionAt(cx, cy, sr);
+        // X-junction handle hit test — suppressed when a transform box handle is active.
+        const transformHandleActive = newTwinHover !== null
+            || renderer.hoveredRotationHandle
+            || renderer.hoveredMarginHandle !== null;
+        const newXJunction = transformHandleActive ? null : renderer.xJunctionAt(cx, cy, sr);
         const xjChanged = (newXJunction !== null) !== (renderer.hoveredXJunction !== null) ||
             (newXJunction !== null && renderer.hoveredXJunction !== null &&
                 newXJunction.tl_id !== renderer.hoveredXJunction.tl_id);
@@ -394,14 +408,14 @@ export const idleMode = {
         if (renderer.hoveredTwinHandle !== null) {
             canvasEl.style.cursor = 'pointer';
         }
-        else if (renderer.hoveredXJunction !== null) {
-            canvasEl.style.cursor = 'crosshair';
-        }
         else if (renderer.hoveredRotationHandle) {
             canvasEl.style.cursor = 'grab';
         }
         else if (renderer.hoveredMarginHandle !== null) {
             canvasEl.style.cursor = MARGIN_HANDLE_CURSORS[renderer.hoveredMarginHandle] ?? 'default';
+        }
+        else if (renderer.hoveredXJunction !== null) {
+            canvasEl.style.cursor = 'crosshair';
         }
         else if (renderer.hoveredDivider !== null) {
             const divs = getDividers(editor, sr.w, sr.h);
@@ -477,7 +491,7 @@ export const marginDragMode = {
             d2 = Math.round(d2 / marginStepMm) * marginStepMm;
         }
         const margins = { ...startMargins };
-        const clamp = (v) => Math.max(0, v);
+        const clamp = (v) => v;
         if (e.shiftKey && e.altKey) {
             // Largest displacement only, plus its opposite.
             if (Math.abs(d1) >= Math.abs(d2)) {
@@ -792,9 +806,13 @@ export const textPlaceMode = {
             return;
         const { editor, renderer, toSpread, snapshot, redraw, setMode, canvasEl } = ctx;
         const { sr, relX, relY } = toSpread(e);
+        if (relX < 0 || relX > sr.w || relY < 0 || relY > sr.h)
+            return;
         const spreadInfo = getSpreadInfo(editor);
-        const mmToPx = sr.w / spreadInfo.width_mm;
-        const x_mm = relX / mmToPx;
+        const layoutMm = spreadInfo.endpaper_side ? spreadInfo.page_width_mm : spreadInfo.width_mm;
+        const mmToPx = sr.w / layoutMm;
+        const layoutOffsetMm = spreadInfo.endpaper_side === 'left' ? spreadInfo.page_width_mm : 0;
+        const x_mm = layoutOffsetMm + relX / mmToPx;
         const y_mm = relY / mmToPx;
         snapshot();
         const newId = addTextElement(editor, x_mm, y_mm);
@@ -871,7 +889,7 @@ export const textResizeMode = {
         const cx_new = state.fx - state.sign_fx * hw_new * state.cos_t + state.sign_fy * hh_new * state.sin_t;
         const cy_new = state.fy - state.sign_fx * hw_new * state.sin_t - state.sign_fy * hh_new * state.cos_t;
         // New bounding-box top-left → mm coords.
-        const x_mm_new = (cx_new - hw_new - state.srX) / state.mmToPx;
+        const x_mm_new = (cx_new - hw_new - state.spreadOriginX) / state.mmToPx;
         const y_mm_new = (cy_new - hh_new - state.srY) / state.mmToPx;
         const newFontSize = Math.max(1, state.startFontSize * sActual);
         const updated = { ...state.el, font_size_pt: newFontSize, x_mm: x_mm_new, y_mm: y_mm_new };

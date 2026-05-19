@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Photobook Editor</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="fontawesome/css/fontawesome.min.css" />
+  <link rel="stylesheet" href="fontawesome/css/solid.min.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -14,20 +16,19 @@
       <div class="toolbar-actions">
         <button id="btn-open-project" title="Open project file">Open</button>
         <button id="btn-save-project" title="Save project file">Save</button>
-        <button id="btn-add-spread" title="Add spread">+ Spread</button>
-        <button id="btn-add-text" title="Add text element">+ Text</button>
-        <button id="btn-cut-tool" title="Cut tool (X)">&#9986; Cut</button>
+        <button id="btn-add-text" title="Add text element (T)">+ Text</button>
+        <button id="btn-cut-tool" title="Cut tool (K)"><i class="fa-solid fa-scissors" aria-hidden="true"></i> Cut</button>
         <button id="btn-export-pdf" title="Export PDF">Export PDF</button>
         <div id="export-progress" class="export-progress" hidden>
           <div class="export-progress-bar"></div>
         </div>
       </div>
       <div class="toolbar-right">
-        <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>↺ Undo</button>
-        <button id="btn-redo" title="Redo (Ctrl+Y)" disabled>↻ Redo</button>
+        <button id="btn-undo" title="Undo (Ctrl+Z)" disabled><i class="fa-solid fa-rotate-left" aria-hidden="true"></i> Undo</button>
+        <button id="btn-redo" title="Redo (Ctrl+Y)" disabled><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Redo</button>
         <button id="btn-debug-dump" title="Export PSLG debug dump">Debug</button>
-        <button id="btn-docs" title="Documentation">? Docs</button>
-        <button id="btn-project-settings" title="Project settings" class="icon-btn">&#9881;</button>
+        <button id="btn-docs" title="Documentation"><i class="fa-solid fa-circle-question" aria-hidden="true"></i> Docs</button>
+        <button id="btn-project-settings" title="Project settings" class="icon-btn"><i class="fa-solid fa-gear"></i></button>
       </div>
     </header>
 
@@ -37,6 +38,7 @@
         <div class="sidebar-header">
           <button id="btn-open-folder">Open Folder</button>
         </div>
+        <div id="folder-breadcrumb" hidden></div>
         <div id="image-grid"></div>
       </aside>
 
@@ -46,11 +48,11 @@
           <div id="missing-images-banner" class="missing-images-banner" hidden>
             <span id="missing-images-text"></span>
             <button id="btn-open-folder-banner">Open image folder</button>
-            <button id="btn-dismiss-banner" class="banner-dismiss" title="Dismiss">&#x2715;</button>
+            <button id="btn-dismiss-banner" class="banner-dismiss" title="Dismiss"><i class="fa-solid fa-xmark"></i></button>
           </div>
           <div id="font-toast" class="font-toast" hidden>
             <span id="font-toast-text"></span>
-            <button id="btn-dismiss-font-toast" class="banner-dismiss" title="Dismiss">&#x2715;</button>
+            <button id="btn-dismiss-font-toast" class="banner-dismiss" title="Dismiss"><i class="fa-solid fa-xmark"></i></button>
           </div>
         </div>
         <div id="canvas-center">
@@ -58,10 +60,10 @@
             <canvas id="main-canvas"></canvas>
           </div>
           <div id="zoom-controls">
-            <button id="btn-zoom-out" title="Zoom out">−</button>
+            <button id="btn-zoom-out" title="Zoom out (Ctrl+-)">−</button>
             <span id="zoom-label">100%</span>
-            <button id="btn-zoom-in" title="Zoom in">+</button>
-            <button id="btn-zoom-fit" title="Fit to window">Fit</button>
+            <button id="btn-zoom-in" title="Zoom in (Ctrl++)">+</button>
+            <button id="btn-zoom-fit" title="Reset zoom to 100% (Ctrl+0)">Fit</button>
           </div>
         </div>
       </main>
@@ -81,16 +83,21 @@
 
     <!-- Footer: page switcher -->
     <footer id="footer">
-      <button id="btn-prev-spread" title="Previous spread">&#8592;</button>
+      <button id="btn-prev-spread" title="Previous spread (←)"><i class="fa-solid fa-chevron-left"></i></button>
       <div id="spread-thumbnails"></div>
-      <button id="btn-next-spread" title="Next spread">&#8594;</button>
+      <button id="btn-next-spread" title="Next spread (→)"><i class="fa-solid fa-chevron-right"></i></button>
+      <div class="footer-spread-actions">
+        <button id="btn-add-spread" title="Add spread (N)">+ Spread</button>
+        <button id="btn-remove-spread" title="Remove spread (Backspace)">− Spread</button>
+        <span id="spread-count-label" class="spread-count-label"></span>
+      </div>
     </footer>
   </div>
 
   <dialog id="project-settings-modal" class="ps-modal">
     <div class="ps-modal-header">
       <h2>Project Settings</h2>
-      <button id="btn-psm-close" class="docs-close" title="Close">&#x2715;</button>
+      <button id="btn-psm-close" class="docs-close" title="Close"><i class="fa-solid fa-xmark"></i></button>
     </div>
     <div id="psm-content" class="ps-modal-content"></div>
   </dialog>
@@ -100,7 +107,7 @@
       <nav id="docs-nav" class="docs-nav"></nav>
       <div id="docs-content" class="docs-content"></div>
     </div>
-    <button id="docs-close" class="docs-close" title="Close">✕</button>
+    <button id="docs-close" class="docs-close" title="Close"><i class="fa-solid fa-xmark"></i></button>
   </dialog>
 
   <script type="importmap">

@@ -1,6 +1,7 @@
 // sidebar-right.ts — Re-exports all right-sidebar panel classes.
 // Import from this file so that existing consumers don't need to know the split.
 export { BoxModelEditor } from './sidebar-box-model.js';
+export { DividerPanel } from './sidebar-divider.js';
 export { ProjectSettingsPanel } from './sidebar-project-settings.js';
 export { SpreadSettingsPanel } from './sidebar-spread-settings.js';
 export { TextElementEditor } from './sidebar-text-editor.js';

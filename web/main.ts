@@ -17,6 +17,8 @@ import { InlineEditor } from './inline-editor.js';
 import { exportPdf } from './export.js';
 import { DocsPanel } from './docs-panel.js';
 import { saveProject, openProject } from './project-io.js';
+import { ImageLoaderModal } from './image-loader-modal.js';
+import { RandomizeDialog } from './randomize-dialog.js';
 
 // ---------------------------------------------------------------------------
 // Init
@@ -36,6 +38,8 @@ const renderer = new CanvasRenderer(canvasEl, () => redraw());
 
 const overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null };
 
+
+
 function fitCanvas(): void {
   const area = document.getElementById('canvas-center')!;
   renderer.resize(area.clientWidth, area.clientHeight);
@@ -50,7 +54,11 @@ function redraw(): void {
 window.addEventListener('resize', fitCanvas);
 
 function spreadRect() {
-  return renderer.spreadRect(getSpreadInfo(editor));
+  const info = getSpreadInfo(editor);
+  const sr = renderer.spreadRect(info);
+  if (!info.endpaper_side) return sr;
+  const offsetX = info.endpaper_side === 'left' ? sr.w / 2 : 0;
+  return { x: sr.x + offsetX, y: sr.y, w: sr.w / 2, h: sr.h };
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +67,7 @@ function spreadRect() {
 
 const sidebar = new ImageSidebar(
   document.getElementById('image-grid')!,
+  document.getElementById('folder-breadcrumb')!,
   // onPhotoSelect: cache proxies for all selected images and show photo panel.
   (ids) => {
     for (const id of ids) {
@@ -79,6 +88,23 @@ const sidebar = new ImageSidebar(
     if (proxy) renderer.cacheImage(id, proxy);
     if (sidebar.getSelectedIds().has(id)) refreshBoxModel();
     redraw();
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Image-loader modal
+// ---------------------------------------------------------------------------
+
+const imageLoaderModal = new ImageLoaderModal(
+  async (id, buf) => {
+    await sidebar.loadImageFromBuffer(id, buf);
+  },
+  () => {
+    checkMissingImages();
+    redraw();
+  },
+  async (handle) => {
+    await sidebar.openFolderHandle(handle);
   },
 );
 
@@ -124,6 +150,31 @@ document.getElementById('btn-open-folder')!.addEventListener('click', async () =
 });
 
 // ---------------------------------------------------------------------------
+// Missing-font toast
+// ---------------------------------------------------------------------------
+
+const fontToast     = document.getElementById('font-toast')!;
+const fontToastText = document.getElementById('font-toast-text')!;
+
+document.getElementById('btn-dismiss-font-toast')!.addEventListener('click', () => {
+  fontToast.hidden = true;
+});
+
+async function checkMissingFonts(): Promise<void> {
+  fontToast.hidden = true;
+  if (!localFontsSupported()) return;
+  const textElements = getTextElements(editor);
+  if (textElements.length === 0) return;
+  const usedFamilies = [...new Set(textElements.map(el => el.font_family))];
+  const availableFamilies = await loadLocalFonts();
+  if (availableFamilies.length === 0) return; // permission denied or API unavailable
+  const missing = usedFamilies.filter(f => !availableFamilies.includes(f));
+  if (missing.length === 0) return;
+  fontToastText.textContent = `Font${missing.length === 1 ? '' : 's'} not installed: ${missing.join(', ')}. PDF export will use a fallback font.`;
+  fontToast.hidden = false;
+}
+
+// ---------------------------------------------------------------------------
 // Right sidebar panels
 // ---------------------------------------------------------------------------
 
@@ -135,121 +186,18 @@ const panelDivider       = document.getElementById('panel-divider')!;
 const panelPhoto         = document.getElementById('panel-photo')!;
 const panelProject       = document.getElementById('panel-project')!;
 
-/** Wrap an editor mutation so it always calls redraw() afterward. */
-function editorCallback<T>(action: (data: T) => void): (data: T) => void {
-  return (data) => { action(data); redraw(); };
-}
-
-const boxEditor = new BoxModelEditor(
-  panelFace,
-  editorCallback((json: string) => editor.set_face_box_model(json)),
-  (direction) => {
-    const sel = editor.get_selected();
-    if (sel === NULL_ID) return;
+const randomizeDialog = new RandomizeDialog(
+  document.getElementById('canvas-center')!,
+  editor,
+  (nodeIds, min, max) => {
     undoManager.snapshot();
-    editor.move_face_z_order(sel, direction);
-    redraw();
-  },
-  (field: 'rotation') => {
-    showRandomizeDialog(field);
-  },
-);
-
-// Divider panel — shown when a divider chain is selected.
-const dividerPanel = new DividerPanel(
-  panelDivider,
-  (gap) => {
-    undoManager.snapshot();
-    editor.set_selected_segment_gap(gap);
-    redraw();
-  },
-);
-
-// Spread settings panel — shown in the sidebar when nothing is selected.
-const spreadPanel = new SpreadSettingsPanel(
-  panelProject,
-  (data: SpreadSettingsData) => {
-    undoManager.snapshot();
-    editor.set_spread_margin(
-      data.margin_top,
-      data.margin_right,
-      data.margin_bottom,
-      data.margin_left,
-    );
-    editor.set_spread_left_bg(data.left_bg);
-    editor.set_spread_right_bg(data.right_bg);
-    redraw();
-  },
-);
-
-// Project settings panel — lives inside the project settings modal.
-const psmContentEl = document.getElementById('psm-content')!;
-const projectPanel = new ProjectSettingsPanel(
-  psmContentEl,
-  (data: ProjectSettingsData) => {
-    undoManager.snapshot();
-    editor.set_page_settings(
-      data.page_width_mm,
-      data.page_height_mm,
-      data.bleed_mm,
-      data.safe_zone_mm,
-      data.spine_mm_per_page,
-      data.spine_min_mm,
-      data.margin_step_mm,
-      data.print_dpi,
-    );
-    redraw();
-  },
-);
-
-projectPanel.setBleedToggleHandler(editorCallback((show: boolean) => { renderer.showBleed = show; }));
-projectPanel.setSafeZoneToggleHandler(editorCallback((show: boolean) => { renderer.showSafeZone = show; }));
-
-// Project settings modal wiring.
-const projectSettingsModal = document.getElementById('project-settings-modal') as HTMLDialogElement;
-document.getElementById('btn-project-settings')!.addEventListener('click', () => {
-  projectPanel.show(currentProjectSettings());
-  projectSettingsModal.showModal();
-});
-document.getElementById('btn-psm-close')!.addEventListener('click', () => {
-  projectSettingsModal.close();
-});
-projectSettingsModal.addEventListener('click', (e) => {
-  if (e.target === projectSettingsModal) projectSettingsModal.close();
-});
-
-const photoPanel = new SidebarPhotoInfoPanel(panelPhoto, sidebar);
-
-const textEditor = new TextElementEditor(
-  panelText,
-  editorCallback((updatedEl) => {
-    const textElements = getTextElements(editor);
-    // Apply the full update to the representative (first-selected) element.
-    updateTextElement(editor, updatedEl);
-    // Propagate style properties to every other selected text element.
-    if (renderer.selectedTextIds.size > 1) {
-      for (const id of renderer.selectedTextIds) {
-        if (id === updatedEl.id) continue;
-        const existing = textElements.find(t => t.id === id);
-        if (!existing) continue;
-        updateTextElement(editor, {
-          ...existing,
-          font_family:  updatedEl.font_family,
-          font_size_pt: updatedEl.font_size_pt,
-          bold:         updatedEl.bold,
-          italic:       updatedEl.italic,
-          color:        updatedEl.color,
-          align:        updatedEl.align,
-        });
-      }
+    for (const nodeId of nodeIds) {
+      editor.set_face_frame_rotation(nodeId, min + Math.random() * (max - min));
     }
-  }),
+    refreshBoxModel();
+    redraw();
+  },
 );
-
-boxModelContainer.addEventListener('focusin', (e) => {
-  const tag = (e.target as HTMLElement).tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') undoManager.snapshot();
-});
 
 function currentProjectSettings(): ProjectSettingsData {
   const pageSize = getPageSizeMm(editor);
@@ -262,6 +210,7 @@ function currentProjectSettings(): ProjectSettingsData {
     spine_min_mm:      editor.get_spine_min_mm(),
     margin_step_mm:    editor.get_margin_step_mm(),
     print_dpi:         editor.get_print_dpi(),
+    endpapers:         editor.get_endpapers(),
   };
 }
 
@@ -277,6 +226,119 @@ function currentSpreadSettings(): SpreadSettingsData {
   };
 }
 
+function wireRightSidebar() {
+  function editorCallback<T>(action: (data: T) => void): (data: T) => void {
+    return (data) => { action(data); redraw(); };
+  }
+
+  const boxEditor = new BoxModelEditor(
+    panelFace,
+    editorCallback((json: string) => editor.set_face_box_model(json)),
+    (direction) => {
+      const sel = editor.get_selected();
+      if (sel === NULL_ID) return;
+      undoManager.snapshot();
+      editor.move_face_z_order(sel, direction);
+      refreshBoxModel();
+      redraw();
+    },
+    (field: 'rotation') => { randomizeDialog.show(field); },
+    (transform) => {
+      undoManager.snapshot();
+      switch (transform) {
+        case 'flip-h':     editor.flip_selection_h();   break;
+        case 'flip-v':     editor.flip_selection_v();   break;
+        case 'rotate-cw':  editor.rotate_selection_cw();  break;
+        case 'rotate-ccw': editor.rotate_selection_ccw(); break;
+      }
+      redraw();
+    },
+  );
+
+  const dividerPanel = new DividerPanel(
+    panelDivider,
+    (gap) => { undoManager.snapshot(); editor.set_selected_segment_gap(gap); redraw(); },
+  );
+
+  const spreadPanel = new SpreadSettingsPanel(
+    panelProject,
+    (data: SpreadSettingsData) => {
+      undoManager.snapshot();
+      editor.set_spread_margin(data.margin_top, data.margin_right, data.margin_bottom, data.margin_left);
+      editor.set_spread_left_bg(data.left_bg);
+      editor.set_spread_right_bg(data.right_bg);
+      redraw();
+    },
+  );
+
+  const psmContentEl = document.getElementById('psm-content')!;
+  const projectPanel = new ProjectSettingsPanel(
+    psmContentEl,
+    (data: ProjectSettingsData) => {
+      undoManager.snapshot();
+      editor.set_page_settings(
+        data.page_width_mm, data.page_height_mm,
+        data.bleed_mm, data.safe_zone_mm,
+        data.spine_mm_per_page, data.spine_min_mm,
+        data.margin_step_mm, data.print_dpi,
+      );
+      redraw();
+    },
+  );
+  projectPanel.setBleedToggleHandler(editorCallback((show: boolean) => { renderer.showBleed = show; }));
+  projectPanel.setSafeZoneToggleHandler(editorCallback((show: boolean) => { renderer.showSafeZone = show; }));
+  projectPanel.setEndpapersToggleHandler((enabled: boolean) => {
+    undoManager.snapshot();
+    editor.set_endpapers(enabled);
+    redraw();
+  });
+
+  const projectSettingsModal = document.getElementById('project-settings-modal') as HTMLDialogElement;
+  document.getElementById('btn-project-settings')!.addEventListener('click', () => {
+    projectPanel.show(currentProjectSettings());
+    projectSettingsModal.showModal();
+  });
+  document.getElementById('btn-psm-close')!.addEventListener('click', () => { projectSettingsModal.close(); });
+  projectSettingsModal.addEventListener('click', (e) => {
+    if (e.target === projectSettingsModal) projectSettingsModal.close();
+  });
+
+  const photoPanel = new SidebarPhotoInfoPanel(panelPhoto, sidebar);
+
+  const textEditor = new TextElementEditor(
+    panelText,
+    editorCallback((updatedEl) => {
+      const textElements = getTextElements(editor);
+      updateTextElement(editor, updatedEl);
+      if (renderer.selectedTextIds.size > 1) {
+        for (const id of renderer.selectedTextIds) {
+          if (id === updatedEl.id) continue;
+          const existing = textElements.find(t => t.id === id);
+          if (!existing) continue;
+          updateTextElement(editor, {
+            ...existing,
+            font_family:  updatedEl.font_family,
+            font_size_pt: updatedEl.font_size_pt,
+            bold:         updatedEl.bold,
+            italic:       updatedEl.italic,
+            color:        updatedEl.color,
+            align:        updatedEl.align,
+          });
+        }
+      }
+    }),
+  );
+
+  boxModelContainer.addEventListener('focusin', (e) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') undoManager.snapshot();
+  });
+
+  return { boxEditor, dividerPanel, spreadPanel, projectPanel, photoPanel, textEditor };
+}
+
+const { boxEditor, dividerPanel, spreadPanel, projectPanel, photoPanel, textEditor } = wireRightSidebar();
+
 // ---------------------------------------------------------------------------
 // Sidebar — shows all applicable panels for the current selection
 // ---------------------------------------------------------------------------
@@ -285,9 +347,13 @@ function refreshBoxModel(): void {
   const hasFaces   = editor.get_selection_count() > 0;
   const hasTexts   = renderer.selectedTextIds.size > 0;
   const hasDivider = editor.get_selected_segment_count() > 0;
-  if (hasFaces || hasTexts || hasDivider) sidebar.clearSelection();
+  if (hasFaces || hasTexts || hasDivider) {
+    sidebar.clearSelection();
+    footerSpreadSelected = false;
+  }
   const sidebarIds = sidebar.getSelectedIds();
   const hasPhotos  = sidebarIds.size > 0;
+  if (hasPhotos) footerSpreadSelected = false;
   const showPhoto  = hasPhotos;
   const hasNothing = !hasFaces && !hasTexts && !hasDivider && !showPhoto;
 
@@ -306,12 +372,13 @@ function refreshBoxModel(): void {
   sidebarRightHeader.textContent = parts.join(' · ');
 
   if (hasFaces) {
-    const selectionCount = editor.get_selection_count();
-    const bmJson = editor.get_face_box_model();
-    const sel    = editor.get_selected();
-    const zIndex = (selectionCount === 1 && sel !== NULL_ID)
+    const selectionCount  = editor.get_selection_count();
+    const bmJson          = editor.get_face_box_model();
+    const sel             = editor.get_selected();
+    const zIndex          = (selectionCount === 1 && sel !== NULL_ID)
       ? editor.get_face_z_index(sel) : undefined;
-    boxEditor.update(bmJson, zIndex, selectionCount);
+    const selectionIsRect = selectionCount > 1 && editor.selection_is_rectangular();
+    boxEditor.update(bmJson, zIndex, selectionCount, selectionIsRect);
   }
 
   if (hasTexts) {
@@ -338,14 +405,53 @@ const footer = new Footer(
   document.getElementById('spread-thumbnails')!,
   document.getElementById('btn-prev-spread') as HTMLButtonElement,
   document.getElementById('btn-next-spread') as HTMLButtonElement,
+  document.getElementById('btn-add-spread') as HTMLButtonElement,
+  document.getElementById('btn-remove-spread') as HTMLButtonElement,
+  document.getElementById('spread-count-label')!,
   (idx) => {
     if (idx < 0 || idx >= editor.get_spread_count()) return;
     inlineEditor.stop();
     editor.set_current_spread(idx);
     refreshBoxModel();
     redraw();
+    footerSpreadSelected = true;
+  },
+  (from, to) => {
+    undoManager.snapshot();
+    editor.move_spread(from, to);
+    redraw();
   },
 );
+
+// ---------------------------------------------------------------------------
+// Delete-spread confirmation dialog
+// ---------------------------------------------------------------------------
+
+let footerSpreadSelected = false;
+
+const deleteSpreadDialog = document.createElement('dialog');
+deleteSpreadDialog.className = 'confirm-dialog';
+deleteSpreadDialog.innerHTML = `
+  <p>Delete this spread?</p>
+  <div class="confirm-dialog-actions">
+    <button id="btn-dsd-cancel">Cancel</button>
+    <button id="btn-dsd-confirm" class="btn-danger">Delete</button>
+  </div>
+`;
+document.body.appendChild(deleteSpreadDialog);
+
+deleteSpreadDialog.querySelector('#btn-dsd-cancel')!.addEventListener('click', () => {
+  deleteSpreadDialog.close();
+});
+deleteSpreadDialog.querySelector('#btn-dsd-confirm')!.addEventListener('click', () => {
+  deleteSpreadDialog.close();
+  const idx = footer.currentIdx;
+  undoManager.snapshot();
+  editor.remove_page(idx);
+  footerSpreadSelected = false;
+  refreshBoxModel();
+  redraw();
+});
 
 // ---------------------------------------------------------------------------
 // Undo / redo
@@ -357,18 +463,6 @@ const undoManager = new UndoManager(
   document.getElementById('btn-redo') as HTMLButtonElement,
 );
 
-// Wire undo/redo into keyboard shortcuts.
-document.addEventListener('keydown', (e) => {
-  if ((e.target as HTMLElement).tagName === 'INPUT'
-    || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
-
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-    undoManager.undo(); refreshBoxModel(); redraw(); e.preventDefault(); return;
-  }
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
-    undoManager.redo(); refreshBoxModel(); redraw(); e.preventDefault(); return;
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Inline text editor
@@ -414,6 +508,7 @@ const interactionCtx = (): Omit<InteractionContext, 'modeState'> => ({
   editor, renderer, overlays, canvasEl, spreadRect, toSpread,
   snapshot: () => undoManager.snapshot(), refreshBoxModel, redraw,
   setMode,
+
   onTextSelected: (id: number) => {
     renderer.selectedTextIds = new Set([id]);
     refreshBoxModel();
@@ -481,11 +576,12 @@ canvasEl.addEventListener('drop', (e) => {
   }
 
   const sr = spreadRect();
+  const layoutRect = renderer.lastLayoutRect;
   const canvasRect = canvasEl.getBoundingClientRect();
-  const relX = (e.clientX - canvasRect.left) - sr.x;
-  const relY = (e.clientY - canvasRect.top)  - sr.y;
+  const relX = (e.clientX - canvasRect.left) - layoutRect.x;
+  const relY = (e.clientY - canvasRect.top)  - layoutRect.y;
 
-  const hitId = editor.hit_test(relX, relY, sr.w, sr.h);
+  const hitId = editor.hit_test(relX, relY, layoutRect.w, layoutRect.h);
   if (hitId === NULL_ID) return;
 
   undoManager.snapshot();
@@ -505,7 +601,7 @@ canvasEl.addEventListener('drop', (e) => {
   } else {
     // Multiple images — split the target frame, then assign one image per leaf.
     // First cut direction follows the frame's aspect ratio.
-    const frames = getRenderList(editor, sr.w, sr.h);
+    const frames = getRenderList(editor, layoutRect.w, layoutRect.h);
     const target = frames.find(f => f.id === hitId);
     const preferVertical = target ? target.rect.w >= target.rect.h : true;
 
@@ -562,6 +658,12 @@ document.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement).tagName === 'INPUT'
     || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
 
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+    undoManager.undo(); refreshBoxModel(); redraw(); e.preventDefault(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+    undoManager.redo(); refreshBoxModel(); redraw(); e.preventDefault(); return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
     editor.select_all();
     renderer.selectedTextIds = new Set(getTextElements(editor).map(t => t.id));
@@ -586,6 +688,13 @@ document.addEventListener('keydown', (e) => {
         canvasEl.style.cursor = 'crosshair';
         updateCutToolButton(true);
       }
+      redraw();
+      break;
+    }
+    case 'n':
+    case 'N': {
+      undoManager.snapshot();
+      editor.add_page();
       redraw();
       break;
     }
@@ -622,6 +731,10 @@ document.addEventListener('keydown', (e) => {
     }
     case 'Delete':
     case 'Backspace': {
+      if (footerSpreadSelected && footer.currentIdx > 0 && editor.get_spread_count() > (editor.get_endpapers() ? 3 : 2)) {
+        deleteSpreadDialog.showModal();
+        break;
+      }
       if (renderer.selectedTextIds.size > 0) {
         undoManager.snapshot();
         for (const id of renderer.selectedTextIds) deleteTextElement(editor, id);
@@ -641,10 +754,28 @@ document.addEventListener('keydown', (e) => {
       }
       break;
     }
-    case 'ArrowUp':    editor.navigate('up');    refreshBoxModel(); redraw(); break;
-    case 'ArrowDown':  editor.navigate('down');  refreshBoxModel(); redraw(); break;
-    case 'ArrowLeft':  editor.navigate('left');  refreshBoxModel(); redraw(); break;
-    case 'ArrowRight': editor.navigate('right'); refreshBoxModel(); redraw(); break;
+    case 'ArrowLeft':
+    case 'ArrowUp': {
+      const idx = editor.get_current_spread_index();
+      if (idx > 0) {
+        inlineEditor.stop();
+        editor.set_current_spread(idx - 1);
+        footer.update(editor, renderer);
+        refreshBoxModel(); redraw();
+      }
+      break;
+    }
+    case 'ArrowRight':
+    case 'ArrowDown': {
+      const idx = editor.get_current_spread_index();
+      if (idx < editor.get_spread_count() - 1) {
+        inlineEditor.stop();
+        editor.set_current_spread(idx + 1);
+        footer.update(editor, renderer);
+        refreshBoxModel(); redraw();
+      }
+      break;
+    }
     default: handled = false;
   }
 
@@ -672,42 +803,36 @@ document.getElementById('btn-open-project')!.addEventListener('click', async () 
     }
     return;
   }
+
+  sidebar.clearLoadedImages(); // discard images from any previous project session
   undoManager.reset();
   refreshBoxModel();
-  checkMissingImages();
   checkMissingFonts();
   footer.update(editor, renderer);
   redraw();
+
+  // Show the image-loader modal for any images not already in the sidebar.
+  const usedIds: string[] = JSON.parse(editor.get_used_image_ids());
+  const loadedIds = new Set(sidebar.loadedImageIds());
+  const missing = usedIds.filter(id => !loadedIds.has(id));
+  if (missing.length > 0) {
+    imageLoaderModal.open(missing);
+    // checkMissingImages() and redraw() are called by the modal's onClose callback.
+  } else {
+    checkMissingImages();
+  }
 });
-
-// ---------------------------------------------------------------------------
-// Missing-font toast
-// ---------------------------------------------------------------------------
-
-const fontToast     = document.getElementById('font-toast')!;
-const fontToastText = document.getElementById('font-toast-text')!;
-
-document.getElementById('btn-dismiss-font-toast')!.addEventListener('click', () => {
-  fontToast.hidden = true;
-});
-
-async function checkMissingFonts(): Promise<void> {
-  if (!localFontsSupported()) return;
-  const textElements = getTextElements(editor);
-  if (textElements.length === 0) return;
-  const usedFamilies = [...new Set(textElements.map(el => el.font_family))];
-  const availableFamilies = await loadLocalFonts();
-  if (availableFamilies.length === 0) return; // permission denied or API unavailable
-  const missing = usedFamilies.filter(f => !availableFamilies.includes(f));
-  if (missing.length === 0) return;
-  fontToastText.textContent = `Font${missing.length === 1 ? '' : 's'} not installed: ${missing.join(', ')}. PDF export will use a fallback font.`;
-  fontToast.hidden = false;
-}
 
 document.getElementById('btn-add-spread')!.addEventListener('click', () => {
   undoManager.snapshot();
   editor.add_page();
   redraw();
+});
+
+document.getElementById('btn-remove-spread')!.addEventListener('click', () => {
+  if (footer.currentIdx > 0 && editor.get_spread_count() > (editor.get_endpapers() ? 3 : 2)) {
+    deleteSpreadDialog.showModal();
+  }
 });
 
 document.getElementById('btn-add-text')!.addEventListener('click', () => {
@@ -772,11 +897,11 @@ canvasEl.addEventListener('wheel', (e) => {
     return;
   }
 
-  const sr = spreadRect();
+  const layoutRect = renderer.lastLayoutRect;
   const rect = canvasEl.getBoundingClientRect();
-  const relX = (e.clientX - rect.left) - sr.x;
-  const relY = (e.clientY - rect.top) - sr.y;
-  const hitId = editor.hit_test(relX, relY, sr.w, sr.h);
+  const relX = (e.clientX - rect.left) - layoutRect.x;
+  const relY = (e.clientY - rect.top)  - layoutRect.y;
+  const hitId = editor.hit_test(relX, relY, layoutRect.w, layoutRect.h);
   if (hitId === NULL_ID) return;
 
   e.preventDefault();
@@ -795,69 +920,6 @@ canvasEl.addEventListener('wheel', (e) => {
   }
   redraw();
 }, { passive: false });
-
-// ---------------------------------------------------------------------------
-// Randomize dialog
-// ---------------------------------------------------------------------------
-
-const randomizeDialog = document.createElement('div');
-randomizeDialog.id = 'randomize-dialog';
-randomizeDialog.hidden = true;
-randomizeDialog.innerHTML = `
-  <h5 id="rd-title">Randomize</h5>
-  <div class="rd-row">
-    <label>Min</label>
-    <input id="rd-min" type="number" step="0.01" value="0" />
-  </div>
-  <div class="rd-row">
-    <label>Max</label>
-    <input id="rd-max" type="number" step="0.01" value="1" />
-  </div>
-  <div class="rd-actions">
-    <button id="rd-cancel">Cancel</button>
-    <button id="rd-apply">Apply</button>
-  </div>
-`;
-document.getElementById('canvas-center')!.appendChild(randomizeDialog);
-
-let _rdField: 'rotation' = 'rotation';
-
-const RD_DEFAULTS: Record<string, { title: string; min: string; max: string; step: string }> = {
-  'rotation': { title: 'Randomize Rotation', min: '-15',  max: '15',  step: '0.5'  },
-};
-
-function showRandomizeDialog(field: 'rotation'): void {
-  _rdField = field;
-  const d = RD_DEFAULTS[field];
-  randomizeDialog.querySelector<HTMLElement>('#rd-title')!.textContent = d.title;
-  const minEl = randomizeDialog.querySelector<HTMLInputElement>('#rd-min')!;
-  const maxEl = randomizeDialog.querySelector<HTMLInputElement>('#rd-max')!;
-  minEl.value = d.min; minEl.step = d.step;
-  maxEl.value = d.max; maxEl.step = d.step;
-  randomizeDialog.hidden = false;
-}
-
-randomizeDialog.querySelector('#rd-cancel')!.addEventListener('click', () => {
-  randomizeDialog.hidden = true;
-});
-
-randomizeDialog.querySelector('#rd-apply')!.addEventListener('click', () => {
-  randomizeDialog.hidden = true;
-  const minVal = parseFloat((randomizeDialog.querySelector<HTMLInputElement>('#rd-min')!).value);
-  const maxVal = parseFloat((randomizeDialog.querySelector<HTMLInputElement>('#rd-max')!).value);
-  if (isNaN(minVal) || isNaN(maxVal) || minVal > maxVal) return;
-
-  const selected = getAllSelected(editor);
-  if (selected.length < 2) return;
-
-  undoManager.snapshot();
-  for (const nodeId of selected) {
-    const randVal = minVal + Math.random() * (maxVal - minVal);
-    editor.set_face_frame_rotation(nodeId, randVal);
-  }
-  refreshBoxModel();
-  redraw();
-});
 
 // ---------------------------------------------------------------------------
 // Boot

@@ -35,6 +35,12 @@ export class UndoManager {
         this.editor.load_state(this.redoStack.pop());
         this._updateButtons();
     }
+    /** Clear both stacks (called after loading a project file). */
+    reset() {
+        this.undoStack = [];
+        this.redoStack = [];
+        this._updateButtons();
+    }
     _updateButtons() {
         this.btnUndo.disabled = this.undoStack.length === 0;
         this.btnRedo.disabled = this.redoStack.length === 0;

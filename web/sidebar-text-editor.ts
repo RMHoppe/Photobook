@@ -1,6 +1,7 @@
 // sidebar-text-editor.ts — TextElementEditor panel (shown when a text element is selected).
 
 import type { TextElement } from './types.js';
+import { debounce } from './utils.js';
 
 export class TextElementEditor {
   private containerEl: HTMLElement;
@@ -8,7 +9,6 @@ export class TextElementEditor {
   private onLoadFonts: (() => Promise<void>) | null = null;
   private _built = false;
   private _current: TextElement | null = null;
-  private _emitTimer: ReturnType<typeof setTimeout> | null = null;
   private _fontFamilies: string[] = [];
 
   constructor(containerEl: HTMLElement, onChange: (el: TextElement) => void) {
@@ -211,38 +211,34 @@ export class TextElementEditor {
     });
   }
 
-  private _emit(): void {
+  private _emit = debounce(() => {
     if (!this._current) return;
-    if (this._emitTimer !== null) clearTimeout(this._emitTimer);
-    this._emitTimer = setTimeout(() => {
-      if (!this._current) return;
 
-      const gStr = (name: string): string => {
-        const el = this.containerEl.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
-          `[data-field="${name}"]`,
-        );
-        return el ? el.value : '';
-      };
-      const gNum = (name: string): number => {
-        const v = parseFloat(gStr(name));
-        return isNaN(v) ? 0 : v;
-      };
-      const activeAlign = this.containerEl.querySelector<HTMLButtonElement>('[data-align].active');
+    const gStr = (name: string): string => {
+      const el = this.containerEl.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(
+        `[data-field="${name}"]`,
+      );
+      return el ? el.value : '';
+    };
+    const gNum = (name: string): number => {
+      const v = parseFloat(gStr(name));
+      return isNaN(v) ? 0 : v;
+    };
+    const activeAlign = this.containerEl.querySelector<HTMLButtonElement>('[data-align].active');
 
-      const updated: TextElement = {
-        ...this._current,
-        content:      this._current.content ?? '',
-        font_family:  gStr('font_family'),
-        font_size_pt: Math.max(1, gNum('font_size_pt')),
-        bold:   !!this.containerEl.querySelector('[data-toggle="bold"].active'),
-        italic: !!this.containerEl.querySelector('[data-toggle="italic"].active'),
-        color:        gStr('color'),
-        align:        activeAlign?.dataset.align ?? 'left',
-        x_mm:         gNum('x_mm'),
-        y_mm:         gNum('y_mm'),
-        rotation_deg: gNum('rotation_deg'),
-      };
-      this.onChange(updated);
-    }, 150);
-  }
+    const updated: TextElement = {
+      ...this._current,
+      content:      this._current.content ?? '',
+      font_family:  gStr('font_family'),
+      font_size_pt: Math.max(1, gNum('font_size_pt')),
+      bold:   !!this.containerEl.querySelector('[data-toggle="bold"].active'),
+      italic: !!this.containerEl.querySelector('[data-toggle="italic"].active'),
+      color:        gStr('color'),
+      align:        activeAlign?.dataset.align ?? 'left',
+      x_mm:         gNum('x_mm'),
+      y_mm:         gNum('y_mm'),
+      rotation_deg: gNum('rotation_deg'),
+    };
+    this.onChange(updated);
+  }, 150);
 }

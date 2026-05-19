@@ -36,6 +36,31 @@ impl PhotobookEditor {
         self.mark_structure_dirty();
     }
 
+    pub fn move_spread(&mut self, from_idx: u32, to_idx: u32) {
+        let from = from_idx as usize;
+        let to   = to_idx   as usize;
+        let n    = self.doc.spreads.len();
+        if from == 0 || to == 0 || from == to || from >= n || to >= n { return; }
+
+        let spread = self.doc.spreads.remove(from);
+        self.doc.spreads.insert(to, spread);
+
+        // Keep current_spread pointing at the same spread after the move.
+        let cur = self.doc.current_spread;
+        self.doc.current_spread = if cur == from {
+            to
+        } else if from < to && cur > from && cur <= to {
+            cur - 1
+        } else if from > to && cur >= to && cur < from {
+            cur + 1
+        } else {
+            cur
+        };
+
+        self.spread_dirty.iter_mut().for_each(|d| *d = true);
+        self.mark_structure_dirty();
+    }
+
     pub fn set_current_spread(&mut self, spread_idx: u32) {
         let idx = spread_idx as usize;
         if idx < self.doc.spreads.len() {
@@ -55,25 +80,27 @@ impl PhotobookEditor {
 
     pub fn get_spreads_info(&self) -> String {
         #[derive(serde::Serialize)]
-        struct SpreadInfo<'a> { id: u32, label: &'a str, kind: &'static str, width_mm: f32, height_mm: f32 }
+        struct SpreadInfo<'a> { id: u32, label: &'a str, kind: &'static str, width_mm: f32, height_mm: f32, endpaper_side: Option<&'static str> }
         let h = self.doc.page_size.height_mm;
-        let info: Vec<_> = self.doc.spreads.iter().map(|s| SpreadInfo {
+        let info: Vec<_> = self.doc.spreads.iter().enumerate().map(|(i, s)| SpreadInfo {
             id: s.id,
             label: &s.label,
             kind: if s.kind == SpreadKind::Cover { "cover" } else { "content" },
             width_mm: self.doc.spread_width_mm(s),
             height_mm: h,
+            endpaper_side: self.doc.endpaper_side(i),
         }).collect();
         serde_json::to_string(&info).unwrap_or_default()
     }
 
     pub fn get_current_spread_info(&self) -> String {
+        let idx    = self.doc.current_spread;
         let spread = self.doc.current_spread();
         let w = self.doc.spread_width_mm(spread);
         let h = self.doc.page_size.height_mm;
         let spine = if spread.kind == SpreadKind::Cover { self.doc.spine_mm() } else { 0.0 };
         #[derive(serde::Serialize)]
-        struct Info<'a> { kind: &'static str, width_mm: f32, height_mm: f32, spine_mm: f32, page_width_mm: f32, left_bg: &'a str, right_bg: &'a str }
+        struct Info<'a> { kind: &'static str, width_mm: f32, height_mm: f32, spine_mm: f32, page_width_mm: f32, left_bg: &'a str, right_bg: &'a str, endpaper_side: Option<&'static str> }
         let info = Info {
             kind: if spread.kind == SpreadKind::Cover { "cover" } else { "content" },
             width_mm: w,
@@ -82,8 +109,23 @@ impl PhotobookEditor {
             page_width_mm: self.doc.page_size.width_mm,
             left_bg: &spread.left_bg,
             right_bg: &spread.right_bg,
+            endpaper_side: self.doc.endpaper_side(idx),
         };
         serde_json::to_string(&info).unwrap_or_default()
+    }
+
+    pub fn get_endpapers(&self) -> bool {
+        self.doc.endpapers
+    }
+
+    pub fn set_endpapers(&mut self, enabled: bool) {
+        self.doc.endpapers = enabled;
+        if enabled && self.doc.content_spread_count() < 2 {
+            self.add_page();
+        }
+        let n = self.doc.spreads.len();
+        self.spread_dirty.resize(n, true);
+        self.mark_structure_dirty();
     }
 
     pub fn get_spread_left_bg(&self) -> String {
@@ -129,6 +171,33 @@ impl PhotobookEditor {
 
     pub fn export_pdf(&self, images_json: &str, fonts_json: &str) -> Vec<u8> {
         crate::pdf::export_pdf(&self.doc, images_json, fonts_json)
+    }
+
+    /// Phase 1 of the staged export. Decodes images/fonts and pre-allocates
+    /// one PDF page per spread. Returns the total spread count so the caller
+    /// can loop over `pdf_export_spread`. Returns 0 on failure.
+    pub fn pdf_export_begin(&mut self, images_json: &str, fonts_json: &str) -> u32 {
+        let state = crate::pdf::pdf_export_begin(&self.doc, images_json, fonts_json);
+        let total = state.as_ref().map_or(0, |s| s.total as u32);
+        self.pdf_state = state.map(Box::new);
+        total
+    }
+
+    /// Phase 2 of the staged export. Renders one spread into the PDF.
+    /// Call this `total` times (the value returned by `pdf_export_begin`).
+    pub fn pdf_export_spread(&mut self) {
+        if let Some(state) = self.pdf_state.as_mut() {
+            crate::pdf::pdf_export_spread_one(state, &self.doc);
+        }
+    }
+
+    /// Phase 3 of the staged export. Serialises and returns the finished PDF,
+    /// then clears the internal state.
+    pub fn pdf_export_finish(&mut self) -> Vec<u8> {
+        match self.pdf_state.take() {
+            Some(state) => crate::pdf::pdf_export_finish(*state),
+            None        => Vec::new(),
+        }
     }
 
     pub fn save_state(&self) -> String {

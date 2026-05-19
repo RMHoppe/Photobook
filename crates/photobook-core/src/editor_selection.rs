@@ -257,8 +257,10 @@ impl PhotobookEditor {
 
         let Some(cur_pos) = entries.iter().position(|(_, fid)| *fid == id) else { return };
         match direction {
-            "up"   if cur_pos + 1 < entries.len() => entries.swap(cur_pos, cur_pos + 1),
-            "down" if cur_pos > 0                 => entries.swap(cur_pos, cur_pos - 1),
+            "up"    if cur_pos + 1 < entries.len() => entries.swap(cur_pos, cur_pos + 1),
+            "down"  if cur_pos > 0                 => entries.swap(cur_pos, cur_pos - 1),
+            "front" if cur_pos + 1 < entries.len() => { let e = entries.remove(cur_pos); entries.push(e); }
+            "back"  if cur_pos > 0                 => { let e = entries.remove(cur_pos); entries.insert(0, e); }
             _ => return,
         }
         let spread = &mut self.doc.current_spread_mut();

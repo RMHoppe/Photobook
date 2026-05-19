@@ -7,26 +7,33 @@
 //   ""          for border-position (Rust deserialises as BorderPosition::Mixed → skip)
 
 import type { BoxModel } from './types.js';
+import { debounce } from './utils.js';
+import { wrapField, numField, colorField, selectField } from './ui-fields.js';
+import { MarginModeController, marginSectionHtml, type MarginMode } from './margin-mode-controller.js';
+
+export type LayoutTransform = 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw';
 
 export class BoxModelEditor {
   private containerEl: HTMLElement;
   private onChange: (json: string) => void;
   private onZOrder: (direction: 'up' | 'down') => void;
   private onDiceClick: (field: 'rotation') => void;
+  private onLayoutTransform: (t: LayoutTransform) => void;
   private _built = false;
-  private _emitTimer: ReturnType<typeof setTimeout> | null = null;
-  private _marginMode: 'all' | 'xy' | 'each' = 'each';
+  private _marginCtrl!: MarginModeController;
 
   constructor(
     containerEl: HTMLElement,
     onChange: (json: string) => void,
     onZOrder: (direction: 'up' | 'down') => void,
     onDiceClick: (field: 'rotation') => void,
+    onLayoutTransform: (t: LayoutTransform) => void,
   ) {
     this.containerEl = containerEl;
     this.onChange = onChange;
     this.onZOrder = onZOrder;
     this.onDiceClick = onDiceClick;
+    this.onLayoutTransform = onLayoutTransform;
   }
 
   clear(): void {
@@ -34,7 +41,7 @@ export class BoxModelEditor {
     this._built = false;
   }
 
-  update(boxModelJson: string, zIndex?: number, selectionCount = 1): void {
+  update(boxModelJson: string, zIndex?: number, selectionCount = 1, selectionIsRect = false): void {
     const bm = JSON.parse(boxModelJson) as BoxModel;
 
     if (!this._built || this.containerEl.dataset.panel !== 'boxmodel') this._build();
@@ -44,6 +51,11 @@ export class BoxModelEditor {
     this.containerEl.querySelectorAll<HTMLButtonElement>('[data-dice]').forEach(btn => {
       btn.hidden = !multiSel;
     });
+
+    // Show layout-transform buttons when multiple frames form a complete rectangle.
+    const showTransform = multiSel && selectionIsRect;
+    const transformRow = this.containerEl.querySelector<HTMLElement>('.bm-layout-transform');
+    if (transformRow) transformRow.hidden = !showTransform;
 
     // Margin (null = mixed sentinel; allows negative values)
     this._updateMarginUI(bm.margin);
@@ -59,13 +71,11 @@ export class BoxModelEditor {
     this._setOffset('node-rotation', bm.face_rotation_deg);
 
     // Z-order label
-    const orderLabel = this.containerEl.querySelector<HTMLElement>('.bm-z-label');
-    if (orderLabel) {
-      orderLabel.textContent = zIndex !== undefined ? String(zIndex + 1) : '—';
-    }
-    const orderBtns = this.containerEl.querySelector<HTMLElement>('.bm-order-btns');
-    if (orderBtns) {
-      orderBtns.style.display = zIndex !== undefined ? '' : 'none';
+    const orderRow = this.containerEl.querySelector<HTMLElement>('.bm-order-row');
+    if (orderRow) {
+      orderRow.hidden = zIndex === undefined;
+      const orderLabel = orderRow.querySelector<HTMLElement>('.bm-z-label');
+      if (orderLabel) orderLabel.textContent = String((zIndex ?? 0) + 1);
     }
   }
 
@@ -135,46 +145,20 @@ export class BoxModelEditor {
     this._built = true;
     this.containerEl.dataset.panel = 'boxmodel';
     this.containerEl.innerHTML = `
-      <div class="bm-section">
-        <div class="bm-section-header">
-          <h4>Margin (mm)</h4>
-          <div class="margin-mode-bar">
-            <button class="margin-mode-btn" data-margin-mode="all"  title="All sides equal">All</button>
-            <button class="margin-mode-btn" data-margin-mode="xy"   title="Vertical / Horizontal">X·Y</button>
-            <button class="margin-mode-btn" data-margin-mode="each" title="Each side individually">Each</button>
-          </div>
-        </div>
-        <div class="margin-pane" data-margin-pane="all">
-          <div class="bm-grid">${this._field('margin-all', 'All', true)}</div>
-        </div>
-        <div class="margin-pane" data-margin-pane="xy">
-          <div class="bm-grid">
-            ${this._field('margin-v', 'Vertical',   true)}
-            ${this._field('margin-h', 'Horizontal', true)}
-          </div>
-        </div>
-        <div class="margin-pane" data-margin-pane="each">
-          <div class="bm-grid">
-            ${this._field('margin-top',    'Top',    true)}
-            ${this._field('margin-right',  'Right',  true)}
-            ${this._field('margin-bottom', 'Bottom', true)}
-            ${this._field('margin-left',   'Left',   true)}
-          </div>
-        </div>
-      </div>
+      ${marginSectionHtml('Margin (mm)', (name, label) => numField(name, label, { min: null }))}
       <div class="bm-section">
         <h4>Border</h4>
         <div class="bm-grid">
-          ${this._field('border-width',  'Width (mm)')}
-          ${this._field('border-radius', 'Radius (mm)')}
-          ${this._colorField('border-color', 'Color')}
+          ${numField('border-width',  'Width (mm)')}
+          ${numField('border-radius', 'Radius (mm)')}
+          ${colorField('border-color', 'Color')}
         </div>
         <div class="bm-grid" style="margin-top:4px">
-          ${this._selectField('border-position', 'Position', [
+          ${selectField('border-position', 'Position', [
             ['inner',    'Inner'],
             ['centered', 'Centered'],
             ['outer',    'Outer'],
-          ])}
+          ], true)}
         </div>
       </div>
       <div class="bm-section">
@@ -182,13 +166,23 @@ export class BoxModelEditor {
         <div class="bm-grid">
           ${this._offsetFieldWithDice('node-rotation', 'Rotation (°)', 'rotation')}
         </div>
+        <div class="bm-layout-transform" hidden>
+          <div class="bm-layout-btns">
+            <button class="bm-layout-btn" data-layout="flip-h"     title="Mirror left / right"><i class="fa-solid fa-left-right"></i></button>
+            <button class="bm-layout-btn" data-layout="flip-v"     title="Mirror top / bottom"><i class="fa-solid fa-up-down"></i></button>
+            <button class="bm-layout-btn" data-layout="rotate-cw"  title="Rotate 90° clockwise"><i class="fa-solid fa-rotate-right"></i></button>
+            <button class="bm-layout-btn" data-layout="rotate-ccw" title="Rotate 90° counter-clockwise"><i class="fa-solid fa-rotate-left"></i></button>
+          </div>
+        </div>
       </div>
       <div class="bm-section">
         <h4>Order</h4>
         <div class="bm-order-row">
           <div class="bm-order-btns">
-            <button class="bm-order-btn" data-zorder="down" title="Move down (render below)">↓</button>
-            <button class="bm-order-btn" data-zorder="up"   title="Move up (render above)">↑</button>
+            <button class="bm-order-btn" data-zorder="back"  title="Send to back"><i class="fa-solid fa-angles-down"></i></button>
+            <button class="bm-order-btn" data-zorder="down"  title="Move down (render below)"><i class="fa-solid fa-arrow-down"></i></button>
+            <button class="bm-order-btn" data-zorder="up"    title="Move up (render above)"><i class="fa-solid fa-arrow-up"></i></button>
+            <button class="bm-order-btn" data-zorder="front" title="Bring to front"><i class="fa-solid fa-angles-up"></i></button>
           </div>
           <span class="bm-z-label">—</span>
         </div>
@@ -216,39 +210,23 @@ export class BoxModelEditor {
       });
     });
 
-    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-margin-mode]').forEach(btn => {
+    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-layout]').forEach(btn => {
       btn.addEventListener('click', () => {
-        this._setMarginMode(btn.dataset.marginMode as 'all' | 'xy' | 'each');
+        this.onLayoutTransform(btn.dataset.layout as LayoutTransform);
       });
     });
+
+    this._marginCtrl = new MarginModeController(this.containerEl);
+    this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
   }
 
   // ---------------------------------------------------------------------------
-  // Field HTML builders
+  // Field HTML builders (box-model-specific)
   // ---------------------------------------------------------------------------
-
-  private _wrapField(label: string, input: string, fullWidth = false): string {
-    return `<div class="bm-field${fullWidth ? ' bm-full-width' : ''}"><label>${label}</label>${input}</div>`;
-  }
-
-  private _field(name: string, label: string, allowNegative = false): string {
-    const minAttr = allowNegative ? '' : 'min="0" ';
-    return this._wrapField(label, `<input type="number" ${minAttr}max="200" step="0.5" data-field="${name}" value="0" />`);
-  }
-
-  private _colorField(name: string, label: string): string {
-    return this._wrapField(label, `<input type="color" data-field="${name}" value="#000000" />`);
-  }
 
   private _offsetFieldWithDice(name: string, label: string, dice: string): string {
-    return this._wrapField(label,
-      `<div class="bm-input-row"><input type="number" step="0.5" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${dice}" title="Randomize across selection" hidden>⚄</button></div>`);
-  }
-
-  private _selectField(name: string, label: string, options: [string, string][]): string {
-    const opts = options.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
-    return this._wrapField(label,
-      `<select data-field="${name}"><option value="" hidden>—</option>${opts}</select>`, true);
+    return wrapField(label,
+      `<div class="bm-input-row"><input type="number" step="0.5" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${dice}" title="Randomize across selection" hidden><i class="fa-solid fa-dice"></i></button></div>`);
   }
 
   // ---------------------------------------------------------------------------
@@ -285,7 +263,7 @@ export class BoxModelEditor {
   // Margin mode selector helpers
   // ---------------------------------------------------------------------------
 
-  private _detectMarginMode(m: { top: number | null; right: number | null; bottom: number | null; left: number | null }): 'all' | 'xy' | 'each' {
+  private _detectMarginMode(m: { top: number | null; right: number | null; bottom: number | null; left: number | null }): MarginMode {
     const { top: t, right: r, bottom: b, left: l } = m;
     if (t == null || r == null || b == null || l == null) return 'each';
     if (t === r && r === b && b === l) return 'all';
@@ -295,11 +273,10 @@ export class BoxModelEditor {
 
   private _updateMarginUI(margin: { top: number | null; right: number | null; bottom: number | null; left: number | null } | undefined): void {
     const m = margin ?? { top: null, right: null, bottom: null, left: null };
-    this._marginMode = this._detectMarginMode(m);
-    this._applyMarginMode();
-    if (this._marginMode === 'all') {
+    this._marginCtrl.setMode(this._detectMarginMode(m));
+    if (this._marginCtrl.mode === 'all') {
       this._setOffset('margin-all', m.top);
-    } else if (this._marginMode === 'xy') {
+    } else if (this._marginCtrl.mode === 'xy') {
       this._setOffset('margin-v', m.top);
       this._setOffset('margin-h', m.right);
     } else {
@@ -310,10 +287,9 @@ export class BoxModelEditor {
     }
   }
 
-  private _setMarginMode(mode: 'all' | 'xy' | 'each'): void {
+  private _setMarginMode(mode: MarginMode): void {
     const prev = this._readCurrentMargins();
-    this._marginMode = mode;
-    this._applyMarginMode();
+    this._marginCtrl.setMode(mode);
     if (mode === 'all') {
       this._setOffset('margin-all', prev.top ?? prev.right ?? prev.bottom ?? prev.left ?? 0);
     } else if (mode === 'xy') {
@@ -329,11 +305,11 @@ export class BoxModelEditor {
   }
 
   private _readCurrentMargins(): { top: number | null; right: number | null; bottom: number | null; left: number | null } {
-    if (this._marginMode === 'all') {
+    if (this._marginCtrl.mode === 'all') {
       const v = this._gOffset('margin-all');
       return { top: v, right: v, bottom: v, left: v };
     }
-    if (this._marginMode === 'xy') {
+    if (this._marginCtrl.mode === 'xy') {
       const v = this._gOffset('margin-v');
       const h = this._gOffset('margin-h');
       return { top: v, right: h, bottom: v, left: h };
@@ -346,29 +322,17 @@ export class BoxModelEditor {
     };
   }
 
-  private _applyMarginMode(): void {
-    this.containerEl.querySelectorAll<HTMLElement>('[data-margin-pane]').forEach(pane => {
-      pane.classList.toggle('active', pane.dataset.marginPane === this._marginMode);
-    });
-    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-margin-mode]').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.marginMode === this._marginMode);
-    });
-  }
-
-  private _emit(): void {
-    if (this._emitTimer !== null) clearTimeout(this._emitTimer);
-    this._emitTimer = setTimeout(() => {
-      const bm = {
-        margin: this._readCurrentMargins(),
-        border: {
-          width:    this._gNum('border-width'),
-          radius:   this._gNum('border-radius'),
-          color:    this._gColor('border-color'),
-          position: this._gSel('border-position'),
-        },
-        face_rotation_deg: this._gOffset('node-rotation'),
-      };
-      this.onChange(JSON.stringify(bm));
-    }, 150);
-  }
+  private _emit = debounce(() => {
+    const bm = {
+      margin: this._readCurrentMargins(),
+      border: {
+        width:    this._gNum('border-width'),
+        radius:   this._gNum('border-radius'),
+        color:    this._gColor('border-color'),
+        position: this._gSel('border-position'),
+      },
+      face_rotation_deg: this._gOffset('node-rotation'),
+    };
+    this.onChange(JSON.stringify(bm));
+  }, 150);
 }

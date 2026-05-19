@@ -6,6 +6,15 @@
 //   3. A semaphore caps concurrent createImageBitmap calls (DECODE_CONCURRENCY).
 //   4. createImageBitmap runs off the main thread; no jank during proxy creation.
 //   5. ArrayBuffers are read lazily: only when an image is exported or assigned.
+//      Images loaded via loadImageFromBuffer() (from the image-loader modal) are
+//      stored directly in _buffers and their proxies are decoded immediately.
+//
+// Navigation:
+//   - openFolder() picks a root directory and shows its immediate contents.
+//   - Subfolder tiles navigate into that directory (shallow scan on demand).
+//   - A breadcrumb bar shows the current path; clicking any segment navigates up.
+//   - Handles accumulate across all visited directories — images remain available
+//     for export even after navigating away from the level where they were found.
 //
 // Selection model:
 //   - Click: select single image (clears previous selection).
@@ -13,18 +22,25 @@
 //   - Shift+Click: extend selection range from last-clicked item.
 //   - Drag: initiates a canvas drop using the dragged image; does not alter
 //     the sidebar selection.
-import { PROXY_MAX_PX, THUMB_MAX_PX, DECODE_CONCURRENCY } from './constants.js';
+import { PROXY_MAX_PX, THUMB_MAX_PX, DECODE_CONCURRENCY, IMAGE_EXTS } from './constants.js';
 export class ImageSidebar {
     gridEl;
+    breadcrumbEl;
     /** Called whenever the sidebar selection changes. */
     onPhotoSelect;
     onProxyReady;
+    _breadcrumb = [];
+    get _rootHandle() {
+        return this._breadcrumb[0]?.handle ?? null;
+    }
     _handles = new Map();
     _proxies = new Map(); // 800px, for canvas rendering
     _buffers = new Map(); // lazy, for PDF export
     _dims = new Map(); // natural dims, lazy
     _sizes = new Map(); // file sizes in bytes
-    /** Ordered list of IDs matching DOM order — used for shift-range selection. */
+    /** IDs loaded directly from raw buffers (no FileSystemFileHandle). */
+    _loadedIds = new Set();
+    /** Ordered list of IDs at the current nav level — used for shift-range selection. */
     _ids = [];
     /** Currently selected image IDs. */
     _selectedIds = new Set();
@@ -35,8 +51,9 @@ export class ImageSidebar {
     _queue = [];
     // IntersectionObserver — fires when a grid item enters the scroll viewport
     _observer;
-    constructor(gridEl, onPhotoSelect, onProxyReady) {
+    constructor(gridEl, breadcrumbEl, onPhotoSelect, onProxyReady) {
         this.gridEl = gridEl;
+        this.breadcrumbEl = breadcrumbEl;
         this.onPhotoSelect = onPhotoSelect;
         this.onProxyReady = onProxyReady ?? (() => { });
         this._observer = new IntersectionObserver((entries) => {
@@ -64,34 +81,134 @@ export class ImageSidebar {
         catch {
             return; // user cancelled
         }
-        // Tear down previous state.
-        this._observer.disconnect();
-        this.gridEl.innerHTML = '';
-        this._ids = [];
-        this._selectedIds = new Set();
-        this._lastClickedIdx = null;
+        await this.openFolderHandle(dirHandle);
+    }
+    /** Load a directory handle already acquired via showDirectoryPicker. */
+    async openFolderHandle(dirHandle) {
+        // Clear handle-based caches; buffer-loaded images are preserved.
+        for (const id of this._handles.keys()) {
+            this._proxies.delete(id);
+            this._dims.delete(id);
+            this._sizes.delete(id);
+        }
         this._handles.clear();
-        this._proxies.clear();
-        this._buffers.clear();
-        this._dims.clear();
-        this._sizes.clear();
-        const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'];
+        // _buffers kept intentionally: buffer-loaded entries stay for export.
+        this._breadcrumb = [{ name: dirHandle.name, handle: dirHandle }];
+        await this._loadCurrentDir();
+    }
+    // -------------------------------------------------------------------------
+    // Navigation
+    // -------------------------------------------------------------------------
+    async _navigateInto(name, handle) {
+        this._breadcrumb.push({ name, handle });
+        await this._loadCurrentDir();
+    }
+    async _navigateTo(index) {
+        this._breadcrumb = this._breadcrumb.slice(0, index + 1);
+        await this._loadCurrentDir();
+    }
+    async _loadCurrentDir() {
+        const dirHandle = this._breadcrumb.at(-1).handle;
+        // Tear down current display, preserving buffer-loaded images.
+        this._observer.disconnect();
+        for (const el of this.gridEl.querySelectorAll('.folder-thumb, .image-thumb')) {
+            if (el.classList.contains('folder-thumb') || !this._loadedIds.has(el.dataset.id))
+                el.remove();
+        }
+        this._ids = this._ids.filter(id => this._loadedIds.has(id));
+        this._selectedIds = new Set([...this._selectedIds].filter(id => this._loadedIds.has(id)));
+        this._lastClickedIdx = null;
+        this._renderBreadcrumb();
+        await this._scanCurrentLevel(dirHandle);
+    }
+    _renderBreadcrumb() {
+        if (this._breadcrumb.length <= 1) {
+            this.breadcrumbEl.hidden = true;
+            return;
+        }
+        this.breadcrumbEl.hidden = false;
+        this.breadcrumbEl.innerHTML = '';
+        for (let i = 0; i < this._breadcrumb.length; i++) {
+            if (i > 0) {
+                const sep = document.createElement('span');
+                sep.className = 'bc-sep';
+                sep.textContent = '/';
+                this.breadcrumbEl.appendChild(sep);
+            }
+            const { name } = this._breadcrumb[i];
+            if (i === this._breadcrumb.length - 1) {
+                const span = document.createElement('span');
+                span.className = 'bc-current';
+                span.textContent = name;
+                this.breadcrumbEl.appendChild(span);
+            }
+            else {
+                const btn = document.createElement('button');
+                btn.className = 'bc-link';
+                btn.textContent = name;
+                btn.addEventListener('click', () => { void this._navigateTo(i); });
+                this.breadcrumbEl.appendChild(btn);
+            }
+        }
+    }
+    async _scanCurrentLevel(dirHandle) {
+        const subDirs = [];
+        const pendingFiles = [];
+        const imageFiles = [];
         for await (const [name, handle] of dirHandle) {
-            if (handle.kind !== 'file')
-                continue;
-            if (!IMAGE_EXTS.some(ext => name.toLowerCase().endsWith(ext)))
-                continue;
-            const id = name;
-            this._handles.set(id, handle);
+            if (handle.kind === 'directory') {
+                subDirs.push({ name, handle: handle });
+            }
+            else if (handle.kind === 'file') {
+                if (!IMAGE_EXTS.some(ext => name.toLowerCase().endsWith(ext)))
+                    continue;
+                pendingFiles.push({ name, fileHandle: handle });
+            }
+        }
+        // Resolve all relative paths in parallel — avoids one sequential IPC per file.
+        const rootHandle = this._rootHandle;
+        const resolvedParts = rootHandle
+            ? await Promise.all(pendingFiles.map(f => rootHandle.resolve(f.fileHandle)))
+            : pendingFiles.map(() => null);
+        for (let i = 0; i < pendingFiles.length; i++) {
+            const { name, fileHandle } = pendingFiles[i];
+            const parts = resolvedParts[i];
+            imageFiles.push({ name, id: parts ? parts.join('/') : name, fileHandle });
+        }
+        subDirs.sort((a, b) => a.name.localeCompare(b.name));
+        imageFiles.sort((a, b) => a.name.localeCompare(b.name));
+        for (const { name, handle } of subDirs) {
+            this.gridEl.appendChild(this._makeFolderItem(name, handle));
+        }
+        for (const { name, id, fileHandle } of imageFiles) {
+            this._handles.set(id, fileHandle);
             this._ids.push(id);
             const item = this._makeItem(id, name);
             this.gridEl.appendChild(item);
-            this._observer.observe(item);
+            // Paint immediately if proxy already cached (re-visiting a directory);
+            // otherwise queue lazy decode via IntersectionObserver.
+            if (this._proxies.has(id)) {
+                this._paintThumbnail(item.querySelector('canvas'), this._proxies.get(id));
+            }
+            else {
+                this._observer.observe(item);
+            }
         }
     }
     // -------------------------------------------------------------------------
     // Grid item DOM
     // -------------------------------------------------------------------------
+    _makeFolderItem(name, handle) {
+        const div = document.createElement('div');
+        div.className = 'folder-thumb';
+        div.title = name;
+        const label = document.createElement('span');
+        label.className = 'folder-thumb-label';
+        label.textContent = name;
+        div.appendChild(label);
+        div.addEventListener('click', () => { void this._navigateInto(name, handle); });
+        return div;
+    }
     _makeItem(id, name) {
         const div = document.createElement('div');
         div.className = 'image-thumb';
@@ -108,7 +225,7 @@ export class ImageSidebar {
         // Used-badge (hidden until updateUsedBadges marks it).
         const badge = document.createElement('div');
         badge.className = 'image-used-badge';
-        badge.textContent = '✓';
+        badge.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i>';
         badge.hidden = true;
         div.appendChild(badge);
         div.addEventListener('click', (e) => this._handleClick(e, id));
@@ -125,6 +242,19 @@ export class ImageSidebar {
             this.onPhotoSelect(this._selectedIds);
         });
         return div;
+    }
+    _paintThumbnail(canvas, proxy) {
+        if (!canvas)
+            return;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#3a3a3a';
+        ctx.fillRect(0, 0, THUMB_MAX_PX, THUMB_MAX_PX);
+        const scale = Math.max(THUMB_MAX_PX / proxy.width, THUMB_MAX_PX / proxy.height);
+        const tw = Math.round(proxy.width * scale);
+        const th = Math.round(proxy.height * scale);
+        const ox = Math.floor((THUMB_MAX_PX - tw) / 2);
+        const oy = Math.floor((THUMB_MAX_PX - th) / 2);
+        ctx.drawImage(proxy, ox, oy, tw, th);
     }
     _handleClick(e, id) {
         const idx = this._ids.indexOf(id);
@@ -212,19 +342,7 @@ export class ImageSidebar {
             proxy = await createImageBitmap(file);
         }
         this._proxies.set(id, proxy);
-        // Paint thumbnail into the grid canvas, letterboxed into a square.
-        const canvas = item.querySelector('canvas');
-        if (canvas) {
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#3a3a3a';
-            ctx.fillRect(0, 0, THUMB_MAX_PX, THUMB_MAX_PX);
-            const scale = Math.max(THUMB_MAX_PX / proxy.width, THUMB_MAX_PX / proxy.height);
-            const tw = Math.round(proxy.width * scale);
-            const th = Math.round(proxy.height * scale);
-            const ox = Math.floor((THUMB_MAX_PX - tw) / 2);
-            const oy = Math.floor((THUMB_MAX_PX - th) / 2);
-            ctx.drawImage(proxy, ox, oy, tw, th);
-        }
+        this._paintThumbnail(item.querySelector('canvas'), proxy);
         this.onProxyReady(id);
     }
     // -------------------------------------------------------------------------
@@ -266,27 +384,92 @@ export class ImageSidebar {
     /**
      * Returns the natural pixel dimensions of the image, decoding it once
      * at full resolution (off main thread) then immediately freeing the bitmap.
-     * Cached after first call.
+     * Cached after first call. Falls back to _buffers for buffer-loaded images.
      */
     async ensureDimensions(id) {
         if (this._dims.has(id))
             return this._dims.get(id);
         const handle = this._handles.get(id);
-        if (!handle)
-            return null;
-        const file = await handle.getFile();
-        const bm = await createImageBitmap(file);
-        const dims = [bm.width, bm.height];
-        bm.close(); // free the full-resolution bitmap immediately
-        this._dims.set(id, dims);
-        return dims;
+        if (handle) {
+            const file = await handle.getFile();
+            const bm = await createImageBitmap(file);
+            const dims = [bm.width, bm.height];
+            bm.close();
+            this._dims.set(id, dims);
+            return dims;
+        }
+        const buf = this._buffers.get(id);
+        if (buf) {
+            const bm = await createImageBitmap(new Blob([buf]));
+            const dims = [bm.width, bm.height];
+            bm.close();
+            this._dims.set(id, dims);
+            return dims;
+        }
+        return null;
+    }
+    /** Returns the IDs of all images available for use (folder + buffer-loaded). */
+    loadedImageIds() {
+        return [...new Set([...this._handles.keys(), ...this._loadedIds])];
     }
     /**
-     * Async generator that yields buffer entries for every image in the folder.
+     * Loads an image from raw bytes, adds it to the sidebar grid, and fires
+     * onProxyReady so the canvas renderer caches it immediately.
+     * Called by the image-loader modal for each matched file.
+     */
+    async loadImageFromBuffer(id, buf) {
+        this._buffers.set(id, buf);
+        this._sizes.set(id, buf.byteLength);
+        this._loadedIds.add(id);
+        const blob = new Blob([buf]);
+        let proxy;
+        try {
+            proxy = await createImageBitmap(blob, {
+                resizeWidth: PROXY_MAX_PX,
+                resizeQuality: 'medium',
+            });
+        }
+        catch {
+            proxy = await createImageBitmap(blob);
+        }
+        this._proxies.set(id, proxy);
+        // Add grid item and paint thumbnail immediately.
+        const name = id.split('/').at(-1) ?? id;
+        const item = this._makeItem(id, name);
+        this.gridEl.appendChild(item);
+        this._ids.push(id);
+        this._paintThumbnail(item.querySelector('canvas'), proxy);
+        this.onProxyReady(id);
+    }
+    /**
+     * Removes all buffer-loaded images (added via loadImageFromBuffer).
+     * Called before loading a new project so stale images from the previous
+     * session don't remain in the sidebar.
+     */
+    clearLoadedImages() {
+        for (const id of this._loadedIds) {
+            if (this._handles.has(id))
+                continue; // keep if folder also has it
+            this._proxies.delete(id);
+            this._buffers.delete(id);
+            this._dims.delete(id);
+            this._sizes.delete(id);
+            this._selectedIds.delete(id);
+            const idx = this._ids.indexOf(id);
+            if (idx !== -1)
+                this._ids.splice(idx, 1);
+            this.gridEl.querySelector(`[data-id="${CSS.escape(id)}"]`)?.remove();
+        }
+        this._loadedIds.clear();
+        this._lastClickedIdx = null;
+    }
+    /**
+     * Async generator that yields buffer entries for every image in the sidebar.
      * Files not yet read are fetched on demand. Suitable for PDF export.
      */
     async *buffersForExport() {
-        for (const id of this._handles.keys()) {
+        const allIds = new Set([...this._handles.keys(), ...this._loadedIds]);
+        for (const id of allIds) {
             const buf = await this.getBuffer(id);
             if (!buf)
                 continue;

@@ -19,3 +19,5 @@ export const THUMB_MAX_PX = 160;
 export const PROXY_QUALITY = 0.85;
 /** Maximum concurrent image decodes (createImageBitmap calls). */
 export const DECODE_CONCURRENCY = 4;
+/** Image file extensions recognised by the sidebar and image-loader modal. */
+export const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'];

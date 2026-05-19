@@ -1,4 +1,5 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 
 :root {
   --sidebar-w: 220px;
@@ -40,16 +41,11 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   flex-shrink: 0;
 }
 .export-progress-bar {
-  width: 40%;
+  width: 0%;
   height: 100%;
   background: var(--accent);
   border-radius: 3px;
-  animation: progress-shimmer 1.2s ease-in-out infinite;
-}
-
-@keyframes progress-shimmer {
-  0%   { transform: translateX(-150%); }
-  100% { transform: translateX(400%); }
+  transition: width 0.15s ease-out;
 }
 .toolbar-right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .icon-btn { padding: 4px 8px; font-size: 15px; line-height: 1; }
@@ -162,6 +158,26 @@ aside {
   align-items: center;
 }
 
+.footer-spread-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.footer-spread-actions button {
+  padding: 2px 8px;
+}
+
+.spread-count-label {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-muted, #888);
+  margin-top: 1px;
+}
+
 /* ---- Buttons ---- */
 button {
   background: var(--border);
@@ -204,6 +220,61 @@ button.active { background: var(--accent); border-color: var(--accent); }
 }
 .image-thumb:hover { border-color: #666; }
 .image-thumb.selected { border-color: var(--accent); }
+
+/* ---- Folder navigation breadcrumb ---- */
+#folder-breadcrumb {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1px;
+  font-size: 11px;
+  background: var(--bg);
+  flex-shrink: 0;
+  min-height: 24px;
+}
+.bc-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 1px 3px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 2px;
+  line-height: 1.4;
+}
+.bc-link:hover { background: rgba(74,144,226,0.15); }
+.bc-sep { color: var(--text-muted); padding: 0 1px; user-select: none; }
+.bc-current { color: var(--text); padding: 1px 3px; }
+
+/* ---- Folder tiles in image grid ---- */
+.folder-thumb {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.folder-thumb::before {
+  content: '▸';
+  color: var(--text-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.folder-thumb:hover { background: #333; border-color: #555; }
+.folder-thumb-label {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Used-image badge — green tick in top-right corner of thumbnail */
 .image-used-badge {
@@ -544,6 +615,39 @@ button.active { background: var(--accent); border-color: var(--accent); }
   color: var(--text-muted);
 }
 
+/* Layout transform buttons (flip / rotate selection) */
+.bm-layout-transform { margin-top: 6px; }
+.bm-layout-btns {
+  display: flex;
+  gap: 3px;
+}
+.bm-layout-btn {
+  flex: 1;
+  height: 22px;
+  padding: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bm-layout-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---- Spread reorder drop indicator ---- */
+.spread-drop-indicator {
+  width: 3px;
+  align-self: stretch;
+  background: var(--accent);
+  border-radius: 2px;
+  flex-shrink: 0;
+  pointer-events: none;
+  margin: 8px 0;
+}
+
 /* ---- Spread Thumbnails ---- */
 .spread-thumb {
   flex-shrink: 0;
@@ -557,6 +661,7 @@ button.active { background: var(--accent); border-color: var(--accent); }
   overflow: hidden;
 }
 .spread-thumb.active { border-color: var(--accent); }
+.spread-thumb.dragging { opacity: 0.35; }
 .spread-thumb canvas { width: 100%; height: 100%; display: block; }
 .spread-thumb .spread-label {
   position: absolute;
@@ -638,6 +743,138 @@ button.active { background: var(--accent); border-color: var(--accent); }
   overflow-y: auto;
   flex: 1;
 }
+
+/* ---- Image-loader modal ---- */
+.ilm-dialog {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0;
+  width: min(480px, 92vw);
+  max-height: min(560px, 88vh);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  overflow: hidden;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+}
+.ilm-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.ilm-dialog::backdrop { background: rgba(0,0,0,0.55); }
+
+/* ---- Delete-spread confirmation dialog ---- */
+.confirm-dialog {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 20px 16px;
+  width: min(300px, 92vw);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+}
+.confirm-dialog p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.confirm-dialog::backdrop { background: rgba(0,0,0,0.5); }
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.confirm-dialog-actions button {
+  padding: 5px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.confirm-dialog-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.confirm-dialog-actions .btn-danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+.confirm-dialog-actions .btn-danger:hover { opacity: 0.85; }
+.ilm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ilm-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.ilm-status {
+  padding: 10px 16px 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin: 0;
+}
+.ilm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 16px 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+.ilm-list li {
+  display: flex;
+  flex-direction: column;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.ilm-list li:last-child { border-bottom: none; }
+.ilm-filename {
+  font-size: 13px;
+  color: var(--text);
+}
+.ilm-filepath {
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+.ilm-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ilm-select {
+  padding: 5px 14px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ilm-select:hover { opacity: 0.85; }
+.ilm-select:disabled { opacity: 0.4; cursor: default; }
+.ilm-continue {
+  padding: 5px 14px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ilm-continue:hover { color: var(--text); border-color: var(--text-muted); }
+.ilm-continue:disabled { opacity: 0.4; cursor: default; }
 
 /* ---- Settings modal ---- */
 #settings-modal {

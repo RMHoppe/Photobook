@@ -1,11 +1,11 @@
 // sidebar-text-editor.ts — TextElementEditor panel (shown when a text element is selected).
+import { debounce } from './utils.js';
 export class TextElementEditor {
     containerEl;
     onChange;
     onLoadFonts = null;
     _built = false;
     _current = null;
-    _emitTimer = null;
     _fontFamilies = [];
     constructor(containerEl, onChange) {
         this.containerEl = containerEl;
@@ -199,37 +199,31 @@ export class TextElementEditor {
             btn.classList.toggle('active', btn.dataset.align === value);
         });
     }
-    _emit() {
+    _emit = debounce(() => {
         if (!this._current)
             return;
-        if (this._emitTimer !== null)
-            clearTimeout(this._emitTimer);
-        this._emitTimer = setTimeout(() => {
-            if (!this._current)
-                return;
-            const gStr = (name) => {
-                const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-                return el ? el.value : '';
-            };
-            const gNum = (name) => {
-                const v = parseFloat(gStr(name));
-                return isNaN(v) ? 0 : v;
-            };
-            const activeAlign = this.containerEl.querySelector('[data-align].active');
-            const updated = {
-                ...this._current,
-                content: this._current.content ?? '',
-                font_family: gStr('font_family'),
-                font_size_pt: Math.max(1, gNum('font_size_pt')),
-                bold: !!this.containerEl.querySelector('[data-toggle="bold"].active'),
-                italic: !!this.containerEl.querySelector('[data-toggle="italic"].active'),
-                color: gStr('color'),
-                align: activeAlign?.dataset.align ?? 'left',
-                x_mm: gNum('x_mm'),
-                y_mm: gNum('y_mm'),
-                rotation_deg: gNum('rotation_deg'),
-            };
-            this.onChange(updated);
-        }, 150);
-    }
+        const gStr = (name) => {
+            const el = this.containerEl.querySelector(`[data-field="${name}"]`);
+            return el ? el.value : '';
+        };
+        const gNum = (name) => {
+            const v = parseFloat(gStr(name));
+            return isNaN(v) ? 0 : v;
+        };
+        const activeAlign = this.containerEl.querySelector('[data-align].active');
+        const updated = {
+            ...this._current,
+            content: this._current.content ?? '',
+            font_family: gStr('font_family'),
+            font_size_pt: Math.max(1, gNum('font_size_pt')),
+            bold: !!this.containerEl.querySelector('[data-toggle="bold"].active'),
+            italic: !!this.containerEl.querySelector('[data-toggle="italic"].active'),
+            color: gStr('color'),
+            align: activeAlign?.dataset.align ?? 'left',
+            x_mm: gNum('x_mm'),
+            y_mm: gNum('y_mm'),
+            rotation_deg: gNum('rotation_deg'),
+        };
+        this.onChange(updated);
+    }, 150);
 }

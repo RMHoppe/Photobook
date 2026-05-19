@@ -22,7 +22,16 @@
       "Bash(grep -B4 \"unused import: \\\\`EPS\\\\`\")",
       "Bash(grep -A3 \"unused import: \\\\`EPS\\\\`\")",
       "Bash(npm run *)",
-      "Bash(grep -E \"error|warning.*unused|^$\")"
+      "Bash(grep -E \"error|warning.*unused|^$\")",
+      "Bash(grep -E \"\\\\.\\(ts|js|tsx\\)$\")",
+      "Bash(~/.cargo/bin/wasm-pack build *)",
+      "Bash(./build.sh)",
+      "Bash(grep -E \"\\\\.\\(ts|js\\)$\")",
+      "Bash(cp -r node_modules/@fortawesome/fontawesome-free/css /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/web/fontawesome/css)",
+      "Bash(cp -r node_modules/@fortawesome/fontawesome-free/webfonts /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/web/fontawesome/webfonts)",
+      "Bash(rustup show *)",
+      "Bash(rustup target *)",
+      "Bash(PATH=__TRACKED_VAR__/.cargo/bin:__TRACKED_VAR__ wasm-pack build crates/photobook-core --target web --out-dir web/pkg --release)"
     ]
   }
 }
