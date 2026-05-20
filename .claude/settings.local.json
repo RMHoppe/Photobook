@@ -31,7 +31,9 @@
       "Bash(cp -r node_modules/@fortawesome/fontawesome-free/webfonts /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/web/fontawesome/webfonts)",
       "Bash(rustup show *)",
       "Bash(rustup target *)",
-      "Bash(PATH=__TRACKED_VAR__/.cargo/bin:__TRACKED_VAR__ wasm-pack build crates/photobook-core --target web --out-dir web/pkg --release)"
+      "Bash(PATH=__TRACKED_VAR__/.cargo/bin:__TRACKED_VAR__ wasm-pack build crates/photobook-core --target web --out-dir web/pkg --release)",
+      "Bash(git -C /Users/hoppe/Documents/ClaudeCodeProjects/Photobook ls-files --others --ignored --exclude-standard web/fontawesome/)",
+      "Bash(git -C /Users/hoppe/Documents/ClaudeCodeProjects/Photobook ls-files web/fontawesome/)"
     ]
   }
 }
