@@ -83,6 +83,8 @@ const imageLoaderModal = new ImageLoaderModal(async (id, buf) => {
     redraw();
 }, async (handle) => {
     await sidebar.openFolderHandle(handle);
+}, async (files) => {
+    await sidebar.openFolderFallback(files);
 });
 // ---------------------------------------------------------------------------
 // Missing-images banner

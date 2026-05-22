@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="stylesheet" href="fontawesome/css/fontawesome.min.css" />
   <link rel="stylesheet" href="fontawesome/css/solid.min.css" />
+  <link rel="stylesheet" href="fontawesome/css/regular.min.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -39,6 +40,11 @@
           <button id="btn-open-folder">Open Folder</button>
         </div>
         <div id="folder-breadcrumb" hidden></div>
+        <div id="sidebar-empty-state">
+          <i class="fa-solid fa-folder-open"></i>
+          <p>Click <strong>Open Folder</strong> to browse photos</p>
+          <p class="empty-hint">or open a saved project file</p>
+        </div>
         <div id="image-grid"></div>
       </aside>
 

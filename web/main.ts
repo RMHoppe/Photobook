@@ -106,6 +106,9 @@ const imageLoaderModal = new ImageLoaderModal(
   async (handle) => {
     await sidebar.openFolderHandle(handle);
   },
+  async (files) => {
+    await sidebar.openFolderFallback(files);
+  },
 );
 
 // ---------------------------------------------------------------------------

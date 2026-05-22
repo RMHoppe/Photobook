@@ -225,7 +225,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
         let Some(face) = spread.layout.faces.get(face_id) else { continue };
         let frame_page = frame_page_rect(spread_rect, region.x);
         let border = &face.box_model.border;
-        if border.width > 0.0 {
+        if border.any_nonzero() {
             let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
             layer.save_graphics_state();
             apply_node_ctm(&layer, node_rotation, &frame_page, bleed, ph);
@@ -734,40 +734,78 @@ fn draw_border_rect(
     page_h_mm: f32,
     border: &Border,
 ) {
-    let hw = border.width / 2.0;
-    let (fx, fy, fw, fh) = match border.position {
-        BorderPosition::Inner => (
-            frame.x + hw, frame.y + hw,
-            (frame.w - border.width).max(0.0),
-            (frame.h - border.width).max(0.0),
-        ),
-        BorderPosition::Outer => (
-            frame.x - hw, frame.y - hw,
-            frame.w + border.width,
-            frame.h + border.width,
-        ),
-        BorderPosition::Centered | BorderPosition::Mixed => (frame.x, frame.y, frame.w, frame.h),
-    };
+    let (wt, wr, wb, wl) = border.side_widths();
+    let (cr, cg, cb) = parse_hex_color(&border.color);
+    layer.set_outline_color(Color::Rgb(Rgb::new(cr, cg, cb, None)));
 
-    // Adjust corner radius for border position so the stroke follows the same curve.
-    let base_r = border.radius.max(0.0);
-    let stroke_r = match border.position {
-        BorderPosition::Inner  => (base_r - hw).max(0.0),
-        BorderPosition::Outer  => base_r + hw,
-        BorderPosition::Centered | BorderPosition::Mixed => base_r,
-    };
+    // When all sides are equal, use the rounded-rect path (supports border_radius).
+    if wt == wr && wr == wb && wb == wl {
+        let w = wt;
+        let hw = w / 2.0;
+        let (fx, fy, fw, fh) = match border.position {
+            BorderPosition::Inner => (
+                frame.x + hw, frame.y + hw,
+                (frame.w - w).max(0.0),
+                (frame.h - w).max(0.0),
+            ),
+            BorderPosition::Outer => (
+                frame.x - hw, frame.y - hw,
+                frame.w + w,
+                frame.h + w,
+            ),
+            BorderPosition::Centered | BorderPosition::Mixed => (frame.x, frame.y, frame.w, frame.h),
+        };
+        let base_r = border.radius.max(0.0);
+        let stroke_r = match border.position {
+            BorderPosition::Inner  => (base_r - hw).max(0.0),
+            BorderPosition::Outer  => base_r + hw,
+            BorderPosition::Centered | BorderPosition::Mixed => base_r,
+        };
+        use printpdf::lopdf::content::Operation;
+        layer.set_outline_thickness(w * 72.0 / 25.4);
+        let x1_pt = mm_to_pt(fx + bleed);
+        let y1_pt = mm_to_pt(page_h_mm + bleed - fy - fh);
+        add_rounded_rect_path(layer, x1_pt, y1_pt, mm_to_pt(fw), mm_to_pt(fh), mm_to_pt(stroke_r));
+        layer.add_operation(Operation::new("S", vec![]));
+        return;
+    }
 
-    let (r, g, b) = parse_hex_color(&border.color);
-    layer.set_outline_color(Color::Rgb(Rgb::new(r, g, b, None)));
-    layer.set_outline_thickness(border.width * 72.0 / 25.4);
-
+    // Per-side: draw 4 separate line segments.
     use printpdf::lopdf::content::Operation;
-    let x1_pt = mm_to_pt(fx + bleed);
-    let y1_pt = mm_to_pt(page_h_mm + bleed - fy - fh);
-    let fw_pt = mm_to_pt(fw);
-    let fh_pt = mm_to_pt(fh);
-    add_rounded_rect_path(layer, x1_pt, y1_pt, fw_pt, fh_pt, mm_to_pt(stroke_r));
-    layer.add_operation(Operation::new("S", vec![]));
+    use printpdf::lopdf::Object::Real;
+    let ph = page_h_mm + bleed;
+
+    let draw_line = |lw: f32, x1: f32, y1: f32, x2: f32, y2: f32| {
+        if lw <= 0.0 { return; }
+        layer.set_outline_thickness(lw * 72.0 / 25.4);
+        let (px1, py1) = (mm_to_pt(x1 + bleed), mm_to_pt(ph - y1));
+        let (px2, py2) = (mm_to_pt(x2 + bleed), mm_to_pt(ph - y2));
+        layer.add_operation(Operation::new("m", vec![Real(px1), Real(py1)]));
+        layer.add_operation(Operation::new("l", vec![Real(px2), Real(py2)]));
+        layer.add_operation(Operation::new("S", vec![]));
+    };
+
+    let (fx, fy, fw, fh) = (frame.x, frame.y, frame.w, frame.h);
+    match border.position {
+        BorderPosition::Inner => {
+            draw_line(wt, fx,        fy + wt/2.0, fx + fw,        fy + wt/2.0);
+            draw_line(wr, fx + fw - wr/2.0, fy, fx + fw - wr/2.0, fy + fh);
+            draw_line(wb, fx,        fy + fh - wb/2.0, fx + fw,   fy + fh - wb/2.0);
+            draw_line(wl, fx + wl/2.0, fy, fx + wl/2.0,           fy + fh);
+        }
+        BorderPosition::Outer => {
+            draw_line(wt, fx,        fy - wt/2.0, fx + fw,        fy - wt/2.0);
+            draw_line(wr, fx + fw + wr/2.0, fy, fx + fw + wr/2.0, fy + fh);
+            draw_line(wb, fx,        fy + fh + wb/2.0, fx + fw,   fy + fh + wb/2.0);
+            draw_line(wl, fx - wl/2.0, fy, fx - wl/2.0,           fy + fh);
+        }
+        BorderPosition::Centered | BorderPosition::Mixed => {
+            draw_line(wt, fx,      fy,      fx + fw, fy);
+            draw_line(wr, fx + fw, fy,      fx + fw, fy + fh);
+            draw_line(wb, fx,      fy + fh, fx + fw, fy + fh);
+            draw_line(wl, fx,      fy,      fx,      fy + fh);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

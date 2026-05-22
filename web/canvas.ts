@@ -599,27 +599,55 @@ export class CanvasRenderer {
 
     ctx.restore();
 
-    const hasBorder = frame.border_width > 0;
+    const bwt = frame.border_width_top, bwr = frame.border_width_right;
+    const bwb = frame.border_width_bottom, bwl = frame.border_width_left;
+    const hasBorder = bwt > 0 || bwr > 0 || bwb > 0 || bwl > 0;
     if (hasBorder) {
-      const lw = frame.border_width;
-      const hw = lw / 2;
       ctx.save();
       ctx.strokeStyle = frame.border_color;
-      ctx.lineWidth = lw;
       ctx.setLineDash([]);
-      ctx.beginPath();
-      if (frame.border_position === 'inner') {
-        const br = Math.max(0, rad - hw);
-        if (br > 0) ctx.roundRect(rx + hw, ry + hw, rw - lw, rh - lw, br);
-        else ctx.rect(rx + hw, ry + hw, rw - lw, rh - lw);
-      } else if (frame.border_position === 'outer') {
-        const br = rad + hw;
-        if (br > 0) ctx.roundRect(rx - hw, ry - hw, rw + lw, rh + lw, br);
-        else ctx.rect(rx - hw, ry - hw, rw + lw, rh + lw);
+      const allEqual = bwt === bwr && bwr === bwb && bwb === bwl;
+      if (allEqual) {
+        const lw = bwt;
+        const hw = lw / 2;
+        ctx.lineWidth = lw;
+        ctx.beginPath();
+        if (frame.border_position === 'inner') {
+          const br = Math.max(0, rad - hw);
+          if (br > 0) ctx.roundRect(rx + hw, ry + hw, rw - lw, rh - lw, br);
+          else ctx.rect(rx + hw, ry + hw, rw - lw, rh - lw);
+        } else if (frame.border_position === 'outer') {
+          const br = rad + hw;
+          if (br > 0) ctx.roundRect(rx - hw, ry - hw, rw + lw, rh + lw, br);
+          else ctx.rect(rx - hw, ry - hw, rw + lw, rh + lw);
+        } else {
+          if (rad > 0) ctx.roundRect(rx, ry, rw, rh, rad); else ctx.rect(rx, ry, rw, rh);
+        }
+        ctx.stroke();
       } else {
-        if (rad > 0) ctx.roundRect(rx, ry, rw, rh, rad); else ctx.rect(rx, ry, rw, rh);
+        const pos = frame.border_position;
+        const line = (w: number, x1: number, y1: number, x2: number, y2: number) => {
+          if (w <= 0) return;
+          ctx.lineWidth = w;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        };
+        if (pos === 'inner') {
+          line(bwt, rx,        ry + bwt/2,       rx + rw,      ry + bwt/2);
+          line(bwr, rx + rw - bwr/2, ry,          rx + rw - bwr/2, ry + rh);
+          line(bwb, rx,        ry + rh - bwb/2,  rx + rw,      ry + rh - bwb/2);
+          line(bwl, rx + bwl/2, ry,               rx + bwl/2,   ry + rh);
+        } else if (pos === 'outer') {
+          line(bwt, rx,        ry - bwt/2,       rx + rw,      ry - bwt/2);
+          line(bwr, rx + rw + bwr/2, ry,          rx + rw + bwr/2, ry + rh);
+          line(bwb, rx,        ry + rh + bwb/2,  rx + rw,      ry + rh + bwb/2);
+          line(bwl, rx - bwl/2, ry,               rx - bwl/2,   ry + rh);
+        } else {
+          line(bwt, rx,      ry,      rx + rw, ry);
+          line(bwr, rx + rw, ry,      rx + rw, ry + rh);
+          line(bwb, rx,      ry + rh, rx + rw, ry + rh);
+          line(bwl, rx,      ry,      rx,      ry + rh);
+        }
       }
-      ctx.stroke();
       ctx.restore();
     }
 

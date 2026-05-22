@@ -1,15 +1,16 @@
 // sidebar-box-model.ts — BoxModelEditor panel (shown when a frame is selected).
 //
 // Multi-selection sentinel values:
-//   -1          for f32 fields that are always ≥ 0, e.g. border.width (Rust skips value < 0)
-//   null/absent for fields that can be negative, e.g. margins and rotation (Rust Option::None → skip)
+//   null/absent for border-width fields (Rust Option::None → skip, per-side pattern)
+//   null/absent for margin and rotation (Rust Option::None → skip)
 //   "__mixed__" for color fields (Rust skips this exact string)
 //   ""          for border-position (Rust deserialises as BorderPosition::Mixed → skip)
+//   -1          for border.radius (f32 field, Rust skips if < 0)
 
 import type { BoxModel } from './types.js';
 import { debounce } from './utils.js';
-import { wrapField, numField, colorField, selectField } from './ui-fields.js';
-import { MarginModeController, marginSectionHtml, type MarginMode } from './margin-mode-controller.js';
+import { wrapField, numField, colorField, selectField, bindInputs } from './ui-fields.js';
+import { MarginModeController, marginSectionHtml, type MarginMode, type Sides, detectMarginMode } from './margin-mode-controller.js';
 
 export type LayoutTransform = 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw';
 
@@ -21,6 +22,7 @@ export class BoxModelEditor {
   private onLayoutTransform: (t: LayoutTransform) => void;
   private _built = false;
   private _marginCtrl!: MarginModeController;
+  private _borderWidthCtrl!: MarginModeController;
 
   constructor(
     containerEl: HTMLElement,
@@ -58,11 +60,18 @@ export class BoxModelEditor {
     if (transformRow) transformRow.hidden = !showTransform;
 
     // Margin (null = mixed sentinel; allows negative values)
-    this._updateMarginUI(bm.margin);
+    const margin: Sides = bm.margin ?? { top: null, right: null, bottom: null, left: null };
+    this._updateSidesUI(this._marginCtrl, 'margin', margin);
 
-    // Border
+    // Border widths (per-side, null = mixed)
     const border = bm.border ?? {};
-    this._set('border-width',    border.width    ?? 0);
+    const bw: Sides = {
+      top:    border.width_top    ?? null,
+      right:  border.width_right  ?? null,
+      bottom: border.width_bottom ?? null,
+      left:   border.width_left   ?? null,
+    };
+    this._updateSidesUI(this._borderWidthCtrl, 'bw', bw);
     this._set('border-radius',   border.radius   ?? 0);
     this._set('border-color',    border.color    ?? '#000000');
     this._set('border-position', border.position ?? 'centered');
@@ -146,10 +155,10 @@ export class BoxModelEditor {
     this.containerEl.dataset.panel = 'boxmodel';
     this.containerEl.innerHTML = `
       ${marginSectionHtml('Margin (mm)', (name, label) => numField(name, label, { min: null }))}
+      ${marginSectionHtml('Border width (mm)', (name, label) => numField(name, label), 'bw')}
       <div class="bm-section">
-        <h4>Border</h4>
+        <h4>Border style</h4>
         <div class="bm-grid">
-          ${numField('border-width',  'Width (mm)')}
           ${numField('border-radius', 'Radius (mm)')}
           ${colorField('border-color', 'Color')}
         </div>
@@ -189,14 +198,7 @@ export class BoxModelEditor {
       </div>
     `;
 
-    this.containerEl.querySelectorAll('input, select').forEach(el => {
-      const onUserInput = () => {
-        delete (el as HTMLElement & { dataset: DOMStringMap }).dataset.mixed;
-        this._emit();
-      };
-      el.addEventListener('change', onUserInput);
-      el.addEventListener('input',  onUserInput);
-    });
+    bindInputs(this.containerEl, () => this._emit());
 
     this.containerEl.querySelectorAll<HTMLButtonElement>('[data-zorder]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -217,7 +219,10 @@ export class BoxModelEditor {
     });
 
     this._marginCtrl = new MarginModeController(this.containerEl);
-    this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
+    this._marginCtrl.bindButtons(mode => this._setSidesMode(this._marginCtrl, 'margin', mode));
+
+    this._borderWidthCtrl = new MarginModeController(this.containerEl, 'bw');
+    this._borderWidthCtrl.bindButtons(mode => this._setSidesMode(this._borderWidthCtrl, 'bw', mode));
   }
 
   // ---------------------------------------------------------------------------
@@ -260,73 +265,79 @@ export class BoxModelEditor {
   }
 
   // ---------------------------------------------------------------------------
-  // Margin mode selector helpers
+  // Shared sides helpers — used for both margin ('margin') and border width ('bw')
   // ---------------------------------------------------------------------------
 
-  private _detectMarginMode(m: { top: number | null; right: number | null; bottom: number | null; left: number | null }): MarginMode {
-    const { top: t, right: r, bottom: b, left: l } = m;
-    if (t == null || r == null || b == null || l == null) return 'each';
-    if (t === r && r === b && b === l) return 'all';
-    if (t === b && l === r) return 'xy';
-    return 'each';
-  }
-
-  private _updateMarginUI(margin: { top: number | null; right: number | null; bottom: number | null; left: number | null } | undefined): void {
-    const m = margin ?? { top: null, right: null, bottom: null, left: null };
-    this._marginCtrl.setMode(this._detectMarginMode(m));
-    if (this._marginCtrl.mode === 'all') {
-      this._setOffset('margin-all', m.top);
-    } else if (this._marginCtrl.mode === 'xy') {
-      this._setOffset('margin-v', m.top);
-      this._setOffset('margin-h', m.right);
+  private _updateSidesUI(ctrl: MarginModeController, ns: string, m: Sides): void {
+    ctrl.setMode(detectMarginMode(m));
+    if (ctrl.mode === 'all') {
+      this._setOffset(`${ns}-all`, m.top);
+    } else if (ctrl.mode === 'xy') {
+      this._setOffset(`${ns}-v`, m.top);
+      this._setOffset(`${ns}-h`, m.right);
     } else {
-      this._setOffset('margin-top',    m.top);
-      this._setOffset('margin-right',  m.right);
-      this._setOffset('margin-bottom', m.bottom);
-      this._setOffset('margin-left',   m.left);
+      this._setOffset(`${ns}-top`,    m.top);
+      this._setOffset(`${ns}-right`,  m.right);
+      this._setOffset(`${ns}-bottom`, m.bottom);
+      this._setOffset(`${ns}-left`,   m.left);
     }
   }
 
-  private _setMarginMode(mode: MarginMode): void {
-    const prev = this._readCurrentMargins();
-    this._marginCtrl.setMode(mode);
+  private _setSidesMode(ctrl: MarginModeController, ns: string, mode: MarginMode): void {
+    const rank: Record<MarginMode, number> = { all: 1, xy: 2, each: 3 };
+    const refining = rank[mode] > rank[ctrl.mode];
+    const prev = this._readCurrentSides(ctrl, ns);
+    ctrl.setMode(mode);
+
     if (mode === 'all') {
-      this._setOffset('margin-all', prev.top ?? prev.right ?? prev.bottom ?? prev.left ?? 0);
+      // Always coarsening — show mixed if sides differ.
+      const same = prev.top === prev.right && prev.right === prev.bottom && prev.bottom === prev.left;
+      this._setOffset(`${ns}-all`, same ? prev.top : null);
     } else if (mode === 'xy') {
-      this._setOffset('margin-v', prev.top);
-      this._setOffset('margin-h', prev.right);
+      const v = prev.top === prev.bottom ? prev.top : null;
+      const h = prev.right === prev.left  ? prev.right : null;
+      // When refining from 'all', a null v/h means the all-field was mixed —
+      // leave the xy fields as-is (they still hold their previous concrete values).
+      if (!refining || v !== null) this._setOffset(`${ns}-v`, v);
+      if (!refining || h !== null) this._setOffset(`${ns}-h`, h);
     } else {
-      this._setOffset('margin-top',    prev.top);
-      this._setOffset('margin-right',  prev.right);
-      this._setOffset('margin-bottom', prev.bottom);
-      this._setOffset('margin-left',   prev.left);
+      // Always refining — only overwrite each field if we have a concrete value;
+      // otherwise preserve whatever the each-pane already shows.
+      if (prev.top    !== null) this._setOffset(`${ns}-top`,    prev.top);
+      if (prev.right  !== null) this._setOffset(`${ns}-right`,  prev.right);
+      if (prev.bottom !== null) this._setOffset(`${ns}-bottom`, prev.bottom);
+      if (prev.left   !== null) this._setOffset(`${ns}-left`,   prev.left);
     }
     this._emit();
   }
 
-  private _readCurrentMargins(): { top: number | null; right: number | null; bottom: number | null; left: number | null } {
-    if (this._marginCtrl.mode === 'all') {
-      const v = this._gOffset('margin-all');
+  private _readCurrentSides(ctrl: MarginModeController, ns: string): Sides {
+    if (ctrl.mode === 'all') {
+      const v = this._gOffset(`${ns}-all`);
       return { top: v, right: v, bottom: v, left: v };
     }
-    if (this._marginCtrl.mode === 'xy') {
-      const v = this._gOffset('margin-v');
-      const h = this._gOffset('margin-h');
+    if (ctrl.mode === 'xy') {
+      const v = this._gOffset(`${ns}-v`);
+      const h = this._gOffset(`${ns}-h`);
       return { top: v, right: h, bottom: v, left: h };
     }
     return {
-      top:    this._gOffset('margin-top'),
-      right:  this._gOffset('margin-right'),
-      bottom: this._gOffset('margin-bottom'),
-      left:   this._gOffset('margin-left'),
+      top:    this._gOffset(`${ns}-top`),
+      right:  this._gOffset(`${ns}-right`),
+      bottom: this._gOffset(`${ns}-bottom`),
+      left:   this._gOffset(`${ns}-left`),
     };
   }
 
   private _emit = debounce(() => {
+    const bw = this._readCurrentSides(this._borderWidthCtrl, 'bw');
     const bm = {
-      margin: this._readCurrentMargins(),
+      margin: this._readCurrentSides(this._marginCtrl, 'margin'),
       border: {
-        width:    this._gNum('border-width'),
+        width_top:    bw.top,
+        width_right:  bw.right,
+        width_bottom: bw.bottom,
+        width_left:   bw.left,
         radius:   this._gNum('border-radius'),
         color:    this._gColor('border-color'),
         position: this._gSel('border-position'),

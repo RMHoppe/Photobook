@@ -68,7 +68,10 @@ export interface RenderFrame {
   rotation_deg: number;
   is_selected: boolean;
   object_fit: ObjectFit;
-  border_width: number;
+  border_width_top: number;
+  border_width_right: number;
+  border_width_bottom: number;
+  border_width_left: number;
   border_color: string;
   border_position: BorderPosition;
   border_radius: number;
@@ -126,7 +129,13 @@ export interface EdgeInsets {
 
 /** Border styling. */
 export interface Border {
-  width: number;
+  /** Legacy uniform width — only present in old saves; new code always uses per-side fields. */
+  width?: number;
+  /** Per-side widths in mm. null = mixed (multi-selection sentinel). */
+  width_top?: number | null;
+  width_right?: number | null;
+  width_bottom?: number | null;
+  width_left?: number | null;
   color: string;
   position: BorderPosition;
   /** Corner radius in mm. 0 = sharp corners. -1 = mixed (multi-selection sentinel). */

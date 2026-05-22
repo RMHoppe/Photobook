@@ -53,6 +53,7 @@ impl<'a> GridResolver<'a> {
                 let gapped    = raw.inset(&gi);
                 let margin_px = face.box_model.margin.resolve().scale(mm_to_px);
                 let inner     = gapped.inset(&margin_px);
+                let (bwt, bwr, bwb, bwl) = face.box_model.border.side_widths();
                 Some((face.z_index, face.id, ResolvedFrame {
                     id:               face.id,
                     rect:             inner,
@@ -64,7 +65,10 @@ impl<'a> GridResolver<'a> {
                     scale:            face.image.scale,
                     rotation_deg:     face.image.rotation_deg,
                     is_selected:      self.selection.contains(&face.id),
-                    border_width:     face.box_model.border.width * mm_to_px,
+                    border_width_top:    bwt * mm_to_px,
+                    border_width_right:  bwr * mm_to_px,
+                    border_width_bottom: bwb * mm_to_px,
+                    border_width_left:   bwl * mm_to_px,
                     border_color:     face.box_model.border.color.clone(),
                     border_position:  face.box_model.border.position.clone(),
                     border_radius:    face.box_model.border.radius * mm_to_px,

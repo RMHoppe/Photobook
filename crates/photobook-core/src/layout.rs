@@ -38,8 +38,19 @@ pub enum BorderPosition {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Border {
+    /// Legacy single-width field — used as fallback when per-side fields are absent (old saves).
     #[serde(default)]
     pub width: f32,
+    /// Per-side widths in mm. None = mixed (multi-selection sentinel).
+    /// When any per-side field is Some, all rendering uses these instead of `width`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_top: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_right: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_bottom: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_left: Option<f32>,
     #[serde(default = "default_border_color")]
     pub color: String,
     #[serde(default)]
@@ -53,7 +64,37 @@ fn default_border_color() -> String { "#000000".to_string() }
 
 impl Default for Border {
     fn default() -> Self {
-        Border { width: 0.0, color: default_border_color(), position: BorderPosition::Centered, radius: 0.0 }
+        Border {
+            width: 0.0,
+            width_top: None, width_right: None, width_bottom: None, width_left: None,
+            color: default_border_color(),
+            position: BorderPosition::Centered,
+            radius: 0.0,
+        }
+    }
+}
+
+impl Border {
+    /// Returns (top, right, bottom, left) widths in mm.
+    /// Uses per-side fields when any are present; falls back to uniform `width`.
+    pub fn side_widths(&self) -> (f32, f32, f32, f32) {
+        if self.width_top.is_some() || self.width_right.is_some()
+            || self.width_bottom.is_some() || self.width_left.is_some()
+        {
+            (
+                self.width_top.unwrap_or(0.0),
+                self.width_right.unwrap_or(0.0),
+                self.width_bottom.unwrap_or(0.0),
+                self.width_left.unwrap_or(0.0),
+            )
+        } else {
+            (self.width, self.width, self.width, self.width)
+        }
+    }
+
+    pub fn any_nonzero(&self) -> bool {
+        let (t, r, b, l) = self.side_widths();
+        t > 0.0 || r > 0.0 || b > 0.0 || l > 0.0
     }
 }
 
@@ -177,7 +218,10 @@ pub struct ResolvedFrame {
     pub scale: f32,
     pub rotation_deg: f32,
     pub is_selected: bool,
-    pub border_width: f32,
+    pub border_width_top: f32,
+    pub border_width_right: f32,
+    pub border_width_bottom: f32,
+    pub border_width_left: f32,
     pub border_color: String,
     pub border_position: BorderPosition,
     /// Corner radius in canvas px (converted from mm). 0 = sharp corners.

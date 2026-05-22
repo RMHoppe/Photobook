@@ -25,6 +25,14 @@ export function colorField(name: string, label: string): string {
   return wrapField(label, `<input type="color" data-field="${name}" value="#000000" />`);
 }
 
+export function bindInputs(container: HTMLElement, handler: () => void, selector = 'input, select'): void {
+  container.querySelectorAll<HTMLElement>(selector).forEach(el => {
+    const onInput = () => { delete el.dataset.mixed; handler(); };
+    el.addEventListener('change', onInput);
+    el.addEventListener('input',  onInput);
+  });
+}
+
 export function selectField(
   name: string,
   label: string,

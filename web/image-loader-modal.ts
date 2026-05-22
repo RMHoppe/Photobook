@@ -14,6 +14,7 @@ import { IMAGE_EXTS } from './constants.js';
 
 export type ImageFoundCallback = (id: string, buf: ArrayBuffer) => Promise<void>;
 export type FolderPickedCallback = (handle: FileSystemDirectoryHandle) => Promise<void>;
+export type FilePickedCallback = (files: FileList) => Promise<void>;
 
 export class ImageLoaderModal {
   private dialog: HTMLDialogElement;
@@ -27,15 +28,18 @@ export class ImageLoaderModal {
   private _onImageFound: ImageFoundCallback;
   private _onClose: () => void;
   private _onFolderPicked?: FolderPickedCallback;
+  private _onFilePicked?: FilePickedCallback;
 
   constructor(
     onImageFound: ImageFoundCallback,
     onClose: () => void,
     onFolderPicked?: FolderPickedCallback,
+    onFilePicked?: FilePickedCallback,
   ) {
     this._onImageFound   = onImageFound;
     this._onClose        = onClose;
     this._onFolderPicked = onFolderPicked;
+    this._onFilePicked   = onFilePicked;
     this.dialog          = this._build();
     document.body.appendChild(this.dialog);
   }
@@ -124,11 +128,14 @@ export class ImageLoaderModal {
   // ---------------------------------------------------------------------------
 
   private async _selectFolder(): Promise<void> {
-    if (!('showDirectoryPicker' in window)) {
-      alert('File System Access API not supported in this browser. Use Chrome or Edge.');
-      return;
+    if ('showDirectoryPicker' in window) {
+      await this._selectFolderViaAPI();
+    } else {
+      await this._selectFolderViaInput();
     }
+  }
 
+  private async _selectFolderViaAPI(): Promise<void> {
     let dirHandle: FileSystemDirectoryHandle;
     try {
       dirHandle = await (window as typeof window & {
@@ -138,36 +145,80 @@ export class ImageLoaderModal {
       return; // user cancelled
     }
 
-    this.selectBtn.disabled  = true;
+    this.selectBtn.disabled   = true;
     this.continueBtn.disabled = true;
     this.statusEl.textContent = 'Scanning folder…';
 
     void this._onFolderPicked?.(dirHandle);
 
-    // Build lookup tables from the directory tree.
-    const byPath = new Map<string, FileSystemFileHandle>(); // relative/path → handle
-    const byName = new Map<string, FileSystemFileHandle>(); // lowercase name → first handle
+    const byPath = new Map<string, FileSystemFileHandle>();
+    const byName = new Map<string, FileSystemFileHandle>();
     await this._scan(dirHandle, dirHandle, byPath, byName);
+    await this._matchAndLoad(
+      (id) => byPath.get(id) ?? byName.get(id.split('/').at(-1)!.toLowerCase()) ?? null,
+      async (fh) => { const f = await (fh as FileSystemFileHandle).getFile(); return f.arrayBuffer(); },
+    );
+  }
 
-    // Match each pending ID and load it.
+  private _selectFolderViaInput(): Promise<void> {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type  = 'file';
+      (input as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true;
+      input.addEventListener('change', () => {
+        if (!input.files || input.files.length === 0) { resolve(); return; }
+        void this._processFileList(input.files).then(resolve);
+      });
+      input.addEventListener('cancel', () => resolve());
+      input.click();
+    });
+  }
+
+  private async _processFileList(files: FileList): Promise<void> {
+    this.selectBtn.disabled   = true;
+    this.continueBtn.disabled = true;
+    this.statusEl.textContent = 'Scanning folder…';
+
+    void this._onFilePicked?.(files);
+
+    // Build lookup tables from FileList, stripping the root folder prefix.
+    const byPath = new Map<string, File>();
+    const byName = new Map<string, File>();
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!IMAGE_EXTS.some(ext => file.name.toLowerCase().endsWith(ext))) continue;
+      const relPath   = file.webkitRelativePath;
+      const prefixLen = relPath.indexOf('/') + 1;
+      byPath.set(relPath.slice(prefixLen), file);
+      const key = file.name.toLowerCase();
+      if (!byName.has(key)) byName.set(key, file);
+    }
+
+    await this._matchAndLoad(
+      (id) => byPath.get(id) ?? byName.get(id.split('/').at(-1)!.toLowerCase()) ?? null,
+      async (f) => (f as File).arrayBuffer(),
+    );
+  }
+
+  private async _matchAndLoad<T>(
+    lookup: (id: string) => T | null,
+    readBuf: (entry: T) => Promise<ArrayBuffer>,
+  ): Promise<void> {
     const pendingSnapshot = [...this._pending];
     for (const id of pendingSnapshot) {
+      const entry = lookup(id);
+      if (!entry) continue;
+
       const basename = id.split('/').at(-1)!;
-
-      // Exact relative-path match first, then case-insensitive basename match.
-      const handle = byPath.get(id) ?? byName.get(basename.toLowerCase());
-      if (!handle) continue;
-
       this.statusEl.textContent = `Loading “${basename}”…`;
-      const file = await handle.getFile();
-      const buf  = await file.arrayBuffer();
+      const buf = await readBuf(entry);
       await this._onImageFound(id, buf);
 
       this._pending.delete(id);
       this._render();
     }
 
-    this.selectBtn.disabled  = false;
+    this.selectBtn.disabled   = false;
     this.continueBtn.disabled = false;
 
     if (this._pending.size === 0) {
@@ -191,7 +242,6 @@ export class ImageLoaderModal {
         const fh    = handle as FileSystemFileHandle;
         const parts = await rootHandle.resolve(fh);
         if (parts) byPath.set(parts.join('/'), fh);
-        // First file with this name wins (case-insensitive).
         const key = name.toLowerCase();
         if (!byName.has(key)) byName.set(key, fh);
       }

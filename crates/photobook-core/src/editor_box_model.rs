@@ -98,7 +98,17 @@ impl PhotobookEditor {
             if let Some(v) = bm.margin.right  { r.margin.right  = Some(v); }
             if let Some(v) = bm.margin.bottom { r.margin.bottom = Some(v); }
             if let Some(v) = bm.margin.left   { r.margin.left   = Some(v); }
-            if bm.border.width  >= 0.0 { r.border.width  = bm.border.width; }
+            // Per-side border widths (None = mixed sentinel → skip).
+            if let Some(v) = bm.border.width_top    { r.border.width_top    = if v >= 0.0 { Some(v) } else { None }; }
+            if let Some(v) = bm.border.width_right  { r.border.width_right  = if v >= 0.0 { Some(v) } else { None }; }
+            if let Some(v) = bm.border.width_bottom { r.border.width_bottom = if v >= 0.0 { Some(v) } else { None }; }
+            if let Some(v) = bm.border.width_left   { r.border.width_left   = if v >= 0.0 { Some(v) } else { None }; }
+            // Legacy uniform width: only apply when no per-side fields present in incoming bm.
+            let has_per_side = bm.border.width_top.is_some() || bm.border.width_right.is_some()
+                || bm.border.width_bottom.is_some() || bm.border.width_left.is_some();
+            if !has_per_side && bm.border.width >= 0.0 {
+                r.border.width = bm.border.width;
+            }
             if bm.border.radius >= 0.0 { r.border.radius = bm.border.radius; }
             if bm.border.color != MIXED_STR {
                 r.border.color = bm.border.color.clone();
@@ -117,7 +127,14 @@ impl PhotobookEditor {
             return serde_json::to_string(&BoxModel::default()).unwrap_or_default();
         }
         if bms.len() == 1 {
-            return serde_json::to_string(&bms[0]).unwrap_or_default();
+            // Normalise to always emit per-side fields (so the sidebar always reads them).
+            let mut bm = bms[0].clone();
+            let (t, r, b, l) = bm.border.side_widths();
+            bm.border.width_top    = Some(t);
+            bm.border.width_right  = Some(r);
+            bm.border.width_bottom = Some(b);
+            bm.border.width_left   = Some(l);
+            return serde_json::to_string(&bm).unwrap_or_default();
         }
         let f = &bms[0];
         let rest = &bms[1..];
@@ -126,6 +143,8 @@ impl PhotobookEditor {
         let ms = |v: &str, agree: bool| -> String {
             if agree { v.to_string() } else { "__mixed__".to_string() }
         };
+        // Resolve per-side widths for each face in the selection.
+        let (ft, fr, fb, fl) = f.border.side_widths();
         let merged = BoxModel {
             margin: MarginInsets {
                 top:    mfm(f.margin.top,    rest.iter().all(|b| b.margin.top    == f.margin.top)),
@@ -134,7 +153,11 @@ impl PhotobookEditor {
                 left:   mfm(f.margin.left,   rest.iter().all(|b| b.margin.left   == f.margin.left)),
             },
             border: Border {
-                width:  mf(f.border.width,  rest.iter().all(|b| b.border.width  == f.border.width)),
+                width: 0.0,
+                width_top:    mfm(Some(ft), rest.iter().all(|b| b.border.side_widths().0 == ft)),
+                width_right:  mfm(Some(fr), rest.iter().all(|b| b.border.side_widths().1 == fr)),
+                width_bottom: mfm(Some(fb), rest.iter().all(|b| b.border.side_widths().2 == fb)),
+                width_left:   mfm(Some(fl), rest.iter().all(|b| b.border.side_widths().3 == fl)),
                 radius: mf(f.border.radius, rest.iter().all(|b| b.border.radius == f.border.radius)),
                 color: ms(&f.border.color, rest.iter().all(|b| b.border.color == f.border.color)),
                 position: if rest.iter().all(|b| b.border.position == f.border.position) {

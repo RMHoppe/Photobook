@@ -206,7 +206,8 @@ mod tests {
         ed.set_face_box_model(json);
 
         let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();
-        assert!((bm["border"]["width"].as_f64().unwrap() - 2.5).abs() < 1e-3);
+        // get_face_box_model normalises to per-side fields.
+        assert!((bm["border"]["width_top"].as_f64().unwrap() - 2.5).abs() < 1e-3);
         assert_eq!(bm["border"]["color"].as_str().unwrap(), "#0000ff");
         assert_eq!(bm["border"]["position"].as_str().unwrap(), "inner");
     }

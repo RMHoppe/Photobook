@@ -2,7 +2,7 @@
 
 import type { ProjectSettingsData } from './types.js';
 import { debounce } from './utils.js';
-import { numField } from './ui-fields.js';
+import { numField, bindInputs } from './ui-fields.js';
 export type { ProjectSettingsData };
 
 export class ProjectSettingsPanel {
@@ -106,10 +106,7 @@ export class ProjectSettingsPanel {
       </div>
     `;
 
-    this.containerEl.querySelectorAll<HTMLInputElement>('input[type="number"]').forEach(el => {
-      el.addEventListener('change', () => this._emit());
-      el.addEventListener('input',  () => this._emit());
-    });
+    bindInputs(this.containerEl, () => this._emit(), 'input[type="number"]');
 
     const bleedChk = this.containerEl.querySelector<HTMLInputElement>('#ps-show-bleed')!;
     bleedChk.addEventListener('change', () => {

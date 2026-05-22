@@ -7,6 +7,8 @@ export class SpreadSettingsPanel {
     onChange;
     _built = false;
     _marginCtrl;
+    /** Last concrete margin values — used as fallback when a field is in mixed state. */
+    _lastMargins = { top: 0, right: 0, bottom: 0, left: 0 };
     constructor(containerEl, onChange) {
         this.containerEl = containerEl;
         this.onChange = onChange;
@@ -29,13 +31,18 @@ export class SpreadSettingsPanel {
       </div>
     `;
         this.containerEl.querySelectorAll('input').forEach(el => {
-            el.addEventListener('change', () => this._emit());
-            el.addEventListener('input', () => this._emit());
+            const onInput = () => {
+                delete el.dataset.mixed;
+                this._emit();
+            };
+            el.addEventListener('change', onInput);
+            el.addEventListener('input', onInput);
         });
         this._marginCtrl = new MarginModeController(this.containerEl);
         this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
     }
     _populate(data) {
+        this._lastMargins = { top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left };
         const mode = this._detectMarginMode(data);
         this._marginCtrl.setMode(mode);
         if (mode === 'all') {
@@ -56,8 +63,18 @@ export class SpreadSettingsPanel {
     }
     _setNum(name, value) {
         const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-        if (el)
+        if (!el)
+            return;
+        if (value === null) {
+            el.value = '';
+            el.placeholder = '—';
+            el.dataset.mixed = '1';
+        }
+        else {
+            delete el.dataset.mixed;
+            el.placeholder = '';
             el.value = value.toFixed(2);
+        }
     }
     _setColor(name, value) {
         const el = this.containerEl.querySelector(`[data-field="${name}"]`);
@@ -76,30 +93,41 @@ export class SpreadSettingsPanel {
         return 'each';
     }
     _setMarginMode(mode) {
+        const rank = { all: 1, xy: 2, each: 3 };
+        const refining = rank[mode] > rank[this._marginCtrl.mode];
         const prev = this._readCurrentMargins();
         this._marginCtrl.setMode(mode);
         if (mode === 'all') {
-            this._setNum('margin-all', prev.top);
+            const same = prev.top === prev.right && prev.right === prev.bottom && prev.bottom === prev.left;
+            this._setNum('margin-all', same ? prev.top : null);
         }
         else if (mode === 'xy') {
-            this._setNum('margin-v', prev.top);
-            this._setNum('margin-h', prev.right);
+            const v = prev.top === prev.bottom ? prev.top : null;
+            const h = prev.right === prev.left ? prev.right : null;
+            if (!refining || v !== null)
+                this._setNum('margin-v', v);
+            if (!refining || h !== null)
+                this._setNum('margin-h', h);
         }
         else {
-            this._setNum('margin-top', prev.top);
-            this._setNum('margin-right', prev.right);
-            this._setNum('margin-bottom', prev.bottom);
-            this._setNum('margin-left', prev.left);
+            if (prev.top !== null)
+                this._setNum('margin-top', prev.top);
+            if (prev.right !== null)
+                this._setNum('margin-right', prev.right);
+            if (prev.bottom !== null)
+                this._setNum('margin-bottom', prev.bottom);
+            if (prev.left !== null)
+                this._setNum('margin-left', prev.left);
         }
         this._emit();
     }
     _readCurrentMargins() {
         const g = (name) => {
             const el = this.containerEl.querySelector(`[data-field="${name}"]`);
-            if (!el)
-                return 0;
+            if (!el || el.dataset.mixed)
+                return null;
             const v = parseFloat(el.value);
-            return isNaN(v) ? 0 : v;
+            return isNaN(v) ? null : v;
         };
         if (this._marginCtrl.mode === 'all') {
             const v = g('margin-all');
@@ -122,12 +150,18 @@ export class SpreadSettingsPanel {
             const el = this.containerEl.querySelector(`[data-field="${name}"]`);
             return el ? el.value : '#ffffff';
         };
-        const margins = this._readCurrentMargins();
+        const m = this._readCurrentMargins();
+        // Null means a field is in mixed state after a mode switch — preserve last known value.
+        const top = m.top ?? this._lastMargins.top;
+        const right = m.right ?? this._lastMargins.right;
+        const bottom = m.bottom ?? this._lastMargins.bottom;
+        const left = m.left ?? this._lastMargins.left;
+        this._lastMargins = { top, right, bottom, left };
         this.onChange({
-            margin_top: margins.top,
-            margin_right: margins.right,
-            margin_bottom: margins.bottom,
-            margin_left: margins.left,
+            margin_top: top,
+            margin_right: right,
+            margin_bottom: bottom,
+            margin_left: left,
             left_bg: gc('left-bg'),
             right_bg: gc('right-bg'),
         });

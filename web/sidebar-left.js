@@ -2,6 +2,8 @@
 //
 // Loading strategy:
 //   1. Folder scan stores FileSystemFileHandle refs only — no file bytes read upfront.
+//      On browsers without showDirectoryPicker (e.g. Firefox), falls back to
+//      <input webkitdirectory> and stores File objects in _files instead.
 //   2. IntersectionObserver triggers decode only for visible grid items.
 //   3. A semaphore caps concurrent createImageBitmap calls (DECODE_CONCURRENCY).
 //   4. createImageBitmap runs off the main thread; no jank during proxy creation.
@@ -15,6 +17,8 @@
 //   - A breadcrumb bar shows the current path; clicking any segment navigates up.
 //   - Handles accumulate across all visited directories — images remain available
 //     for export even after navigating away from the level where they were found.
+//   - The <input> fallback path builds the full file index upfront from webkitRelativePath,
+//     then filters per level — navigation UX is identical to the handle path.
 //
 // Selection model:
 //   - Click: select single image (clears previous selection).
@@ -34,6 +38,8 @@ export class ImageSidebar {
         return this._breadcrumb[0]?.handle ?? null;
     }
     _handles = new Map();
+    /** Full file index for the <input webkitdirectory> fallback, keyed by stripped relative path. */
+    _fallbackFiles = new Map();
     _proxies = new Map(); // 800px, for canvas rendering
     _buffers = new Map(); // lazy, for PDF export
     _dims = new Map(); // natural dims, lazy
@@ -51,11 +57,13 @@ export class ImageSidebar {
     _queue = [];
     // IntersectionObserver — fires when a grid item enters the scroll viewport
     _observer;
+    _emptyStateEl;
     constructor(gridEl, breadcrumbEl, onPhotoSelect, onProxyReady) {
         this.gridEl = gridEl;
         this.breadcrumbEl = breadcrumbEl;
         this.onPhotoSelect = onPhotoSelect;
         this.onProxyReady = onProxyReady ?? (() => { });
+        this._emptyStateEl = document.getElementById('sidebar-empty-state');
         this._observer = new IntersectionObserver((entries) => {
             for (const entry of entries) {
                 if (!entry.isIntersecting)
@@ -70,30 +78,76 @@ export class ImageSidebar {
         }, { rootMargin: '300px' }); // pre-load 300 px before item scrolls into view
     }
     async openFolder() {
-        if (!('showDirectoryPicker' in window)) {
-            alert('File System Access API not supported in this browser. Use Chrome or Edge.');
-            return;
+        if ('showDirectoryPicker' in window) {
+            let dirHandle;
+            try {
+                dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+            }
+            catch {
+                return; // user cancelled
+            }
+            await this.openFolderHandle(dirHandle);
         }
-        let dirHandle;
-        try {
-            dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+        else {
+            await this._openFolderViaInput();
         }
-        catch {
-            return; // user cancelled
-        }
-        await this.openFolderHandle(dirHandle);
+    }
+    _openFolderViaInput() {
+        return new Promise((resolve) => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.webkitdirectory = true;
+            input.addEventListener('change', () => {
+                if (!input.files || input.files.length === 0) {
+                    resolve();
+                    return;
+                }
+                void this.openFolderFallback(input.files).then(resolve);
+            });
+            input.addEventListener('cancel', () => resolve());
+            input.click();
+        });
     }
     /** Load a directory handle already acquired via showDirectoryPicker. */
     async openFolderHandle(dirHandle) {
-        // Clear handle-based caches; buffer-loaded images are preserved.
-        for (const id of this._handles.keys()) {
+        this._emptyStateEl?.classList.add('hidden');
+        for (const id of [...this._handles.keys(), ...this._fallbackFiles.keys()]) {
             this._proxies.delete(id);
             this._dims.delete(id);
             this._sizes.delete(id);
         }
         this._handles.clear();
+        this._fallbackFiles.clear();
         // _buffers kept intentionally: buffer-loaded entries stay for export.
         this._breadcrumb = [{ name: dirHandle.name, handle: dirHandle }];
+        await this._loadCurrentDir();
+    }
+    /**
+     * Fallback for browsers without showDirectoryPicker (e.g. Firefox).
+     * Loads images from a FileList obtained via <input webkitdirectory>.
+     * Builds a full file index from webkitRelativePath, then navigates the same
+     * way as the handle-based path by filtering per level on demand.
+     */
+    async openFolderFallback(files) {
+        this._emptyStateEl?.classList.add('hidden');
+        for (const id of [...this._handles.keys(), ...this._fallbackFiles.keys()]) {
+            this._proxies.delete(id);
+            this._dims.delete(id);
+            this._sizes.delete(id);
+        }
+        this._handles.clear();
+        this._fallbackFiles.clear();
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (!IMAGE_EXTS.some(ext => file.name.toLowerCase().endsWith(ext)))
+                continue;
+            const relPath = file.webkitRelativePath;
+            const prefixLen = relPath.indexOf('/') + 1;
+            const id = relPath.slice(prefixLen); // strip "rootFolder/" prefix
+            this._fallbackFiles.set(id, { name: file.name, file });
+        }
+        const rootName = files[0]?.webkitRelativePath.split('/')[0] || 'Folder';
+        this._breadcrumb = [{ name: rootName, handle: null }];
         await this._loadCurrentDir();
     }
     // -------------------------------------------------------------------------
@@ -108,7 +162,7 @@ export class ImageSidebar {
         await this._loadCurrentDir();
     }
     async _loadCurrentDir() {
-        const dirHandle = this._breadcrumb.at(-1).handle;
+        const { handle } = this._breadcrumb.at(-1);
         // Tear down current display, preserving buffer-loaded images.
         this._observer.disconnect();
         for (const el of this.gridEl.querySelectorAll('.folder-thumb, .image-thumb')) {
@@ -119,7 +173,12 @@ export class ImageSidebar {
         this._selectedIds = new Set([...this._selectedIds].filter(id => this._loadedIds.has(id)));
         this._lastClickedIdx = null;
         this._renderBreadcrumb();
-        await this._scanCurrentLevel(dirHandle);
+        if (handle) {
+            await this._scanCurrentLevel(handle);
+        }
+        else {
+            this._scanFallbackLevel();
+        }
     }
     _renderBreadcrumb() {
         if (this._breadcrumb.length <= 1) {
@@ -178,7 +237,7 @@ export class ImageSidebar {
         subDirs.sort((a, b) => a.name.localeCompare(b.name));
         imageFiles.sort((a, b) => a.name.localeCompare(b.name));
         for (const { name, handle } of subDirs) {
-            this.gridEl.appendChild(this._makeFolderItem(name, handle));
+            this.gridEl.appendChild(this._makeFolderItem(name, () => { void this._navigateInto(name, handle); }));
         }
         for (const { name, id, fileHandle } of imageFiles) {
             this._handles.set(id, fileHandle);
@@ -196,9 +255,46 @@ export class ImageSidebar {
         }
     }
     // -------------------------------------------------------------------------
+    // Fallback (input) navigation
+    // -------------------------------------------------------------------------
+    _scanFallbackLevel() {
+        // Path segments below the root are the breadcrumb entries after index 0.
+        const pathSegs = this._breadcrumb.slice(1).map(e => e.name);
+        const subfolderNames = new Set();
+        const imageEntries = [];
+        for (const [id, { name, file }] of this._fallbackFiles) {
+            const parts = id.split('/');
+            if (parts.length <= pathSegs.length)
+                continue;
+            if (!pathSegs.every((seg, i) => parts[i] === seg))
+                continue;
+            if (parts.length === pathSegs.length + 1) {
+                imageEntries.push({ id, name, file });
+            }
+            else {
+                subfolderNames.add(parts[pathSegs.length]);
+            }
+        }
+        [...subfolderNames].sort((a, b) => a.localeCompare(b)).forEach(folderName => {
+            this.gridEl.appendChild(this._makeFolderItem(folderName, () => { void this._navigateInto(folderName, null); }));
+        });
+        imageEntries.sort((a, b) => a.name.localeCompare(b.name));
+        for (const { id, name } of imageEntries) {
+            this._ids.push(id);
+            const item = this._makeItem(id, name);
+            this.gridEl.appendChild(item);
+            if (this._proxies.has(id)) {
+                this._paintThumbnail(item.querySelector('canvas'), this._proxies.get(id));
+            }
+            else {
+                this._observer.observe(item);
+            }
+        }
+    }
+    // -------------------------------------------------------------------------
     // Grid item DOM
     // -------------------------------------------------------------------------
-    _makeFolderItem(name, handle) {
+    _makeFolderItem(name, onClick) {
         const div = document.createElement('div');
         div.className = 'folder-thumb';
         div.title = name;
@@ -206,7 +302,7 @@ export class ImageSidebar {
         label.className = 'folder-thumb-label';
         label.textContent = name;
         div.appendChild(label);
-        div.addEventListener('click', () => { void this._navigateInto(name, handle); });
+        div.addEventListener('click', onClick);
         return div;
     }
     _makeItem(id, name) {
@@ -323,11 +419,16 @@ export class ImageSidebar {
             this._queue.push(() => { this._active++; run(); });
         }
     }
-    async _loadProxy(id, item) {
+    async _getFile(id) {
         const handle = this._handles.get(id);
-        if (!handle)
+        if (handle)
+            return handle.getFile();
+        return this._fallbackFiles.get(id)?.file ?? null;
+    }
+    async _loadProxy(id, item) {
+        const file = await this._getFile(id);
+        if (!file)
             return;
-        const file = await handle.getFile();
         this._sizes.set(id, file.size);
         // createImageBitmap decodes off the main thread — no frame drops.
         // resizeWidth produces a downsampled proxy; fall back to full size on Safari.
@@ -373,10 +474,9 @@ export class ImageSidebar {
     async getBuffer(id) {
         if (this._buffers.has(id))
             return this._buffers.get(id);
-        const handle = this._handles.get(id);
-        if (!handle)
+        const file = await this._getFile(id);
+        if (!file)
             return null;
-        const file = await handle.getFile();
         const buf = await file.arrayBuffer();
         this._buffers.set(id, buf);
         return buf;
@@ -389,9 +489,8 @@ export class ImageSidebar {
     async ensureDimensions(id) {
         if (this._dims.has(id))
             return this._dims.get(id);
-        const handle = this._handles.get(id);
-        if (handle) {
-            const file = await handle.getFile();
+        const file = await this._getFile(id);
+        if (file) {
             const bm = await createImageBitmap(file);
             const dims = [bm.width, bm.height];
             bm.close();
@@ -410,7 +509,7 @@ export class ImageSidebar {
     }
     /** Returns the IDs of all images available for use (folder + buffer-loaded). */
     loadedImageIds() {
-        return [...new Set([...this._handles.keys(), ...this._loadedIds])];
+        return [...new Set([...this._handles.keys(), ...this._fallbackFiles.keys(), ...this._loadedIds])];
     }
     /**
      * Loads an image from raw bytes, adds it to the sidebar grid, and fires
@@ -418,6 +517,7 @@ export class ImageSidebar {
      * Called by the image-loader modal for each matched file.
      */
     async loadImageFromBuffer(id, buf) {
+        this._emptyStateEl?.classList.add('hidden');
         this._buffers.set(id, buf);
         this._sizes.set(id, buf.byteLength);
         this._loadedIds.add(id);
@@ -468,7 +568,7 @@ export class ImageSidebar {
      * Files not yet read are fetched on demand. Suitable for PDF export.
      */
     async *buffersForExport() {
-        const allIds = new Set([...this._handles.keys(), ...this._loadedIds]);
+        const allIds = new Set([...this._handles.keys(), ...this._fallbackFiles.keys(), ...this._loadedIds]);
         for (const id of allIds) {
             const buf = await this.getBuffer(id);
             if (!buf)

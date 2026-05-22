@@ -2,6 +2,7 @@
 
 import type { TextElement } from './types.js';
 import { debounce } from './utils.js';
+import { bindInputs } from './ui-fields.js';
 
 export class TextElementEditor {
   private containerEl: HTMLElement;
@@ -128,11 +129,7 @@ export class TextElementEditor {
       </div>
     `;
 
-    // Wire all inputs / selects / textarea to emit.
-    this.containerEl.querySelectorAll<HTMLElement>('input, select, textarea').forEach(el => {
-      el.addEventListener('change', () => this._emit());
-      el.addEventListener('input',  () => this._emit());
-    });
+    bindInputs(this.containerEl, () => this._emit(), 'input, select, textarea');
 
     // Toggle buttons — bold / italic.
     this.containerEl.querySelectorAll<HTMLButtonElement>('[data-toggle]').forEach(btn => {

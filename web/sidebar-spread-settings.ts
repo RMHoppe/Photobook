@@ -2,8 +2,8 @@
 
 import type { SpreadSettingsData } from './types.js';
 import { debounce } from './utils.js';
-import { numField, colorField } from './ui-fields.js';
-import { MarginModeController, marginSectionHtml, type MarginMode } from './margin-mode-controller.js';
+import { numField, colorField, bindInputs } from './ui-fields.js';
+import { MarginModeController, marginSectionHtml, type MarginMode, detectMarginMode } from './margin-mode-controller.js';
 export type { SpreadSettingsData };
 
 export class SpreadSettingsPanel {
@@ -11,6 +11,8 @@ export class SpreadSettingsPanel {
   private onChange: (data: SpreadSettingsData) => void;
   private _built = false;
   private _marginCtrl!: MarginModeController;
+  /** Last concrete margin values — used as fallback when a field is in mixed state. */
+  private _lastMargins = { top: 0, right: 0, bottom: 0, left: 0 };
 
   constructor(containerEl: HTMLElement, onChange: (data: SpreadSettingsData) => void) {
     this.containerEl = containerEl;
@@ -35,17 +37,15 @@ export class SpreadSettingsPanel {
       </div>
     `;
 
-    this.containerEl.querySelectorAll<HTMLInputElement>('input').forEach(el => {
-      el.addEventListener('change', () => this._emit());
-      el.addEventListener('input',  () => this._emit());
-    });
+    bindInputs(this.containerEl, () => this._emit(), 'input');
 
     this._marginCtrl = new MarginModeController(this.containerEl);
     this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
   }
 
   private _populate(data: SpreadSettingsData): void {
-    const mode = this._detectMarginMode(data);
+    this._lastMargins = { top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left };
+    const mode = detectMarginMode({ top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left });
     this._marginCtrl.setMode(mode);
     if (mode === 'all') {
       this._setNum('margin-all', data.margin_top);
@@ -62,9 +62,18 @@ export class SpreadSettingsPanel {
     this._setColor('right-bg', data.right_bg || '#ffffff');
   }
 
-  private _setNum(name: string, value: number): void {
+  private _setNum(name: string, value: number | null): void {
     const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-    if (el) el.value = value.toFixed(2);
+    if (!el) return;
+    if (value === null) {
+      el.value = '';
+      el.placeholder = 'Mixed';
+      (el.dataset as DOMStringMap).mixed = '1';
+    } else {
+      delete (el.dataset as DOMStringMap).mixed;
+      el.placeholder = '';
+      el.value = value.toFixed(2);
+    }
   }
 
   private _setColor(name: string, value: string): void {
@@ -76,43 +85,42 @@ export class SpreadSettingsPanel {
   // Margin mode selector helpers
   // ---------------------------------------------------------------------------
 
-  private _detectMarginMode(data: SpreadSettingsData): MarginMode {
-    const { margin_top: t, margin_right: r, margin_bottom: b, margin_left: l } = data;
-    if (t === r && r === b && b === l) return 'all';
-    if (t === b && l === r) return 'xy';
-    return 'each';
-  }
-
   private _setMarginMode(mode: MarginMode): void {
+    const rank: Record<MarginMode, number> = { all: 1, xy: 2, each: 3 };
+    const refining = rank[mode] > rank[this._marginCtrl.mode];
     const prev = this._readCurrentMargins();
     this._marginCtrl.setMode(mode);
+
     if (mode === 'all') {
-      this._setNum('margin-all', prev.top);
+      const same = prev.top === prev.right && prev.right === prev.bottom && prev.bottom === prev.left;
+      this._setNum('margin-all', same ? prev.top : null);
     } else if (mode === 'xy') {
-      this._setNum('margin-v', prev.top);
-      this._setNum('margin-h', prev.right);
+      const v = prev.top === prev.bottom ? prev.top : null;
+      const h = prev.right === prev.left  ? prev.right : null;
+      if (!refining || v !== null) this._setNum('margin-v', v);
+      if (!refining || h !== null) this._setNum('margin-h', h);
     } else {
-      this._setNum('margin-top',    prev.top);
-      this._setNum('margin-right',  prev.right);
-      this._setNum('margin-bottom', prev.bottom);
-      this._setNum('margin-left',   prev.left);
+      if (prev.top    !== null) this._setNum('margin-top',    prev.top);
+      if (prev.right  !== null) this._setNum('margin-right',  prev.right);
+      if (prev.bottom !== null) this._setNum('margin-bottom', prev.bottom);
+      if (prev.left   !== null) this._setNum('margin-left',   prev.left);
     }
     this._emit();
   }
 
-  private _readCurrentMargins(): { top: number; right: number; bottom: number; left: number } {
-    const g = (name: string): number => {
+  private _readCurrentMargins(): { top: number | null; right: number | null; bottom: number | null; left: number | null } {
+    const g = (name: string): number | null => {
       const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-      if (!el) return 0;
+      if (!el || el.dataset.mixed) return null;
       const v = parseFloat(el.value);
-      return isNaN(v) ? 0 : v;
+      return isNaN(v) ? null : v;
     };
     if (this._marginCtrl.mode === 'all') {
       const v = g('margin-all');
       return { top: v, right: v, bottom: v, left: v };
     }
     if (this._marginCtrl.mode === 'xy') {
-      const vert = g('margin-v');
+      const vert  = g('margin-v');
       const horiz = g('margin-h');
       return { top: vert, right: horiz, bottom: vert, left: horiz };
     }
@@ -129,12 +137,18 @@ export class SpreadSettingsPanel {
       const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
       return el ? el.value : '#ffffff';
     };
-    const margins = this._readCurrentMargins();
+    const m = this._readCurrentMargins();
+    // Null means a field is in mixed state after a mode switch — preserve last known value.
+    const top    = m.top    ?? this._lastMargins.top;
+    const right  = m.right  ?? this._lastMargins.right;
+    const bottom = m.bottom ?? this._lastMargins.bottom;
+    const left   = m.left   ?? this._lastMargins.left;
+    this._lastMargins = { top, right, bottom, left };
     this.onChange({
-      margin_top:    margins.top,
-      margin_right:  margins.right,
-      margin_bottom: margins.bottom,
-      margin_left:   margins.left,
+      margin_top:    top,
+      margin_right:  right,
+      margin_bottom: bottom,
+      margin_left:   left,
       left_bg:  gc('left-bg'),
       right_bg: gc('right-bg'),
     });
