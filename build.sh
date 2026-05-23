@@ -31,4 +31,4 @@ npx tsc
 
 echo "==> Build complete."
 echo "==> Starting dev server at http://localhost:8080"
-python3 -m http.server 8080 --directory web
+python3 web/server.py 8080

@@ -11,6 +11,25 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="mobile-landing">
+    <div class="mobile-card">
+      <i class="fa-solid fa-desktop mobile-hero-icon" aria-hidden="true"></i>
+      <h1 class="mobile-title">Photobook Editor</h1>
+      <p class="mobile-subtitle">This application is designed for desktop use. Please open it on a computer with a keyboard and mouse.</p>
+
+      <div class="mobile-sep"></div>
+
+      <p class="mobile-dev-label">Developers can run the unit test suite here:</p>
+      <button id="btn-run-tests">
+        <i class="fa-solid fa-flask" aria-hidden="true"></i> Run Unit Tests
+      </button>
+      <div id="test-results" hidden>
+        <div id="test-summary" class="test-summary"></div>
+        <div id="test-failures"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="app">
     <header id="toolbar">
       <span class="app-title">Photobook</span>
@@ -121,6 +140,13 @@
   <script type="importmap">
     { "imports": { "marked": "./lib/marked.esm.js" } }
   </script>
-  <script type="module" src="main.js"></script>
+  <script type="module">
+    // Load the full editor on desktop; lightweight test runner on mobile.
+    if (window.innerWidth >= 1024) {
+      import('./main.js');
+    } else {
+      import('./mobile.js');
+    }
+  </script>
 </body>
 </html>

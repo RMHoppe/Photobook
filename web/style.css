@@ -1121,6 +1121,85 @@ button.primary:hover { background: #5a9fe8; }
 .docs-content code { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 11px; }
 .docs-content pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 12px; overflow-x: auto; margin-bottom: 12px; }
 .docs-content pre code { background: none; border: none; padding: 0; font-size: 12px; }
+
+/* ---- Mobile landing page ---- */
+#mobile-landing { display: none; }
+
+@media (max-width: 1023px) {
+  #app { display: none !important; }
+
+  #mobile-landing {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    background: var(--bg);
+  }
+}
+
+.mobile-card {
+  max-width: 480px;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 40px 28px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.mobile-hero-icon { font-size: 48px; color: var(--accent); margin-bottom: 4px; }
+.mobile-title { font-size: 20px; font-weight: 600; color: var(--text); }
+.mobile-subtitle { font-size: 14px; line-height: 1.6; color: var(--text-muted); text-align: center; }
+
+.mobile-sep { width: 100%; height: 1px; background: var(--border); margin: 4px 0; }
+
+.mobile-dev-label { font-size: 12px; color: var(--text-muted); text-align: center; }
+
+#btn-run-tests { font-size: 13px; padding: 7px 18px; }
+
+#test-results { width: 100%; display: flex; flex-direction: column; gap: 10px; }
+
+.test-summary {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: monospace;
+}
+.test-running { background: rgba(74,144,226,0.1);  color: var(--accent); border: 1px solid var(--accent); }
+.test-pass    { background: rgba(80,200,120,0.1);  color: #50c878;       border: 1px solid #50c878; }
+.test-fail    { background: rgba(220,60,60,0.12);  color: #f06060;       border: 1px solid #f06060; }
+.test-error   { background: rgba(220,140,0,0.12);  color: #f0a030;       border: 1px solid #f0a030; }
+
+.test-failure-block { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+
+.test-failure-name {
+  padding: 7px 12px;
+  background: rgba(220,60,60,0.12);
+  color: #f06060;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: monospace;
+  border-bottom: 1px solid var(--border);
+}
+
+.test-log {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: monospace;
+  background: var(--bg);
+}
 .docs-content blockquote { border-left: 3px solid var(--accent); margin: 0 0 12px; padding: 6px 14px; background: rgba(74,144,226,0.07); color: var(--text-muted); }
 .docs-content table { border-collapse: collapse; width: 100%; margin-bottom: 14px; font-size: 12px; }
 .docs-content th { background: var(--bg); border: 1px solid var(--border); padding: 6px 10px; text-align: left; font-weight: 600; }
