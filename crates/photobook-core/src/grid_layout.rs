@@ -806,12 +806,11 @@ impl Default for GridLayout {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "wasm-test"))]
+pub(crate) mod test_impls {
     use super::*;
 
-    #[test]
-    fn drag_bounds_lo_lt_hi_after_h_split() {
+    pub fn drag_bounds_lo_lt_hi_after_h_split() {
         let mut layout = GridLayout::new();
         let f0 = *layout.faces.keys().next().unwrap();
         layout.split_face(f0, 0.5, SplitAxis::Horizontal).unwrap();
@@ -827,8 +826,7 @@ mod tests {
         assert!(hi <= 1.0 - MIN_FRAC, "hi must respect bottom boundary");
     }
 
-    #[test]
-    fn drag_bounds_lo_lt_hi_after_v_split() {
+    pub fn drag_bounds_lo_lt_hi_after_v_split() {
         let mut layout = GridLayout::new();
         let f0 = *layout.faces.keys().next().unwrap();
         layout.split_face(f0, 0.5, SplitAxis::Vertical).unwrap();
@@ -841,4 +839,11 @@ mod tests {
         let (lo, hi) = layout.chain_drag_bounds(&chain).expect("bounds should exist");
         assert!(lo < hi, "lo={lo} must be < hi={hi}");
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_impls as t;
+    #[test] fn drag_bounds_lo_lt_hi_after_h_split() { t::drag_bounds_lo_lt_hi_after_h_split(); }
+    #[test] fn drag_bounds_lo_lt_hi_after_v_split() { t::drag_bounds_lo_lt_hi_after_v_split(); }
 }

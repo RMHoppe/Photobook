@@ -14,6 +14,13 @@ wasm-pack build crates/photobook-core \
   --out-dir "$(pwd)/web/pkg" \
   ${1:-"--release"}
 
+echo "==> Building test Wasm..."
+wasm-pack build crates/photobook-core \
+  --target web \
+  --out-dir "$(pwd)/web/test-pkg" \
+  --features wasm-test \
+  --dev
+
 if [ ! -d "node_modules/@fortawesome" ]; then
   echo "==> Installing npm dependencies..."
   npm install

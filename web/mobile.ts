@@ -1,59 +1,21 @@
-// mobile.ts — test runner for the mobile landing page.
+// mobile.ts — in-browser test runner using the test WASM binary.
+// The test WASM (web/test-pkg/) is built with --features wasm-test and
+// exports wasm_test_list() → JSON string, wasm_test_run(name) → void/throws.
+// Panics in wasm_test_run propagate as JS exceptions (console_error_panic_hook),
+// which we catch per-test without killing the WASM instance.
 
-interface TestRunResponse {
-  stdout: string;
-  stderr: string;
-  exit_code: number;
-}
+// Dynamic import so TypeScript doesn't require the generated pkg to exist at
+// compile time. The actual module is resolved at runtime from test-pkg/.
+type WasmModule = {
+  default: (input?: string | URL | Request | BufferSource | WebAssembly.Module) => Promise<unknown>;
+  init_panic_hook: () => void;
+  wasm_test_list: () => string;
+  wasm_test_run: (name: string) => void;
+};
 
-interface FailureBlock {
-  name: string;
-  log: string;
-}
-
-interface ParsedResults {
-  passed: number;
-  failed: number;
-  failures: FailureBlock[];
-  summaryLine: string;
-}
-
-function parseCargoOutput(stdout: string): ParsedResults {
-  const lines = stdout.split('\n');
-  let passed = 0, failed = 0;
-  let summaryLine = '';
-
-  for (const line of lines) {
-    const m = line.match(/^test\s+\S+\s+\.\.\.\s+(ok|FAILED|ignored)\s*$/);
-    if (m) {
-      if (m[1] === 'ok') passed++;
-      else if (m[1] === 'FAILED') failed++;
-    }
-    if (line.startsWith('test result:')) summaryLine = line.trim();
-  }
-
-  // Extract per-failure detail blocks from the "failures:" section.
-  const failures: FailureBlock[] = [];
-  const sectionStart = stdout.indexOf('\nfailures:\n\n');
-  if (sectionStart !== -1) {
-    const section = stdout.slice(sectionStart + '\nfailures:\n\n'.length);
-    const sectionEnd = section.indexOf('\nfailures:\n');
-    const detail = sectionEnd !== -1 ? section.slice(0, sectionEnd) : section;
-    for (const chunk of detail.split(/^---- /m)) {
-      const headerEnd = chunk.indexOf(' stdout ----');
-      if (headerEnd === -1) continue;
-      failures.push({
-        name: chunk.slice(0, headerEnd).trim(),
-        log:  chunk.slice(headerEnd + ' stdout ----'.length).trim(),
-      });
-    }
-  }
-
-  return { passed, failed, failures, summaryLine };
-}
-
-function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+async function loadWasm(): Promise<WasmModule> {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return import('./test-pkg/photobook_core.js') as Promise<WasmModule>;
 }
 
 async function runTests(): Promise<void> {
@@ -63,44 +25,54 @@ async function runTests(): Promise<void> {
   const failuresEl = document.getElementById('test-failures') as HTMLElement;
 
   btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Running…';
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Loading…';
   resultsEl.hidden = false;
   summaryEl.className = 'test-summary test-running';
-  summaryEl.textContent = 'Running cargo test…';
+  summaryEl.textContent = 'Initialising test WASM…';
   failuresEl.innerHTML = '';
 
-  let data: TestRunResponse;
+  let wasm: WasmModule;
   try {
-    const resp = await fetch('/api/run-tests', { method: 'POST' });
-    if (!resp.ok) throw new Error(`Server returned ${resp.status} — tests only run in the local dev environment`);
-    data = await resp.json() as TestRunResponse;
+    wasm = await loadWasm();
+    await wasm.default();          // initialise the WASM module
+    wasm.init_panic_hook();        // panics → JS exceptions, not traps
   } catch (err) {
     summaryEl.className = 'test-summary test-error';
-    summaryEl.textContent = err instanceof Error ? err.message : String(err);
+    summaryEl.textContent = `Failed to load test WASM: ${err instanceof Error ? err.message : String(err)}`;
     btn.disabled = false;
     btn.innerHTML = '<i class="fa-solid fa-flask" aria-hidden="true"></i> Run Unit Tests';
     return;
   }
 
-  // Compilation error or cargo missing — show raw stderr.
-  if (!data.stdout && data.stderr) {
-    summaryEl.className = 'test-summary test-error';
-    summaryEl.textContent = 'Build failed';
-    failuresEl.innerHTML = `<pre class="test-log">${escHtml(data.stderr)}</pre>`;
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Run Again';
-    return;
+  const testNames = JSON.parse(wasm.wasm_test_list()) as string[];
+  let passed = 0;
+  const failures: Array<{ name: string; message: string }> = [];
+
+  summaryEl.textContent = `Running 0 / ${testNames.length}…`;
+
+  for (let i = 0; i < testNames.length; i++) {
+    const name = testNames[i];
+    summaryEl.textContent = `Running ${i + 1} / ${testNames.length}: ${name}`;
+    try {
+      wasm.wasm_test_run(name);
+      passed++;
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      // console_error_panic_hook emits "panicked at 'msg', file:line:col"
+      // Strip the prefix to keep just the assertion message.
+      const message = raw.replace(/^panicked at /, '');
+      failures.push({ name, message });
+    }
   }
 
-  const parsed = parseCargoOutput(data.stdout);
-  const allOk = parsed.failed === 0 && (parsed.passed > 0 || parsed.summaryLine !== '');
-
+  const total = testNames.length;
+  const allOk = failures.length === 0;
   summaryEl.className = `test-summary ${allOk ? 'test-pass' : 'test-fail'}`;
-  summaryEl.textContent = parsed.summaryLine || (allOk
-    ? `All ${parsed.passed} tests passed`
-    : `${parsed.failed} failed, ${parsed.passed} passed`);
+  summaryEl.textContent = allOk
+    ? `All ${total} tests passed`
+    : `${failures.length} failed, ${passed} passed (${total} total)`;
 
-  for (const f of parsed.failures) {
+  for (const f of failures) {
     const block = document.createElement('div');
     block.className = 'test-failure-block';
 
@@ -110,7 +82,7 @@ async function runTests(): Promise<void> {
 
     const log = document.createElement('pre');
     log.className = 'test-log';
-    log.textContent = f.log;
+    log.textContent = f.message;
 
     block.appendChild(header);
     block.appendChild(log);

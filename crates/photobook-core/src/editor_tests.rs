@@ -1,7 +1,7 @@
 /// Integration-level tests for the photobook editor API.
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "wasm-test"))]
+pub(crate) mod test_impls {
     use crate::PhotobookEditor;
     use crate::grid_layout::OUTER_FACE;
 
@@ -38,8 +38,7 @@ mod tests {
     // Splitting frames
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn split_h_produces_two_frames() {
+    pub fn split_h_produces_two_frames() {
         let mut ed = ed();
         let f = first_face(&ed);
         let ok = ed.split_face_at(f, "h", 0.5);
@@ -47,8 +46,7 @@ mod tests {
         assert_eq!(face_count(&ed), 2);
     }
 
-    #[test]
-    fn split_into_n_produces_n_frames() {
+    pub fn split_into_n_produces_n_frames() {
         let mut ed = ed();
         let f = first_face(&ed);
         let ok = ed.split_face_into_n(f, "h", 4);
@@ -56,8 +54,7 @@ mod tests {
         assert_eq!(face_count(&ed), 4);
     }
 
-    #[test]
-    fn split_into_quadrant_produces_four_frames() {
+    pub fn split_into_quadrant_produces_four_frames() {
         let mut ed = ed();
         let f = first_face(&ed);
         let ok = ed.split_face_into_quadrant_n(f, 2);
@@ -65,8 +62,7 @@ mod tests {
         assert_eq!(face_count(&ed), 4);
     }
 
-    #[test]
-    fn split_at_noncenter_ratio_creates_unequal_frames() {
+    pub fn split_at_noncenter_ratio_creates_unequal_frames() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "v", 0.25);
@@ -81,8 +77,7 @@ mod tests {
         assert!((large / small - 3.0).abs() < 0.01, "widths should be 1:3, got {small:.4}:{large:.4}");
     }
 
-    #[test]
-    fn split_invalid_id_returns_false() {
+    pub fn split_invalid_id_returns_false() {
         let mut ed = ed();
         let ok = ed.split_face_at(99999, "h", 0.5);
         assert!(!ok, "split on unknown id should return false");
@@ -93,8 +88,7 @@ mod tests {
     // Merging frames
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn delete_interior_divider_merges_frames() {
+    pub fn delete_interior_divider_merges_frames() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
@@ -107,8 +101,7 @@ mod tests {
         assert_eq!(face_count(&ed), 1, "frames should merge back to one");
     }
 
-    #[test]
-    fn delete_with_no_selection_does_nothing() {
+    pub fn delete_with_no_selection_does_nothing() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
@@ -121,8 +114,7 @@ mod tests {
     // Divider gap
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn divider_gap_defaults_to_zero() {
+    pub fn divider_gap_defaults_to_zero() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
@@ -131,8 +123,7 @@ mod tests {
         assert!((ed.get_selected_segment_gap() - 0.0).abs() < 1e-4);
     }
 
-    #[test]
-    fn set_and_get_divider_gap() {
+    pub fn set_and_get_divider_gap() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
@@ -142,8 +133,7 @@ mod tests {
         assert!((ed.get_selected_segment_gap() - 5.0).abs() < 1e-4);
     }
 
-    #[test]
-    fn divider_gap_clamped_to_nonnegative() {
+    pub fn divider_gap_clamped_to_nonnegative() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
@@ -153,14 +143,12 @@ mod tests {
         assert!((ed.get_selected_segment_gap() - 0.0).abs() < 1e-4);
     }
 
-    #[test]
-    fn get_selected_segment_gap_without_selection_returns_zero() {
+    pub fn get_selected_segment_gap_without_selection_returns_zero() {
         let ed = ed();
         assert!((ed.get_selected_segment_gap() - 0.0).abs() < 1e-4);
     }
 
-    #[test]
-    fn divider_gap_reflected_in_half_gap() {
+    pub fn divider_gap_reflected_in_half_gap() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
@@ -180,8 +168,7 @@ mod tests {
     // Frame properties
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn set_margin_stored_in_box_model() {
+    pub fn set_margin_stored_in_box_model() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.select_face(f);
@@ -196,8 +183,7 @@ mod tests {
         assert!((bm["margin"]["left"].as_f64().unwrap() - 1.0).abs() < 1e-3);
     }
 
-    #[test]
-    fn set_border_width_stored_in_box_model() {
+    pub fn set_border_width_stored_in_box_model() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.select_face(f);
@@ -212,8 +198,7 @@ mod tests {
         assert_eq!(bm["border"]["position"].as_str().unwrap(), "inner");
     }
 
-    #[test]
-    fn set_rotation_stored_in_box_model() {
+    pub fn set_rotation_stored_in_box_model() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.select_face(f);
@@ -230,15 +215,13 @@ mod tests {
     // Z-order
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn z_index_of_single_frame_is_zero() {
+    pub fn z_index_of_single_frame_is_zero() {
         let ed = ed();
         let f = first_face(&ed);
         assert_eq!(ed.get_face_z_index(f), 0);
     }
 
-    #[test]
-    fn move_up_increases_z_index() {
+    pub fn move_up_increases_z_index() {
         let mut ed = ed();
         let f0 = first_face(&ed);
         ed.split_face_at(f0, "h", 0.5);
@@ -259,8 +242,7 @@ mod tests {
     // Multi-selection
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn select_all_selects_every_face() {
+    pub fn select_all_selects_every_face() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
@@ -273,8 +255,7 @@ mod tests {
         assert_eq!(ed.get_selection_count() as usize, 3);
     }
 
-    #[test]
-    fn selecting_a_seg_clears_face_selection() {
+    pub fn selecting_a_seg_clears_face_selection() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.select_face(f);
@@ -288,8 +269,7 @@ mod tests {
         assert_eq!(ed.get_selected_segment(), eid);
     }
 
-    #[test]
-    fn selecting_a_face_clears_seg_selection() {
+    pub fn selecting_a_face_clears_seg_selection() {
         let mut ed = ed();
         let f0 = first_face(&ed);
         ed.split_face_at(f0, "h", 0.5);
@@ -303,8 +283,7 @@ mod tests {
         assert_eq!(ed.get_selection_count(), 1);
     }
 
-    #[test]
-    fn select_faces_in_rect_finds_covered_frames() {
+    pub fn select_faces_in_rect_finds_covered_frames() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "v", 0.5);
@@ -318,8 +297,7 @@ mod tests {
     // Snapping
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn snap_within_radius_aligns_to_existing_divider() {
+    pub fn snap_within_radius_aligns_to_existing_divider() {
         use crate::grid_layout::GridLayout;
         use crate::layout::SplitAxis;
         let mut layout = GridLayout::new();
@@ -331,8 +309,7 @@ mod tests {
             "snap should return 0.5 for input 0.53 with radius 0.05, got {snapped}");
     }
 
-    #[test]
-    fn snap_outside_radius_returns_original_value() {
+    pub fn snap_outside_radius_returns_original_value() {
         use crate::grid_layout::GridLayout;
         use crate::layout::SplitAxis;
         let mut layout = GridLayout::new();
@@ -344,8 +321,7 @@ mod tests {
             "snap should return original value when outside radius, got {snapped}");
     }
 
-    #[test]
-    fn snap_excludes_the_dragged_chain() {
+    pub fn snap_excludes_the_dragged_chain() {
         use crate::grid_layout::GridLayout;
         use crate::layout::SplitAxis;
         let mut layout = GridLayout::new();
@@ -367,8 +343,7 @@ mod tests {
     // Edge panel drag
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn edge_panel_drag_creates_new_split() {
+    pub fn edge_panel_drag_creates_new_split() {
         let mut ed = ed();
         assert_eq!(face_count(&ed), 1);
 
@@ -380,8 +355,7 @@ mod tests {
         assert_eq!(face_count(&ed), 2);
     }
 
-    #[test]
-    fn edge_panel_drag_cancel_reverts_layout() {
+    pub fn edge_panel_drag_cancel_reverts_layout() {
         let mut ed = ed();
         ed.begin_edge_panel_drag("v", false, 300.0, 250.0, 1000.0, 500.0);
         assert_eq!(face_count(&ed), 2);
@@ -394,8 +368,7 @@ mod tests {
     // Boundary edge protection
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn boundary_edge_cannot_be_deleted() {
+    pub fn boundary_edge_cannot_be_deleted() {
         let mut ed = ed();
         let beid = boundary_edge(&ed);
         ed.select_segment(beid);
@@ -403,8 +376,7 @@ mod tests {
         assert!(!ed.can_delete_segment(beid));
     }
 
-    #[test]
-    fn delete_selected_face() {
+    pub fn delete_selected_face() {
         let mut ed = ed();
         let f0 = first_face(&ed);
         ed.split_face_at(f0, "h", 0.5);
@@ -422,8 +394,7 @@ mod tests {
     // Save / load state
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn save_and_load_roundtrip() {
+    pub fn save_and_load_roundtrip() {
         let mut orig = ed();
         orig.add_page();
         let json = orig.save_state();
@@ -432,8 +403,7 @@ mod tests {
         assert_eq!(ed2.doc.spreads.len(), orig.doc.spreads.len());
     }
 
-    #[test]
-    fn load_state_rejects_future_schema_version() {
+    pub fn load_state_rejects_future_schema_version() {
         let mut ed = ed();
         // Inject a schema_version that doesn't exist yet.
         let json = ed.save_state().replace("\"schema_version\":1", "\"schema_version\":999");
@@ -445,4 +415,39 @@ mod tests {
         };
         assert!(!ed.load_state(&json));
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_impls as t;
+    #[test] fn split_h_produces_two_frames() { t::split_h_produces_two_frames(); }
+    #[test] fn split_into_n_produces_n_frames() { t::split_into_n_produces_n_frames(); }
+    #[test] fn split_into_quadrant_produces_four_frames() { t::split_into_quadrant_produces_four_frames(); }
+    #[test] fn split_at_noncenter_ratio_creates_unequal_frames() { t::split_at_noncenter_ratio_creates_unequal_frames(); }
+    #[test] fn split_invalid_id_returns_false() { t::split_invalid_id_returns_false(); }
+    #[test] fn delete_interior_divider_merges_frames() { t::delete_interior_divider_merges_frames(); }
+    #[test] fn delete_with_no_selection_does_nothing() { t::delete_with_no_selection_does_nothing(); }
+    #[test] fn divider_gap_defaults_to_zero() { t::divider_gap_defaults_to_zero(); }
+    #[test] fn set_and_get_divider_gap() { t::set_and_get_divider_gap(); }
+    #[test] fn divider_gap_clamped_to_nonnegative() { t::divider_gap_clamped_to_nonnegative(); }
+    #[test] fn get_selected_segment_gap_without_selection_returns_zero() { t::get_selected_segment_gap_without_selection_returns_zero(); }
+    #[test] fn divider_gap_reflected_in_half_gap() { t::divider_gap_reflected_in_half_gap(); }
+    #[test] fn set_margin_stored_in_box_model() { t::set_margin_stored_in_box_model(); }
+    #[test] fn set_border_width_stored_in_box_model() { t::set_border_width_stored_in_box_model(); }
+    #[test] fn set_rotation_stored_in_box_model() { t::set_rotation_stored_in_box_model(); }
+    #[test] fn z_index_of_single_frame_is_zero() { t::z_index_of_single_frame_is_zero(); }
+    #[test] fn move_up_increases_z_index() { t::move_up_increases_z_index(); }
+    #[test] fn select_all_selects_every_face() { t::select_all_selects_every_face(); }
+    #[test] fn selecting_a_seg_clears_face_selection() { t::selecting_a_seg_clears_face_selection(); }
+    #[test] fn selecting_a_face_clears_seg_selection() { t::selecting_a_face_clears_seg_selection(); }
+    #[test] fn select_faces_in_rect_finds_covered_frames() { t::select_faces_in_rect_finds_covered_frames(); }
+    #[test] fn snap_within_radius_aligns_to_existing_divider() { t::snap_within_radius_aligns_to_existing_divider(); }
+    #[test] fn snap_outside_radius_returns_original_value() { t::snap_outside_radius_returns_original_value(); }
+    #[test] fn snap_excludes_the_dragged_chain() { t::snap_excludes_the_dragged_chain(); }
+    #[test] fn edge_panel_drag_creates_new_split() { t::edge_panel_drag_creates_new_split(); }
+    #[test] fn edge_panel_drag_cancel_reverts_layout() { t::edge_panel_drag_cancel_reverts_layout(); }
+    #[test] fn boundary_edge_cannot_be_deleted() { t::boundary_edge_cannot_be_deleted(); }
+    #[test] fn delete_selected_face() { t::delete_selected_face(); }
+    #[test] fn save_and_load_roundtrip() { t::save_and_load_roundtrip(); }
+    #[test] fn load_state_rejects_future_schema_version() { t::load_state_rejects_future_schema_version(); }
 }
