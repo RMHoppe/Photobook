@@ -15,7 +15,10 @@ mod editor_image_ops;
 mod editor_text_ops;
 mod editor_spread_settings;
 mod editor_pinwheel;
-mod editor_tests;
+pub(crate) mod editor_tests;
+
+#[cfg(feature = "wasm-test")]
+mod wasm_test_runner;
 
 use editor_layout::DragEdgePanel;
 use editor_pinwheel::DragPinwheelSpawn;

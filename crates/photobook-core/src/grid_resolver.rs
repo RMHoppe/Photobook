@@ -280,15 +280,14 @@ pub fn resolve_frames_mm(
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "wasm-test"))]
+pub(crate) mod test_impls {
     use super::*;
     use crate::grid_layout::GridLayout;
 
     fn root() -> Rect { Rect::new(0.0, 0.0, 1000.0, 500.0) }
 
-    #[test]
-    fn single_room_produces_one_frame() {
+    pub fn single_room_produces_one_frame() {
         let layout = GridLayout::new();
         let r = GridResolver::new(&layout, &[], 1.0);
         let frames = r.resolve_frames(root());
@@ -300,8 +299,7 @@ mod tests {
         assert_eq!(frame.rect.h, 500.0);
     }
 
-    #[test]
-    fn h_split_produces_two_frames_and_one_divider() {
+    pub fn h_split_produces_two_frames_and_one_divider() {
         let mut layout = GridLayout::new();
         let f0 = layout.faces.keys().copied().next().unwrap();
         layout.split_face(f0, 0.5, crate::layout::SplitAxis::Horizontal).unwrap();
@@ -315,8 +313,7 @@ mod tests {
         assert_eq!(d.axis, SplitAxis::Horizontal);
     }
 
-    #[test]
-    fn gap_shrinks_frame_rect() {
+    pub fn gap_shrinks_frame_rect() {
         let mut layout = GridLayout::new();
         let f0 = layout.faces.keys().copied().next().unwrap();
         layout.split_face(f0, 0.5, crate::layout::SplitAxis::Horizontal).unwrap();
@@ -337,4 +334,12 @@ mod tests {
         let top = frames.iter().find(|f| f.rect.y < 10.0).unwrap();
         assert!((top.rect.h - 230.0).abs() < 1.0, "top h = {} (expected 230)", top.rect.h);
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_impls as t;
+    #[test] fn single_room_produces_one_frame() { t::single_room_produces_one_frame(); }
+    #[test] fn h_split_produces_two_frames_and_one_divider() { t::h_split_produces_two_frames_and_one_divider(); }
+    #[test] fn gap_shrinks_frame_rect() { t::gap_shrinks_frame_rect(); }
 }
