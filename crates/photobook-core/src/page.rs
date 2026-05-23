@@ -260,3 +260,168 @@ impl PhotobookDocument {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc() -> PhotobookDocument {
+        PhotobookDocument::new(210.0, 297.0, 3.0)
+    }
+
+    #[test]
+    fn new_document_has_cover_and_one_content_spread() {
+        let d = doc();
+        assert_eq!(d.spreads.len(), 2);
+        assert_eq!(d.spreads[0].kind, SpreadKind::Cover);
+        assert_eq!(d.spreads[1].kind, SpreadKind::Content);
+    }
+
+    #[test]
+    fn add_spread_increments_content_count() {
+        let mut d = doc();
+        let before = d.content_spread_count();
+        d.add_spread();
+        assert_eq!(d.content_spread_count(), before + 1);
+        assert_eq!(d.spreads.last().unwrap().kind, SpreadKind::Content);
+    }
+
+    #[test]
+    fn remove_spread_does_not_drop_below_minimum_one_content() {
+        let mut d = doc();
+        assert_eq!(d.content_spread_count(), 1);
+        d.remove_spread(1); // only content spread — must be no-op
+        assert_eq!(d.content_spread_count(), 1, "cannot drop below 1 content spread");
+    }
+
+    #[test]
+    fn remove_spread_0_cover_is_always_noop() {
+        let mut d = doc();
+        let count = d.spreads.len();
+        d.remove_spread(0);
+        assert_eq!(d.spreads.len(), count, "cover spread is protected");
+        assert_eq!(d.spreads[0].kind, SpreadKind::Cover);
+    }
+
+    #[test]
+    fn remove_spread_with_multiple_content_spreads_decrements_count() {
+        let mut d = doc();
+        d.add_spread();
+        d.add_spread();
+        assert_eq!(d.content_spread_count(), 3);
+        d.remove_spread(1);
+        assert_eq!(d.content_spread_count(), 2);
+    }
+
+    #[test]
+    fn content_spread_count_ignores_cover_spread() {
+        let d = doc();
+        let total = d.spreads.len();
+        let content = d.content_spread_count();
+        let covers = d.spreads.iter().filter(|s| s.kind == SpreadKind::Cover).count();
+        assert_eq!(covers, 1);
+        assert_eq!(content + covers, total);
+    }
+
+    #[test]
+    fn interior_page_count_is_two_per_content_spread() {
+        let mut d = doc();
+        assert_eq!(d.interior_page_count(), 2);
+        d.add_spread();
+        assert_eq!(d.interior_page_count(), 4);
+        d.add_spread();
+        assert_eq!(d.interior_page_count(), 6);
+    }
+
+    #[test]
+    fn spine_mm_clamps_to_minimum_for_few_pages() {
+        let d = doc(); // 1 content spread → 2 pages → linear = 0.12*2 = 0.24 < 5.0 min
+        assert_eq!(d.spine_mm(), d.spine_min_mm, "spine should clamp to minimum");
+    }
+
+    #[test]
+    fn spine_mm_grows_linearly_above_minimum() {
+        let mut d = doc();
+        // Need 42+ pages (21+ content spreads) so that 0.12*pages > 5.0.
+        for _ in 0..21 { d.add_spread(); }
+        let linear = d.spine_mm_per_page * d.interior_page_count() as f32;
+        assert!(linear > d.spine_min_mm, "sanity: linear spine exceeds minimum");
+        assert!(
+            (d.spine_mm() - linear).abs() < 1e-4,
+            "spine_mm should equal the linear value when above minimum",
+        );
+    }
+
+    #[test]
+    fn endpaper_side_all_none_when_endpapers_disabled() {
+        let mut d = doc();
+        d.endpapers = false;
+        for i in 0..d.spreads.len() {
+            assert!(d.endpaper_side(i).is_none(), "spread {i} should not be an endpaper");
+        }
+    }
+
+    #[test]
+    fn endpaper_side_cover_is_always_none() {
+        let mut d = doc();
+        d.add_spread(); // ensure there are ≥2 content spreads
+        d.endpapers = true;
+        assert_eq!(d.endpaper_side(0), None, "cover spread is never an endpaper");
+    }
+
+    #[test]
+    fn endpaper_side_first_content_is_left_when_enabled() {
+        let mut d = doc();
+        d.add_spread(); // need ≥2 content spreads for both endpapers to exist
+        d.endpapers = true;
+        assert_eq!(d.endpaper_side(1), Some("left"), "first content spread → left endpaper");
+    }
+
+    #[test]
+    fn endpaper_side_last_content_is_right_when_enabled() {
+        let mut d = doc();
+        d.add_spread();
+        d.endpapers = true;
+        let last = d.spreads.len() - 1;
+        assert_eq!(d.endpaper_side(last), Some("right"), "last content spread → right endpaper");
+    }
+
+    #[test]
+    fn endpaper_side_middle_spreads_are_none() {
+        let mut d = doc();
+        d.add_spread();
+        d.add_spread();
+        d.endpapers = true;
+        // Middle content spread (index 2) is neither first nor last.
+        assert_eq!(d.endpaper_side(2), None);
+    }
+
+    #[test]
+    fn spread_width_cover_includes_spine() {
+        let d = doc();
+        let cover = &d.spreads[0];
+        let expected = d.page_size.width_mm * 2.0 + d.spine_mm();
+        assert!((d.spread_width_mm(cover) - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn spread_width_content_is_two_page_widths() {
+        let d = doc();
+        let content = &d.spreads[1];
+        let expected = d.page_size.width_mm * 2.0;
+        assert!((d.spread_width_mm(content) - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn remove_spread_clamps_current_spread_index() {
+        let mut d = doc();
+        d.add_spread();
+        let last = d.spreads.len() - 1;
+        d.current_spread = last;
+        d.remove_spread(last);
+        assert!(
+            d.current_spread < d.spreads.len(),
+            "current_spread must not be out-of-bounds after removing the active spread",
+        );
+    }
+}

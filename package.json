@@ -2,11 +2,14 @@
   "name": "photobook-web",
   "private": true,
   "devDependencies": {
-    "typescript": "^5.5"
+    "typescript": "^5.5",
+    "vitest": "^4.1.7"
   },
   "scripts": {
     "build": "tsc",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@fortawesome/fontawesome-free": "^7.2.0",

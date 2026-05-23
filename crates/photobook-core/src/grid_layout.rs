@@ -841,4 +841,139 @@ mod tests {
         let (lo, hi) = layout.chain_drag_bounds(&chain).expect("bounds should exist");
         assert!(lo < hi, "lo={lo} must be < hi={hi}");
     }
+
+    // -----------------------------------------------------------------------
+    // split_all
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn split_all_horizontal_cuts_every_spanning_face() {
+        // Two side-by-side faces; split_all horizontally should cut both → 4 faces.
+        let mut layout = GridLayout::new();
+        let f0 = *layout.faces.keys().next().unwrap();
+        layout.split_face(f0, 0.5, SplitAxis::Vertical).unwrap();
+        assert_eq!(layout.faces.len(), 2);
+
+        let new_edges = layout.split_all(0.5, SplitAxis::Horizontal, false);
+        assert_eq!(layout.faces.len(), 4, "split_all should produce 4 faces");
+        // Each of the 2 faces is cut → 2 twin pairs → 4 new edge IDs.
+        assert_eq!(new_edges.len(), 4, "split_all returns 2 edge IDs per cut face");
+    }
+
+    #[test]
+    fn split_all_new_is_first_moves_image_to_trailing_face() {
+        let mut layout = GridLayout::new();
+        let f0 = *layout.faces.keys().next().unwrap();
+        layout.faces.get_mut(&f0).unwrap().image.image_id = Some("sentinel".into());
+
+        layout.split_all(0.5, SplitAxis::Horizontal, true);
+
+        // new_is_first=true: new (top) face is empty; original image moves to trailing (bottom).
+        let bottom = layout.faces.values()
+            .find(|f| layout.edges.get(&f.bottom_edge_id)
+                .map(|e| (e.offset - 1.0).abs() < EPS)
+                .unwrap_or(false))
+            .expect("should have a face whose bottom edge is at 1.0");
+        assert_eq!(
+            bottom.image.image_id.as_deref(), Some("sentinel"),
+            "image should move to the trailing face when new_is_first=true",
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // face_at geometry queries
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn face_at_center_hits_single_face() {
+        let layout = GridLayout::new();
+        assert!(layout.face_at(0.5, 0.5).is_some(), "centre of unit square must hit a face");
+    }
+
+    #[test]
+    fn face_at_outside_unit_square_returns_none() {
+        let layout = GridLayout::new();
+        assert!(layout.face_at(2.0, 0.5).is_none());
+        assert!(layout.face_at(0.5, -0.5).is_none());
+    }
+
+    #[test]
+    fn face_at_corners_returns_face() {
+        let layout = GridLayout::new();
+        // Boundary tolerance (EPS) means corners should still hit the face.
+        assert!(layout.face_at(0.0, 0.0).is_some(), "top-left corner");
+        assert!(layout.face_at(1.0, 1.0).is_some(), "bottom-right corner");
+    }
+
+    // -----------------------------------------------------------------------
+    // find_xjunctions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_xjunctions_empty_for_single_face() {
+        let layout = GridLayout::new();
+        assert!(layout.find_xjunctions().is_empty());
+    }
+
+    #[test]
+    fn find_xjunctions_detects_crossing_in_2x2_grid() {
+        // H-split then V-split each half → classic 2×2 grid with one crossing.
+        let mut layout = GridLayout::new();
+        let f0 = *layout.faces.keys().next().unwrap();
+        let f1 = layout.split_face(f0, 0.5, SplitAxis::Horizontal).unwrap();
+        layout.split_face(f0, 0.5, SplitAxis::Vertical).unwrap();
+        layout.split_face(f1, 0.5, SplitAxis::Vertical).unwrap();
+
+        let junctions = layout.find_xjunctions();
+        assert_eq!(junctions.len(), 1, "2×2 grid should have exactly 1 X-junction");
+        let (vx, hy, ..) = junctions[0];
+        assert!((vx - 0.5).abs() < 1e-3, "junction x should be 0.5, got {vx}");
+        assert!((hy - 0.5).abs() < 1e-3, "junction y should be 0.5, got {hy}");
+    }
+
+    // -----------------------------------------------------------------------
+    // rescale_interior_edges
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rescale_interior_edges_compresses_offsets_toward_boundary() {
+        // Three columns at [0, 1/3], [1/3, 2/3], [2/3, 1].
+        let mut layout = GridLayout::new();
+        let f0 = *layout.faces.keys().next().unwrap();
+        let f1 = layout.split_face(f0, 1.0 / 3.0, SplitAxis::Vertical).unwrap();
+        layout.split_face(f1, 2.0 / 3.0, SplitAxis::Vertical).unwrap();
+
+        // Compress all interior edges into [0, 0.5].
+        layout.rescale_interior_edges(SplitAxis::Vertical, 0.5, false);
+
+        for e in layout.edges.values().filter(|e| {
+            e.orientation == Orientation::Vertical && !e.is_boundary
+        }) {
+            assert!(
+                e.offset > EPS && e.offset < 0.5 + EPS,
+                "interior edge at {:.4} should be in (0, 0.5]",
+                e.offset,
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // dissolve_pinwheel_center
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dissolve_pinwheel_center_removes_isolated_face_and_its_edges() {
+        let mut layout = GridLayout::new();
+        let before_faces = layout.faces.len();
+        let before_edges = layout.edges.len();
+
+        let center_id = layout.add_isolated_face(0.3, 0.7, 0.3, 0.7);
+        assert_eq!(layout.faces.len(), before_faces + 1);
+        assert_eq!(layout.edges.len(), before_edges + 4); // 4 fresh edges added
+
+        let ok = layout.dissolve_pinwheel_center(center_id);
+        assert!(ok, "dissolve should succeed for a valid center face");
+        assert_eq!(layout.faces.len(), before_faces, "center face should be removed");
+        assert_eq!(layout.edges.len(), before_edges, "center's 4 edges should be removed");
+    }
 }

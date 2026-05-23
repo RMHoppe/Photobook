@@ -10,7 +10,12 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn ed() -> PhotobookEditor {
-        PhotobookEditor::new(210.0, 297.0, 0.0)
+        // Reset the current spread to a single face so tests that count faces start
+        // from a known baseline (Spread::new pre-splits into 2, which would break
+        // assertions like "split produces 2 faces").
+        let mut e = PhotobookEditor::new(210.0, 297.0, 0.0);
+        e.doc.current_spread_mut().layout = crate::grid_layout::GridLayout::new();
+        e
     }
 
     fn face_count(ed: &PhotobookEditor) -> usize {
@@ -444,5 +449,153 @@ mod tests {
             json.replacen('{', "{\"schema_version\":999,", 1)
         };
         assert!(!ed.load_state(&json));
+    }
+
+    // -----------------------------------------------------------------------
+    // Image assignment and transform
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn assign_image_sets_id_and_resets_transform() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        // Set a non-default transform first to confirm it gets reset.
+        ed.set_image_transform(f, 0.2, 0.8, 2.0, 45.0);
+        ed.assign_image(f, "photo-001.jpg");
+        let face = &ed.doc.current_spread().layout.faces[&f];
+        assert_eq!(face.image.image_id.as_deref(), Some("photo-001.jpg"));
+        assert!((face.image.pan_x - 0.5).abs() < 1e-5, "pan_x should reset to 0.5");
+        assert!((face.image.pan_y - 0.5).abs() < 1e-5, "pan_y should reset to 0.5");
+        assert!((face.image.scale - 1.0).abs() < 1e-5, "scale should reset to 1.0");
+        assert!((face.image.rotation_deg).abs() < 1e-5, "rotation should reset to 0.0");
+    }
+
+    #[test]
+    fn swap_images_exchanges_ids() {
+        let mut ed = ed();
+        let f0 = first_face(&ed);
+        ed.split_face_at(f0, "v", 0.5);
+        let f1 = *ed.doc.current_spread().layout.faces.keys()
+            .find(|&&id| id != f0).unwrap();
+        ed.assign_image(f0, "img-a.jpg");
+        ed.assign_image(f1, "img-b.jpg");
+        ed.swap_images(f0, f1);
+        let layout = &ed.doc.current_spread().layout;
+        assert_eq!(layout.faces[&f0].image.image_id.as_deref(), Some("img-b.jpg"));
+        assert_eq!(layout.faces[&f1].image.image_id.as_deref(), Some("img-a.jpg"));
+    }
+
+    #[test]
+    fn swap_same_face_is_noop() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        ed.assign_image(f, "img-a.jpg");
+        ed.swap_images(f, f);
+        assert_eq!(
+            ed.doc.current_spread().layout.faces[&f].image.image_id.as_deref(),
+            Some("img-a.jpg"),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-image drop split
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn multi_drop_count_1_returns_original_face_unchanged() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        let result: Vec<u32> =
+            serde_json::from_str(&ed.split_face_for_multi_drop(f, 1, true)).unwrap();
+        assert_eq!(result, vec![f]);
+        assert_eq!(face_count(&ed), 1, "count=1 should not split");
+    }
+
+    #[test]
+    fn multi_drop_count_2_produces_two_faces() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        let result: Vec<u32> =
+            serde_json::from_str(&ed.split_face_for_multi_drop(f, 2, true)).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(face_count(&ed), 2);
+    }
+
+    #[test]
+    fn multi_drop_count_4_produces_four_faces() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        let result: Vec<u32> =
+            serde_json::from_str(&ed.split_face_for_multi_drop(f, 4, true)).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(face_count(&ed), 4);
+    }
+
+    #[test]
+    fn multi_drop_count_3_produces_three_faces() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        let result: Vec<u32> =
+            serde_json::from_str(&ed.split_face_for_multi_drop(f, 3, false)).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(face_count(&ed), 3);
+    }
+
+    #[test]
+    fn multi_drop_returned_ids_are_all_unique() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        let result: Vec<u32> =
+            serde_json::from_str(&ed.split_face_for_multi_drop(f, 4, true)).unwrap();
+        let unique: std::collections::HashSet<u32> = result.iter().copied().collect();
+        assert_eq!(unique.len(), result.len(), "all returned face IDs must be distinct");
+    }
+
+    // -----------------------------------------------------------------------
+    // Low-DPI frame detection
+    // -----------------------------------------------------------------------
+
+    // 210 mm page → spread = 420 mm wide; canvas_w=4200, canvas_h=2970 → mm_to_px=10
+    fn canvas() -> (f32, f32) { (4200.0, 2970.0) }
+
+    #[test]
+    fn low_dpi_empty_when_no_image_assigned() {
+        let mut ed = ed();
+        let (cw, ch) = canvas();
+        let result: serde_json::Value =
+            serde_json::from_str(&ed.get_low_dpi_frames(cw, ch)).unwrap();
+        assert_eq!(result.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn low_dpi_flags_tiny_image_in_full_spread_frame() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        ed.assign_image(f, "tiny.jpg");
+        ed.register_image_size("tiny.jpg", 100, 100); // 100×100 px is far too small
+        let (cw, ch) = canvas();
+
+        #[derive(serde::Deserialize)] struct Frame { id: u32, effective_dpi: u32 }
+        let result: Vec<Frame> =
+            serde_json::from_str(&ed.get_low_dpi_frames(cw, ch)).unwrap();
+        assert!(!result.is_empty(), "100×100 px image should be flagged");
+        assert_eq!(result[0].id, f);
+        assert!(result[0].effective_dpi < 300);
+    }
+
+    #[test]
+    fn low_dpi_does_not_flag_adequate_image() {
+        let mut ed = ed();
+        let f = first_face(&ed);
+        ed.assign_image(f, "hires.jpg");
+        // 5000×3600 px at the print frame size exceeds 300 DPI.
+        ed.register_image_size("hires.jpg", 5000, 3600);
+        let (cw, ch) = canvas();
+        let result: serde_json::Value =
+            serde_json::from_str(&ed.get_low_dpi_frames(cw, ch)).unwrap();
+        assert_eq!(
+            result.as_array().unwrap().len(), 0,
+            "adequate-resolution image must not be flagged"
+        );
     }
 }

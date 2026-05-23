@@ -337,4 +337,60 @@ mod tests {
         let top = frames.iter().find(|f| f.rect.y < 10.0).unwrap();
         assert!((top.rect.h - 230.0).abs() < 1.0, "top h = {} (expected 230)", top.rect.h);
     }
+
+    #[test]
+    fn v_split_produces_two_frames_and_one_vertical_divider() {
+        let mut layout = GridLayout::new();
+        let f0 = layout.faces.keys().copied().next().unwrap();
+        layout.split_face(f0, 0.5, crate::layout::SplitAxis::Vertical).unwrap();
+        let r = GridResolver::new(&layout, &[], 1.0);
+        let frames   = r.resolve_frames(root());
+        let dividers = r.resolve_dividers(root());
+        assert_eq!(frames.len(),   2, "expected 2 frames");
+        assert_eq!(dividers.len(), 1, "expected 1 divider");
+        let d = &dividers[0];
+        assert!((d.x - 500.0).abs() < 1.0, "V-divider x should be 500 px, got {}", d.x);
+        assert_eq!(d.axis, SplitAxis::Vertical);
+    }
+
+    #[test]
+    fn nested_h_and_v_splits_produce_four_frames_and_two_dividers() {
+        // H-split → two halves; V-split each half → 2×2 grid.
+        // The V-chains at x=0.5 are contiguous (top touches bottom at 0.5) so they
+        // form one chain spanning the full height → 2 dividers total (1 H + 1 V).
+        let mut layout = GridLayout::new();
+        let f0 = layout.faces.keys().copied().next().unwrap();
+        let f1 = layout.split_face(f0, 0.5, crate::layout::SplitAxis::Horizontal).unwrap();
+        layout.split_face(f0, 0.5, crate::layout::SplitAxis::Vertical).unwrap();
+        layout.split_face(f1, 0.5, crate::layout::SplitAxis::Vertical).unwrap();
+        let r = GridResolver::new(&layout, &[], 1.0);
+        let frames   = r.resolve_frames(root());
+        let dividers = r.resolve_dividers(root());
+        assert_eq!(frames.len(),   4, "2×2 grid should have 4 frames");
+        assert_eq!(dividers.len(), 2, "2×2 grid should have 2 dividers (H + V)");
+    }
+
+    #[test]
+    fn frames_sorted_ascending_by_z_index() {
+        let mut layout = GridLayout::new();
+        let f0 = layout.faces.keys().copied().next().unwrap();
+        layout.split_face(f0, 0.5, crate::layout::SplitAxis::Horizontal).unwrap();
+
+        // Give the new face a higher z-index.
+        for face in layout.faces.values_mut() {
+            let bot = face.bottom_edge_id;
+            if layout.edges.get(&bot).map(|e| e.offset < 0.6).unwrap_or(false) {
+                face.z_index = 10;
+            }
+        }
+
+        let r = GridResolver::new(&layout, &[], 1.0);
+        let frames = r.resolve_frames(root());
+        assert_eq!(frames.len(), 2);
+        // z=0 face should come before z=10 face in the sorted output.
+        let z_values: Vec<_> = frames.iter()
+            .map(|f| layout.faces[&f.id].z_index)
+            .collect();
+        assert!(z_values[0] <= z_values[1], "frames must be sorted ascending by z_index");
+    }
 }
