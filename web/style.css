@@ -211,10 +211,13 @@ button.active { background: var(--accent); border-color: var(--accent); }
 #sidebar-empty-state strong { color: var(--text); font-weight: 600; }
 #sidebar-empty-state .empty-hint { font-size: 11px; opacity: 0.6; }
 
-#image-grid {
+#image-grid-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+#image-grid {
   padding: 8px;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
