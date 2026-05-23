@@ -12,5 +12,5 @@
     "noUnusedParameters": false
   },
   "include": ["web/**/*.ts"],
-  "exclude": ["web/pkg", "node_modules"]
+  "exclude": ["web/pkg", "web/test-pkg", "node_modules"]
 }
