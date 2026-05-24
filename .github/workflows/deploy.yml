@@ -45,6 +45,9 @@ jobs:
       - name: Build WASM
         run: wasm-pack build crates/photobook-core --target web --out-dir "$(pwd)/web/pkg" --release
 
+      - name: Build test WASM
+        run: wasm-pack build crates/photobook-core --target web --out-dir "$(pwd)/web/test-pkg" --features wasm-test --release
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
