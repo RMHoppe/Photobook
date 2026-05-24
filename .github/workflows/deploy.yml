@@ -43,10 +43,10 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM
-        run: wasm-pack build crates/photobook-core --target web --out-dir "$(pwd)/web/pkg" --release
+        run: wasm-pack build crates/photobook-core --target web --out-dir "$(pwd)/web/pkg" --no-opt --profile release
 
       - name: Build test WASM
-        run: wasm-pack build crates/photobook-core --target web --out-dir "$(pwd)/web/test-pkg" --features wasm-test --release
+        run: wasm-pack build crates/photobook-core --target web --out-dir "$(pwd)/web/test-pkg" --no-opt --profile release --features wasm-test
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
