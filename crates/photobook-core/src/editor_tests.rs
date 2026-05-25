@@ -10,7 +10,11 @@ pub(crate) mod test_impls {
     // -----------------------------------------------------------------------
 
     fn ed() -> PhotobookEditor {
-        PhotobookEditor::new(210.0, 297.0, 0.0)
+        let mut e = PhotobookEditor::new(210.0, 297.0, 0.0);
+        // Spread::new() pre-splits vertically for the two-page layout; reset to
+        // a single face so tests have a predictable baseline.
+        e.doc.current_spread_mut().layout = crate::grid_layout::GridLayout::new();
+        e
     }
 
     fn face_count(ed: &PhotobookEditor) -> usize {
