@@ -49,12 +49,6 @@ jobs:
           mkdir -p web/pkg
           wasm-bindgen --out-dir web/pkg --target web target/wasm32-unknown-unknown/release/photobook_core.wasm
 
-      - name: Build test WASM
-        run: |
-          cargo build --lib --target wasm32-unknown-unknown --release --features wasm-test -p photobook-core
-          mkdir -p web/test-pkg
-          wasm-bindgen --out-dir web/test-pkg --target web target/wasm32-unknown-unknown/release/photobook_core.wasm
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

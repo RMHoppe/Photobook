@@ -1,11 +1,11 @@
-// mobile.ts — in-browser test runner using the test WASM binary.
-// The test WASM (web/test-pkg/) is built with --features wasm-test and
-// exports wasm_test_list() → JSON string, wasm_test_run(name) → void/throws.
+// mobile.ts — in-browser test runner.
+// Test exports (wasm_test_list, wasm_test_run) are included in the main WASM
+// build via the wasm-test feature being part of the default feature set.
 // Panics in wasm_test_run propagate as JS exceptions (console_error_panic_hook),
 // which we catch per-test without killing the WASM instance.
 
 // Dynamic import so TypeScript doesn't require the generated pkg to exist at
-// compile time. The actual module is resolved at runtime from test-pkg/.
+// compile time. The actual module is resolved at runtime from pkg/.
 type WasmModule = {
   default: (input?: string | URL | Request | BufferSource | WebAssembly.Module) => Promise<unknown>;
   init_panic_hook: () => void;
@@ -15,7 +15,7 @@ type WasmModule = {
 
 async function loadWasm(): Promise<WasmModule> {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-  return import('./test-pkg/photobook_core.js') as Promise<WasmModule>;
+  return import('./pkg/photobook_core.js') as Promise<WasmModule>;
 }
 
 async function runTests(): Promise<void> {
