@@ -2,16 +2,32 @@ import { getAllSelected } from './wasm-bridge.js';
 import type { PhotobookEditor } from './pkg/photobook_core.js';
 
 const DEFAULTS: Record<string, { title: string; min: string; max: string; step: string }> = {
-  rotation: { title: 'Randomize Rotation', min: '-15', max: '15', step: '0.5' },
+  rotation:        { title: 'Randomize Rotation',        min: '-15', max: '15',  step: '0.5' },
+  'margin-all':    { title: 'Randomize Margin',           min: '0',   max: '10',  step: '0.5' },
+  'margin-v':      { title: 'Randomize Vertical Margin',  min: '0',   max: '10',  step: '0.5' },
+  'margin-h':      { title: 'Randomize Horiz. Margin',    min: '0',   max: '10',  step: '0.5' },
+  'margin-top':    { title: 'Randomize Top Margin',       min: '0',   max: '10',  step: '0.5' },
+  'margin-right':  { title: 'Randomize Right Margin',     min: '0',   max: '10',  step: '0.5' },
+  'margin-bottom': { title: 'Randomize Bottom Margin',    min: '0',   max: '10',  step: '0.5' },
+  'margin-left':   { title: 'Randomize Left Margin',      min: '0',   max: '10',  step: '0.5' },
+  'bw-all':        { title: 'Randomize Border Width',     min: '0',   max: '3',   step: '0.5' },
+  'bw-v':          { title: 'Randomize Vert. Border',     min: '0',   max: '3',   step: '0.5' },
+  'bw-h':          { title: 'Randomize Horiz. Border',    min: '0',   max: '3',   step: '0.5' },
+  'bw-top':        { title: 'Randomize Top Border',       min: '0',   max: '3',   step: '0.5' },
+  'bw-right':      { title: 'Randomize Right Border',     min: '0',   max: '3',   step: '0.5' },
+  'bw-bottom':     { title: 'Randomize Bottom Border',    min: '0',   max: '3',   step: '0.5' },
+  'bw-left':       { title: 'Randomize Left Border',      min: '0',   max: '3',   step: '0.5' },
+  'border-radius': { title: 'Randomize Corner Radius',    min: '0',   max: '10',  step: '0.5' },
 };
 
 export class RandomizeDialog {
   private _el: HTMLDivElement;
+  private _field = 'rotation';
 
   constructor(
     container: HTMLElement,
     private _editor: PhotobookEditor,
-    private _onApply: (nodeIds: number[], min: number, max: number) => void,
+    private _onApply: (nodeIds: number[], min: number, max: number, field: string) => void,
   ) {
     this._el = document.createElement('div');
     this._el.id = 'randomize-dialog';
@@ -38,12 +54,13 @@ export class RandomizeDialog {
       if (isNaN(min) || isNaN(max) || min > max) return;
       const selected = getAllSelected(this._editor);
       if (selected.length < 2) return;
-      this._onApply(selected, min, max);
+      this._onApply(selected, min, max, this._field);
     });
   }
 
-  show(field: 'rotation'): void {
-    const d = DEFAULTS[field];
+  show(field: string): void {
+    this._field = field;
+    const d = DEFAULTS[field] ?? DEFAULTS['rotation'];
     this._el.querySelector<HTMLElement>('#rd-title')!.textContent = d.title;
     const minEl = this._el.querySelector<HTMLInputElement>('#rd-min')!;
     const maxEl = this._el.querySelector<HTMLInputElement>('#rd-max')!;

@@ -156,10 +156,16 @@ const panelText = document.getElementById('panel-text');
 const panelDivider = document.getElementById('panel-divider');
 const panelPhoto = document.getElementById('panel-photo');
 const panelProject = document.getElementById('panel-project');
-const randomizeDialog = new RandomizeDialog(document.getElementById('canvas-center'), editor, (nodeIds, min, max) => {
+const randomizeDialog = new RandomizeDialog(document.getElementById('canvas-center'), editor, (nodeIds, min, max, field) => {
     undoManager.snapshot();
     for (const nodeId of nodeIds) {
-        editor.set_face_frame_rotation(nodeId, min + Math.random() * (max - min));
+        const value = min + Math.random() * (max - min);
+        if (field === 'rotation') {
+            editor.set_face_frame_rotation(nodeId, value);
+        }
+        else {
+            editor.set_face_box_model_field(nodeId, field, value);
+        }
     }
     refreshBoxModel();
     redraw();

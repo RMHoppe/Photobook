@@ -7,13 +7,14 @@
 //   ""          for border-position (Rust deserialises as BorderPosition::Mixed → skip)
 //   -1          for border.radius (f32 field, Rust skips if < 0)
 import { debounce } from './utils.js';
-import { wrapField, numField, colorField, selectField } from './ui-fields.js';
-import { MarginModeController, marginSectionHtml } from './margin-mode-controller.js';
+import { numFieldWithDice, colorField, selectField, bindInputs } from './ui-fields.js';
+import { MarginModeController, marginSectionHtml, detectMarginMode } from './margin-mode-controller.js';
 export class BoxModelEditor {
     containerEl;
     onChange;
     onZOrder;
     onDiceClick;
+    _multiSel = false;
     onLayoutTransform;
     _built = false;
     _marginCtrl;
@@ -33,21 +34,30 @@ export class BoxModelEditor {
         const bm = JSON.parse(boxModelJson);
         if (!this._built || this.containerEl.dataset.panel !== 'boxmodel')
             this._build();
-        // Show dice buttons only when multiple frames are selected.
-        const multiSel = selectionCount > 1;
-        this.containerEl.querySelectorAll('[data-dice]').forEach(btn => {
-            btn.hidden = !multiSel;
-        });
+        // Dice buttons only appear on field focus (when multiSel); hide all when dropping to single selection.
+        this._multiSel = selectionCount > 1;
+        if (!this._multiSel) {
+            this.containerEl.querySelectorAll('[data-dice]').forEach(btn => {
+                btn.hidden = true;
+            });
+        }
         // Show layout-transform buttons when multiple frames form a complete rectangle.
-        const showTransform = multiSel && selectionIsRect;
+        const showTransform = this._multiSel && selectionIsRect;
         const transformRow = this.containerEl.querySelector('.bm-layout-transform');
         if (transformRow)
             transformRow.hidden = !showTransform;
         // Margin (null = mixed sentinel; allows negative values)
-        this._updateMarginUI(bm.margin);
+        const margin = bm.margin ?? { top: null, right: null, bottom: null, left: null };
+        this._updateSidesUI(this._marginCtrl, 'margin', margin);
         // Border widths (per-side, null = mixed)
         const border = bm.border ?? {};
-        this._updateBorderWidthUI(border);
+        const bw = {
+            top: border.width_top ?? null,
+            right: border.width_right ?? null,
+            bottom: border.width_bottom ?? null,
+            left: border.width_left ?? null,
+        };
+        this._updateSidesUI(this._borderWidthCtrl, 'bw', bw);
         this._set('border-radius', border.radius ?? 0);
         this._set('border-color', border.color ?? '#000000');
         this._set('border-position', border.position ?? 'centered');
@@ -130,12 +140,12 @@ export class BoxModelEditor {
         this._built = true;
         this.containerEl.dataset.panel = 'boxmodel';
         this.containerEl.innerHTML = `
-      ${marginSectionHtml('Margin (mm)', (name, label) => numField(name, label, { min: null }))}
-      ${marginSectionHtml('Border width (mm)', (name, label) => numField(name, label), 'bw')}
+      ${marginSectionHtml('Margin (mm)', (name, label) => numFieldWithDice(name, label, { min: null }))}
+      ${marginSectionHtml('Border width (mm)', (name, label) => numFieldWithDice(name, label), 'bw')}
       <div class="bm-section">
         <h4>Border style</h4>
         <div class="bm-grid">
-          ${numField('border-radius', 'Radius (mm)')}
+          ${numFieldWithDice('border-radius', 'Radius (mm)')}
           ${colorField('border-color', 'Color')}
         </div>
         <div class="bm-grid" style="margin-top:4px">
@@ -149,7 +159,7 @@ export class BoxModelEditor {
       <div class="bm-section">
         <h4>Transform</h4>
         <div class="bm-grid">
-          ${this._offsetFieldWithDice('node-rotation', 'Rotation (°)', 'rotation')}
+          ${numFieldWithDice('node-rotation', 'Rotation (°)', { min: null, max: undefined })}
         </div>
         <div class="bm-layout-transform" hidden>
           <div class="bm-layout-btns">
@@ -173,14 +183,7 @@ export class BoxModelEditor {
         </div>
       </div>
     `;
-        this.containerEl.querySelectorAll('input, select').forEach(el => {
-            const onUserInput = () => {
-                delete el.dataset.mixed;
-                this._emit();
-            };
-            el.addEventListener('change', onUserInput);
-            el.addEventListener('input', onUserInput);
-        });
+        bindInputs(this.containerEl, () => this._emit());
         this.containerEl.querySelectorAll('[data-zorder]').forEach(btn => {
             btn.addEventListener('click', () => {
                 this.onZOrder(btn.dataset.zorder);
@@ -191,21 +194,31 @@ export class BoxModelEditor {
                 this.onDiceClick(btn.dataset.dice);
             });
         });
+        this.containerEl.addEventListener('focusin', (e) => {
+            const input = e.target;
+            if (!(input instanceof HTMLInputElement) || input.type !== 'number')
+                return;
+            const btn = input.parentElement?.querySelector('.bm-dice-btn');
+            if (btn && this._multiSel)
+                btn.hidden = false;
+        });
+        this.containerEl.addEventListener('focusout', (e) => {
+            const input = e.target;
+            if (!(input instanceof HTMLInputElement) || input.type !== 'number')
+                return;
+            const btn = input.parentElement?.querySelector('.bm-dice-btn');
+            if (btn)
+                setTimeout(() => { btn.hidden = true; }, 150);
+        });
         this.containerEl.querySelectorAll('[data-layout]').forEach(btn => {
             btn.addEventListener('click', () => {
                 this.onLayoutTransform(btn.dataset.layout);
             });
         });
         this._marginCtrl = new MarginModeController(this.containerEl);
-        this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
+        this._marginCtrl.bindButtons(mode => this._setSidesMode(this._marginCtrl, 'margin', mode));
         this._borderWidthCtrl = new MarginModeController(this.containerEl, 'bw');
-        this._borderWidthCtrl.bindButtons(mode => this._setBorderWidthMode(mode));
-    }
-    // ---------------------------------------------------------------------------
-    // Field HTML builders (box-model-specific)
-    // ---------------------------------------------------------------------------
-    _offsetFieldWithDice(name, label, dice) {
-        return wrapField(label, `<div class="bm-input-row"><input type="number" step="0.5" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${dice}" title="Randomize across selection" hidden><i class="fa-solid fa-dice"></i></button></div>`);
+        this._borderWidthCtrl.bindButtons(mode => this._setSidesMode(this._borderWidthCtrl, 'bw', mode));
     }
     // ---------------------------------------------------------------------------
     // Field value readers (used by _emit)
@@ -237,44 +250,33 @@ export class BoxModelEditor {
         return isNaN(v) ? 0 : v;
     }
     // ---------------------------------------------------------------------------
-    // Margin mode selector helpers
+    // Shared sides helpers — used for both margin ('margin') and border width ('bw')
     // ---------------------------------------------------------------------------
-    _detectMarginMode(m) {
-        const { top: t, right: r, bottom: b, left: l } = m;
-        if (t == null || r == null || b == null || l == null)
-            return 'each';
-        if (t === r && r === b && b === l)
-            return 'all';
-        if (t === b && l === r)
-            return 'xy';
-        return 'each';
-    }
-    _updateMarginUI(margin) {
-        const m = margin ?? { top: null, right: null, bottom: null, left: null };
-        this._marginCtrl.setMode(this._detectMarginMode(m));
-        if (this._marginCtrl.mode === 'all') {
-            this._setOffset('margin-all', m.top);
+    _updateSidesUI(ctrl, ns, m) {
+        ctrl.setMode(detectMarginMode(m));
+        if (ctrl.mode === 'all') {
+            this._setOffset(`${ns}-all`, m.top);
         }
-        else if (this._marginCtrl.mode === 'xy') {
-            this._setOffset('margin-v', m.top);
-            this._setOffset('margin-h', m.right);
+        else if (ctrl.mode === 'xy') {
+            this._setOffset(`${ns}-v`, m.top);
+            this._setOffset(`${ns}-h`, m.right);
         }
         else {
-            this._setOffset('margin-top', m.top);
-            this._setOffset('margin-right', m.right);
-            this._setOffset('margin-bottom', m.bottom);
-            this._setOffset('margin-left', m.left);
+            this._setOffset(`${ns}-top`, m.top);
+            this._setOffset(`${ns}-right`, m.right);
+            this._setOffset(`${ns}-bottom`, m.bottom);
+            this._setOffset(`${ns}-left`, m.left);
         }
     }
-    _setMarginMode(mode) {
+    _setSidesMode(ctrl, ns, mode) {
         const rank = { all: 1, xy: 2, each: 3 };
-        const refining = rank[mode] > rank[this._marginCtrl.mode];
-        const prev = this._readCurrentMargins();
-        this._marginCtrl.setMode(mode);
+        const refining = rank[mode] > rank[ctrl.mode];
+        const prev = this._readCurrentSides(ctrl, ns);
+        ctrl.setMode(mode);
         if (mode === 'all') {
             // Always coarsening — show mixed if sides differ.
             const same = prev.top === prev.right && prev.right === prev.bottom && prev.bottom === prev.left;
-            this._setOffset('margin-all', same ? prev.top : null);
+            this._setOffset(`${ns}-all`, same ? prev.top : null);
         }
         else if (mode === 'xy') {
             const v = prev.top === prev.bottom ? prev.top : null;
@@ -282,126 +284,45 @@ export class BoxModelEditor {
             // When refining from 'all', a null v/h means the all-field was mixed —
             // leave the xy fields as-is (they still hold their previous concrete values).
             if (!refining || v !== null)
-                this._setOffset('margin-v', v);
+                this._setOffset(`${ns}-v`, v);
             if (!refining || h !== null)
-                this._setOffset('margin-h', h);
+                this._setOffset(`${ns}-h`, h);
         }
         else {
             // Always refining — only overwrite each field if we have a concrete value;
             // otherwise preserve whatever the each-pane already shows.
             if (prev.top !== null)
-                this._setOffset('margin-top', prev.top);
+                this._setOffset(`${ns}-top`, prev.top);
             if (prev.right !== null)
-                this._setOffset('margin-right', prev.right);
+                this._setOffset(`${ns}-right`, prev.right);
             if (prev.bottom !== null)
-                this._setOffset('margin-bottom', prev.bottom);
+                this._setOffset(`${ns}-bottom`, prev.bottom);
             if (prev.left !== null)
-                this._setOffset('margin-left', prev.left);
+                this._setOffset(`${ns}-left`, prev.left);
         }
         this._emit();
     }
-    _readCurrentMargins() {
-        if (this._marginCtrl.mode === 'all') {
-            const v = this._gOffset('margin-all');
+    _readCurrentSides(ctrl, ns) {
+        if (ctrl.mode === 'all') {
+            const v = this._gOffset(`${ns}-all`);
             return { top: v, right: v, bottom: v, left: v };
         }
-        if (this._marginCtrl.mode === 'xy') {
-            const v = this._gOffset('margin-v');
-            const h = this._gOffset('margin-h');
+        if (ctrl.mode === 'xy') {
+            const v = this._gOffset(`${ns}-v`);
+            const h = this._gOffset(`${ns}-h`);
             return { top: v, right: h, bottom: v, left: h };
         }
         return {
-            top: this._gOffset('margin-top'),
-            right: this._gOffset('margin-right'),
-            bottom: this._gOffset('margin-bottom'),
-            left: this._gOffset('margin-left'),
-        };
-    }
-    // ---------------------------------------------------------------------------
-    // Border width mode selector helpers (mirrors margin mode logic, namespace 'bw')
-    // ---------------------------------------------------------------------------
-    _detectBorderWidthMode(m) {
-        const { top: t, right: r, bottom: b, left: l } = m;
-        if (t == null || r == null || b == null || l == null)
-            return 'each';
-        if (t === r && r === b && b === l)
-            return 'all';
-        if (t === b && l === r)
-            return 'xy';
-        return 'each';
-    }
-    _updateBorderWidthUI(border) {
-        const m = {
-            top: border.width_top ?? null,
-            right: border.width_right ?? null,
-            bottom: border.width_bottom ?? null,
-            left: border.width_left ?? null,
-        };
-        this._borderWidthCtrl.setMode(this._detectBorderWidthMode(m));
-        if (this._borderWidthCtrl.mode === 'all') {
-            this._setOffset('bw-all', m.top);
-        }
-        else if (this._borderWidthCtrl.mode === 'xy') {
-            this._setOffset('bw-v', m.top);
-            this._setOffset('bw-h', m.right);
-        }
-        else {
-            this._setOffset('bw-top', m.top);
-            this._setOffset('bw-right', m.right);
-            this._setOffset('bw-bottom', m.bottom);
-            this._setOffset('bw-left', m.left);
-        }
-    }
-    _setBorderWidthMode(mode) {
-        const rank = { all: 1, xy: 2, each: 3 };
-        const refining = rank[mode] > rank[this._borderWidthCtrl.mode];
-        const prev = this._readCurrentBorderWidths();
-        this._borderWidthCtrl.setMode(mode);
-        if (mode === 'all') {
-            const same = prev.top === prev.right && prev.right === prev.bottom && prev.bottom === prev.left;
-            this._setOffset('bw-all', same ? prev.top : null);
-        }
-        else if (mode === 'xy') {
-            const v = prev.top === prev.bottom ? prev.top : null;
-            const h = prev.right === prev.left ? prev.right : null;
-            if (!refining || v !== null)
-                this._setOffset('bw-v', v);
-            if (!refining || h !== null)
-                this._setOffset('bw-h', h);
-        }
-        else {
-            if (prev.top !== null)
-                this._setOffset('bw-top', prev.top);
-            if (prev.right !== null)
-                this._setOffset('bw-right', prev.right);
-            if (prev.bottom !== null)
-                this._setOffset('bw-bottom', prev.bottom);
-            if (prev.left !== null)
-                this._setOffset('bw-left', prev.left);
-        }
-        this._emit();
-    }
-    _readCurrentBorderWidths() {
-        if (this._borderWidthCtrl.mode === 'all') {
-            const v = this._gOffset('bw-all');
-            return { top: v, right: v, bottom: v, left: v };
-        }
-        if (this._borderWidthCtrl.mode === 'xy') {
-            const v = this._gOffset('bw-v');
-            const h = this._gOffset('bw-h');
-            return { top: v, right: h, bottom: v, left: h };
-        }
-        return {
-            top: this._gOffset('bw-top'),
-            right: this._gOffset('bw-right'),
-            bottom: this._gOffset('bw-bottom'),
-            left: this._gOffset('bw-left'),
+            top: this._gOffset(`${ns}-top`),
+            right: this._gOffset(`${ns}-right`),
+            bottom: this._gOffset(`${ns}-bottom`),
+            left: this._gOffset(`${ns}-left`),
         };
     }
     _emit = debounce(() => {
-        const bw = this._readCurrentBorderWidths();
+        const bw = this._readCurrentSides(this._borderWidthCtrl, 'bw');
         const bm = {
-            margin: this._readCurrentMargins(),
+            margin: this._readCurrentSides(this._marginCtrl, 'margin'),
             border: {
                 width_top: bw.top,
                 width_right: bw.right,
