@@ -39,24 +39,15 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install wasm-bindgen-cli
+      - name: Build WASM
         run: |
+          cargo build --lib --target wasm32-unknown-unknown --release -p photobook-core
           WBVER=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | cut -d'"' -f2)
           curl -sL "https://github.com/rustwasm/wasm-bindgen/releases/download/${WBVER}/wasm-bindgen-${WBVER}-x86_64-unknown-linux-musl.tar.gz" \
             | tar xz -C /tmp
           cp "/tmp/wasm-bindgen-${WBVER}-x86_64-unknown-linux-musl/wasm-bindgen" ~/.cargo/bin/
-
-      - name: Build WASM
-        run: |
-          cargo build --lib --target wasm32-unknown-unknown --release -p photobook-core
           mkdir -p web/pkg
           wasm-bindgen --out-dir web/pkg --target web target/wasm32-unknown-unknown/release/photobook_core.wasm
-
-      - name: Build test WASM
-        run: |
-          cargo build --lib --target wasm32-unknown-unknown --release --features wasm-test -p photobook-core
-          mkdir -p web/test-pkg
-          wasm-bindgen --out-dir web/test-pkg --target web target/wasm32-unknown-unknown/release/photobook_core.wasm
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

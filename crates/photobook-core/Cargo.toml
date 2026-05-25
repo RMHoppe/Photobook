@@ -19,7 +19,7 @@ printpdf       = { version = "0.7", features = ["embedded_images"] }
 image          = { version = "0.24", default-features = false, features = ["jpeg", "png"] }
 
 [features]
-default = ["console_error_panic_hook"]
+default = ["console_error_panic_hook", "wasm-test"]
 wasm-test = ["console_error_panic_hook"]
 
 [package.metadata.wasm-pack.profile.release]
