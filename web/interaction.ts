@@ -1256,7 +1256,14 @@ export const rightClickSplitMode: InteractionMode = {
 
   onMouseUp(e, ctx) {
     if (e.button !== 2) return;
-    commitCutSplit(ctx);
+    const state = ctx.modeState as CutToolState;
+    if (state.nodeId !== NULL_ID && state.axis !== null) {
+      commitCutSplit(ctx);
+    } else {
+      ctx.overlays.splitPreview = null;
+      ctx.setMode(idleMode, {});
+      ctx.redraw();
+    }
     ctx.canvasEl.style.cursor = '';
   },
 

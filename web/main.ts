@@ -559,7 +559,7 @@ canvasEl.addEventListener('mousemove', (e) => {
 canvasEl.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 
 canvasEl.addEventListener('mousedown', (e) => {
-  if (e.button === 2 && currentMode !== rightClickSplitMode) {
+  if (e.button === 2 && currentMode === idleMode) {
     setMode(rightClickSplitMode, { numCuts: 1, nodeId: NULL_ID, axis: null, ratio: null });
     rightClickSplitMode.onMouseMove(e, { ...interactionCtx(), modeState });
     return;
