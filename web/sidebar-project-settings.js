@@ -1,6 +1,6 @@
 // sidebar-project-settings.ts — ProjectSettingsPanel (rendered inside the project settings modal).
 import { debounce } from './utils.js';
-import { numField } from './ui-fields.js';
+import { numField, bindInputs } from './ui-fields.js';
 export class ProjectSettingsPanel {
     containerEl;
     onChange;
@@ -95,10 +95,7 @@ export class ProjectSettingsPanel {
         </label>
       </div>
     `;
-        this.containerEl.querySelectorAll('input[type="number"]').forEach(el => {
-            el.addEventListener('change', () => this._emit());
-            el.addEventListener('input', () => this._emit());
-        });
+        bindInputs(this.containerEl, () => this._emit(), 'input[type="number"]');
         const bleedChk = this.containerEl.querySelector('#ps-show-bleed');
         bleedChk.addEventListener('change', () => {
             this.onToggleBleed?.(bleedChk.checked);

@@ -1,7 +1,7 @@
 // sidebar-spread-settings.ts — SpreadSettingsPanel (shown in sidebar when nothing is selected).
 import { debounce } from './utils.js';
-import { numField, colorField } from './ui-fields.js';
-import { MarginModeController, marginSectionHtml } from './margin-mode-controller.js';
+import { numField, colorField, bindInputs } from './ui-fields.js';
+import { MarginModeController, marginSectionHtml, detectMarginMode } from './margin-mode-controller.js';
 export class SpreadSettingsPanel {
     containerEl;
     onChange;
@@ -30,20 +30,13 @@ export class SpreadSettingsPanel {
         </div>
       </div>
     `;
-        this.containerEl.querySelectorAll('input').forEach(el => {
-            const onInput = () => {
-                delete el.dataset.mixed;
-                this._emit();
-            };
-            el.addEventListener('change', onInput);
-            el.addEventListener('input', onInput);
-        });
+        bindInputs(this.containerEl, () => this._emit(), 'input');
         this._marginCtrl = new MarginModeController(this.containerEl);
         this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
     }
     _populate(data) {
         this._lastMargins = { top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left };
-        const mode = this._detectMarginMode(data);
+        const mode = detectMarginMode({ top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left });
         this._marginCtrl.setMode(mode);
         if (mode === 'all') {
             this._setNum('margin-all', data.margin_top);
@@ -67,7 +60,7 @@ export class SpreadSettingsPanel {
             return;
         if (value === null) {
             el.value = '';
-            el.placeholder = '—';
+            el.placeholder = 'Mixed';
             el.dataset.mixed = '1';
         }
         else {
@@ -84,14 +77,6 @@ export class SpreadSettingsPanel {
     // ---------------------------------------------------------------------------
     // Margin mode selector helpers
     // ---------------------------------------------------------------------------
-    _detectMarginMode(data) {
-        const { margin_top: t, margin_right: r, margin_bottom: b, margin_left: l } = data;
-        if (t === r && r === b && b === l)
-            return 'all';
-        if (t === b && l === r)
-            return 'xy';
-        return 'each';
-    }
     _setMarginMode(mode) {
         const rank = { all: 1, xy: 2, each: 3 };
         const refining = rank[mode] > rank[this._marginCtrl.mode];
