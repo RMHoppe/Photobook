@@ -21,6 +21,17 @@ export function numField(name: string, label: string, opts: NumFieldOpts = {}): 
   );
 }
 
+export function numFieldWithDice(name: string, label: string, opts: NumFieldOpts = {}): string {
+  const { min = 0, max = 200, step = 0.5, fullWidth = false } = opts;
+  const minAttr = min !== null ? `min="${min}" ` : '';
+  const maxAttr = max !== undefined ? `max="${max}" ` : '';
+  return wrapField(
+    label,
+    `<div class="bm-input-row"><input type="number" ${minAttr}${maxAttr}step="${step}" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${name}" title="Randomize across selection" hidden><i class="fa-solid fa-dice"></i></button></div>`,
+    fullWidth,
+  );
+}
+
 export function colorField(name: string, label: string): string {
   return wrapField(label, `<input type="color" data-field="${name}" value="#000000" />`);
 }

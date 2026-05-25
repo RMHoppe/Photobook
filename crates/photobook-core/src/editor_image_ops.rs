@@ -71,6 +71,29 @@ impl PhotobookEditor {
         self.mark_structure_dirty();
     }
 
+    pub fn set_face_box_model_field(&mut self, face_id: u32, field: &str, value: f32) {
+        let Some(face) = self.doc.current_spread_mut().layout.faces.get_mut(&face_id) else { return };
+        match field {
+            "margin-all"    => { let m = &mut face.box_model.margin; m.top = Some(value); m.right = Some(value); m.bottom = Some(value); m.left = Some(value); }
+            "margin-v"      => { face.box_model.margin.top    = Some(value); face.box_model.margin.bottom = Some(value); }
+            "margin-h"      => { face.box_model.margin.right  = Some(value); face.box_model.margin.left   = Some(value); }
+            "margin-top"    => { face.box_model.margin.top    = Some(value); }
+            "margin-right"  => { face.box_model.margin.right  = Some(value); }
+            "margin-bottom" => { face.box_model.margin.bottom = Some(value); }
+            "margin-left"   => { face.box_model.margin.left   = Some(value); }
+            "bw-all"        => { let b = &mut face.box_model.border; b.width_top = Some(value); b.width_right = Some(value); b.width_bottom = Some(value); b.width_left = Some(value); }
+            "bw-v"          => { face.box_model.border.width_top    = Some(value); face.box_model.border.width_bottom = Some(value); }
+            "bw-h"          => { face.box_model.border.width_right  = Some(value); face.box_model.border.width_left   = Some(value); }
+            "bw-top"        => { face.box_model.border.width_top    = Some(value); }
+            "bw-right"      => { face.box_model.border.width_right  = Some(value); }
+            "bw-bottom"     => { face.box_model.border.width_bottom = Some(value); }
+            "bw-left"       => { face.box_model.border.width_left   = Some(value); }
+            "border-radius" => { face.box_model.border.radius = value.max(0.0); }
+            _ => {}
+        }
+        self.mark_structure_dirty();
+    }
+
     // -----------------------------------------------------------------------
     // DPI checks
     // -----------------------------------------------------------------------

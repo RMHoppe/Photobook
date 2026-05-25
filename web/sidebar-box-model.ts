@@ -9,7 +9,7 @@
 
 import type { BoxModel } from './types.js';
 import { debounce } from './utils.js';
-import { wrapField, numField, colorField, selectField, bindInputs } from './ui-fields.js';
+import { numFieldWithDice, colorField, selectField, bindInputs } from './ui-fields.js';
 import { MarginModeController, marginSectionHtml, type MarginMode, type Sides, detectMarginMode } from './margin-mode-controller.js';
 
 export type LayoutTransform = 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw';
@@ -18,7 +18,8 @@ export class BoxModelEditor {
   private containerEl: HTMLElement;
   private onChange: (json: string) => void;
   private onZOrder: (direction: 'up' | 'down') => void;
-  private onDiceClick: (field: 'rotation') => void;
+  private onDiceClick: (field: string) => void;
+  private _multiSel = false;
   private onLayoutTransform: (t: LayoutTransform) => void;
   private _built = false;
   private _marginCtrl!: MarginModeController;
@@ -28,7 +29,7 @@ export class BoxModelEditor {
     containerEl: HTMLElement,
     onChange: (json: string) => void,
     onZOrder: (direction: 'up' | 'down') => void,
-    onDiceClick: (field: 'rotation') => void,
+    onDiceClick: (field: string) => void,
     onLayoutTransform: (t: LayoutTransform) => void,
   ) {
     this.containerEl = containerEl;
@@ -48,14 +49,16 @@ export class BoxModelEditor {
 
     if (!this._built || this.containerEl.dataset.panel !== 'boxmodel') this._build();
 
-    // Show dice buttons only when multiple frames are selected.
-    const multiSel = selectionCount > 1;
-    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-dice]').forEach(btn => {
-      btn.hidden = !multiSel;
-    });
+    // Dice buttons only appear on field focus (when multiSel); hide all when dropping to single selection.
+    this._multiSel = selectionCount > 1;
+    if (!this._multiSel) {
+      this.containerEl.querySelectorAll<HTMLButtonElement>('[data-dice]').forEach(btn => {
+        btn.hidden = true;
+      });
+    }
 
     // Show layout-transform buttons when multiple frames form a complete rectangle.
-    const showTransform = multiSel && selectionIsRect;
+    const showTransform = this._multiSel && selectionIsRect;
     const transformRow = this.containerEl.querySelector<HTMLElement>('.bm-layout-transform');
     if (transformRow) transformRow.hidden = !showTransform;
 
@@ -154,12 +157,12 @@ export class BoxModelEditor {
     this._built = true;
     this.containerEl.dataset.panel = 'boxmodel';
     this.containerEl.innerHTML = `
-      ${marginSectionHtml('Margin (mm)', (name, label) => numField(name, label, { min: null }))}
-      ${marginSectionHtml('Border width (mm)', (name, label) => numField(name, label), 'bw')}
+      ${marginSectionHtml('Margin (mm)', (name, label) => numFieldWithDice(name, label, { min: null }))}
+      ${marginSectionHtml('Border width (mm)', (name, label) => numFieldWithDice(name, label), 'bw')}
       <div class="bm-section">
         <h4>Border style</h4>
         <div class="bm-grid">
-          ${numField('border-radius', 'Radius (mm)')}
+          ${numFieldWithDice('border-radius', 'Radius (mm)')}
           ${colorField('border-color', 'Color')}
         </div>
         <div class="bm-grid" style="margin-top:4px">
@@ -173,7 +176,7 @@ export class BoxModelEditor {
       <div class="bm-section">
         <h4>Transform</h4>
         <div class="bm-grid">
-          ${this._offsetFieldWithDice('node-rotation', 'Rotation (°)', 'rotation')}
+          ${numFieldWithDice('node-rotation', 'Rotation (°)', { min: null, max: undefined })}
         </div>
         <div class="bm-layout-transform" hidden>
           <div class="bm-layout-btns">
@@ -208,8 +211,22 @@ export class BoxModelEditor {
 
     this.containerEl.querySelectorAll<HTMLButtonElement>('[data-dice]').forEach(btn => {
       btn.addEventListener('click', () => {
-        this.onDiceClick(btn.dataset.dice as 'rotation');
+        this.onDiceClick(btn.dataset.dice!);
       });
+    });
+
+    this.containerEl.addEventListener('focusin', (e) => {
+      const input = e.target;
+      if (!(input instanceof HTMLInputElement) || input.type !== 'number') return;
+      const btn = input.parentElement?.querySelector<HTMLButtonElement>('.bm-dice-btn');
+      if (btn && this._multiSel) btn.hidden = false;
+    });
+
+    this.containerEl.addEventListener('focusout', (e) => {
+      const input = e.target;
+      if (!(input instanceof HTMLInputElement) || input.type !== 'number') return;
+      const btn = input.parentElement?.querySelector<HTMLButtonElement>('.bm-dice-btn');
+      if (btn) setTimeout(() => { btn.hidden = true; }, 150);
     });
 
     this.containerEl.querySelectorAll<HTMLButtonElement>('[data-layout]').forEach(btn => {
@@ -223,15 +240,6 @@ export class BoxModelEditor {
 
     this._borderWidthCtrl = new MarginModeController(this.containerEl, 'bw');
     this._borderWidthCtrl.bindButtons(mode => this._setSidesMode(this._borderWidthCtrl, 'bw', mode));
-  }
-
-  // ---------------------------------------------------------------------------
-  // Field HTML builders (box-model-specific)
-  // ---------------------------------------------------------------------------
-
-  private _offsetFieldWithDice(name: string, label: string, dice: string): string {
-    return wrapField(label,
-      `<div class="bm-input-row"><input type="number" step="0.5" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${dice}" title="Randomize across selection" hidden><i class="fa-solid fa-dice"></i></button></div>`);
   }
 
   // ---------------------------------------------------------------------------

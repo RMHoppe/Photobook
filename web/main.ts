@@ -192,10 +192,15 @@ const panelProject       = document.getElementById('panel-project')!;
 const randomizeDialog = new RandomizeDialog(
   document.getElementById('canvas-center')!,
   editor,
-  (nodeIds, min, max) => {
+  (nodeIds, min, max, field) => {
     undoManager.snapshot();
     for (const nodeId of nodeIds) {
-      editor.set_face_frame_rotation(nodeId, min + Math.random() * (max - min));
+      const value = min + Math.random() * (max - min);
+      if (field === 'rotation') {
+        editor.set_face_frame_rotation(nodeId, value);
+      } else {
+        editor.set_face_box_model_field(nodeId, field, value);
+      }
     }
     refreshBoxModel();
     redraw();
@@ -245,7 +250,7 @@ function wireRightSidebar() {
       refreshBoxModel();
       redraw();
     },
-    (field: 'rotation') => { randomizeDialog.show(field); },
+    (field) => { randomizeDialog.show(field); },
     (transform) => {
       undoManager.snapshot();
       switch (transform) {
