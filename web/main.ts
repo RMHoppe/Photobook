@@ -7,7 +7,7 @@ import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel
 import type { ProjectSettingsData, SpreadSettingsData } from './sidebar-right.js';
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
-import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
+import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode, rightClickSplitMode } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
 import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
 import type { Overlays } from './types.js';
@@ -556,7 +556,14 @@ canvasEl.addEventListener('mousemove', (e) => {
   }
 });
 
+canvasEl.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+
 canvasEl.addEventListener('mousedown', (e) => {
+  if (e.button === 2 && currentMode !== rightClickSplitMode) {
+    setMode(rightClickSplitMode, { numCuts: 1, nodeId: NULL_ID, axis: null, ratio: null });
+    rightClickSplitMode.onMouseMove(e, { ...interactionCtx(), modeState });
+    return;
+  }
   currentMode.onMouseDown(e, { ...interactionCtx(), modeState });
 });
 

@@ -1123,96 +1123,104 @@ export const textRotateMode: InteractionMode = {
 
 interface CutToolState { numCuts: number; nodeId: number; axis: 'v' | 'h' | 'quadrant' | null; ratio: number | null; }
 
+function commitCutSplit(ctx: InteractionContext): void {
+  const { editor, overlays, snapshot, refreshBoxModel, redraw, setMode } = ctx;
+  const state = ctx.modeState as CutToolState;
+  if (state.nodeId === NULL_ID || state.axis === null) return;
+
+  snapshot();
+  if (state.axis === 'quadrant') {
+    editor.split_face_into_quadrant_n(state.nodeId, state.numCuts + 1);
+  } else if (state.numCuts > 1) {
+    editor.split_face_into_n(state.nodeId, state.axis, state.numCuts + 1);
+  } else if (state.ratio !== null) {
+    editor.split_face_at(state.nodeId, state.axis, state.ratio);
+  }
+  overlays.splitPreview = null;
+  refreshBoxModel();
+  setMode(idleMode, {});
+  redraw();
+}
+
+function updateCutSplitPreview(e: MouseEvent, ctx: InteractionContext): void {
+  const { editor, overlays, toSpread, redraw, canvasEl } = ctx;
+  const state = ctx.modeState as CutToolState;
+  const { sr, relX, relY } = toSpread(e);
+
+  editor.set_mouse_pos(relX, relY);
+
+  const nodeId = editor.hit_test(relX, relY, sr.w, sr.h);
+  state.nodeId = nodeId;
+
+  if (nodeId === NULL_ID) {
+    overlays.splitPreview = null;
+    state.axis = null;
+    canvasEl.style.cursor = 'crosshair';
+    redraw();
+    return;
+  }
+
+  const renderList = getRenderList(editor, sr.w, sr.h);
+  const frame = renderList.find(f => f.id === nodeId);
+  if (!frame) return;
+
+  const { x: fx, y: fy, w: fw, h: fh } = frame.rect;
+  const relXInFrame = (relX - fx) / fw;
+  const relYInFrame = (relY - fy) / fh;
+  const QUADRANT_ZONE = 0.10;
+  const nearCenterX = Math.abs(relXInFrame - 0.5) < QUADRANT_ZONE;
+  const nearCenterY = Math.abs(relYInFrame - 0.5) < QUADRANT_ZONE;
+
+  if (nearCenterX && nearCenterY) {
+    state.axis  = 'quadrant';
+    state.ratio = 0.5;
+    overlays.splitPreview = { frameRect: frame.rect, axis: 'quadrant', ratio: 0.5, numCuts: state.numCuts };
+    canvasEl.style.cursor = 'crosshair';
+  } else {
+    const axis = editor.split_axis_hint_for(nodeId, sr.w, sr.h) as 'v' | 'h';
+    const SNAP_PX = 8;
+    const rawRatio = axis === 'v'
+      ? Math.max(0.05, Math.min(0.95, relXInFrame))
+      : Math.max(0.05, Math.min(0.95, relYInFrame));
+    const frameStart  = axis === 'v' ? fx : fy;
+    const frameSize   = axis === 'v' ? fw : fh;
+    const snapThresh  = SNAP_PX / frameSize;
+
+    // Collect snap candidates: frame midpoint + all parallel dividers inside this frame.
+    const snapCandidates: number[] = [0.5];
+    for (const d of getDividers(editor, sr.w, sr.h)) {
+      if (d.axis !== axis) continue;
+      const dpos = axis === 'v' ? d.x : d.y;
+      if (dpos > frameStart && dpos < frameStart + frameSize) {
+        snapCandidates.push((dpos - frameStart) / frameSize);
+      }
+    }
+    let ratio = rawRatio;
+    if (!e.altKey) {
+      let bestDist = snapThresh;
+      for (const c of snapCandidates) {
+        const dist = Math.abs(rawRatio - c);
+        if (dist < bestDist) { bestDist = dist; ratio = c; }
+      }
+    }
+    ratio = Math.max(0.05, Math.min(0.95, ratio));
+
+    state.axis  = axis;
+    state.ratio = ratio;
+    overlays.splitPreview = { frameRect: frame.rect, axis, ratio, numCuts: state.numCuts };
+    canvasEl.style.cursor = axis === 'v' ? 'col-resize' : 'row-resize';
+  }
+  redraw();
+}
+
 export const cutToolMode: InteractionMode = {
   onMouseDown(e, ctx) {
     if (e.button !== 0) return;
-    const { editor, overlays, snapshot, refreshBoxModel, redraw } = ctx;
-    const state = ctx.modeState as CutToolState;
-    if (state.nodeId === NULL_ID || state.axis === null) return;
-
-    snapshot();
-    if (state.axis === 'quadrant') {
-      editor.split_face_into_quadrant_n(state.nodeId, state.numCuts + 1);
-    } else if (state.numCuts > 1) {
-      editor.split_face_into_n(state.nodeId, state.axis, state.numCuts + 1);
-    } else if (state.ratio !== null) {
-      editor.split_face_at(state.nodeId, state.axis, state.ratio);
-    }
-    overlays.splitPreview = null;
-    refreshBoxModel();
-    ctx.setMode(idleMode, {});
-    redraw();
+    commitCutSplit(ctx);
   },
 
   onMouseMove(e, ctx) {
-    const { editor, overlays, toSpread, redraw, canvasEl } = ctx;
-    const state = ctx.modeState as CutToolState;
-    const { sr, relX, relY } = toSpread(e);
-
-    editor.set_mouse_pos(relX, relY);
-
-    const nodeId = editor.hit_test(relX, relY, sr.w, sr.h);
-    state.nodeId = nodeId;
-
-    if (nodeId === NULL_ID) {
-      overlays.splitPreview = null;
-      state.axis = null;
-      canvasEl.style.cursor = 'crosshair';
-      redraw();
-      return;
-    }
-
-    const renderList = getRenderList(editor, sr.w, sr.h);
-    const frame = renderList.find(f => f.id === nodeId);
-    if (!frame) return;
-
-    const { x: fx, y: fy, w: fw, h: fh } = frame.rect;
-    const relXInFrame = (relX - fx) / fw;
-    const relYInFrame = (relY - fy) / fh;
-    const QUADRANT_ZONE = 0.10;
-    const nearCenterX = Math.abs(relXInFrame - 0.5) < QUADRANT_ZONE;
-    const nearCenterY = Math.abs(relYInFrame - 0.5) < QUADRANT_ZONE;
-
-    if (nearCenterX && nearCenterY) {
-      state.axis  = 'quadrant';
-      state.ratio = 0.5;
-      overlays.splitPreview = { frameRect: frame.rect, axis: 'quadrant', ratio: 0.5, numCuts: state.numCuts };
-      canvasEl.style.cursor = 'crosshair';
-    } else {
-      const axis = editor.split_axis_hint_for(nodeId, sr.w, sr.h) as 'v' | 'h';
-      const SNAP_PX = 8;
-      const rawRatio = axis === 'v'
-        ? Math.max(0.05, Math.min(0.95, relXInFrame))
-        : Math.max(0.05, Math.min(0.95, relYInFrame));
-      const frameStart  = axis === 'v' ? fx : fy;
-      const frameSize   = axis === 'v' ? fw : fh;
-      const snapThresh  = SNAP_PX / frameSize;
-
-      // Collect snap candidates: frame midpoint + all parallel dividers inside this frame.
-      const snapCandidates: number[] = [0.5];
-      for (const d of getDividers(editor, sr.w, sr.h)) {
-        if (d.axis !== axis) continue;
-        const dpos = axis === 'v' ? d.x : d.y;
-        if (dpos > frameStart && dpos < frameStart + frameSize) {
-          snapCandidates.push((dpos - frameStart) / frameSize);
-        }
-      }
-      let ratio = rawRatio;
-      if (!e.altKey) {
-        let bestDist = snapThresh;
-        for (const c of snapCandidates) {
-          const dist = Math.abs(rawRatio - c);
-          if (dist < bestDist) { bestDist = dist; ratio = c; }
-        }
-      }
-      ratio = Math.max(0.05, Math.min(0.95, ratio));
-
-      state.axis  = axis;
-      state.ratio = ratio;
-      overlays.splitPreview = { frameRect: frame.rect, axis, ratio, numCuts: state.numCuts };
-      canvasEl.style.cursor = axis === 'v' ? 'col-resize' : 'row-resize';
-    }
-    redraw();
+    updateCutSplitPreview(e, ctx);
   },
 
   onMouseUp(_e, _ctx) {},
@@ -1220,6 +1228,42 @@ export const cutToolMode: InteractionMode = {
   onMouseLeave(_e, ctx) {
     // Don't exit the tool when leaving the canvas; just clear the preview
     ctx.overlays.splitPreview = null;
+    ctx.redraw();
+  },
+
+  onWheel(e, ctx) {
+    e.preventDefault();
+    const state = ctx.modeState as CutToolState;
+    if (e.deltaY < 0) state.numCuts = Math.min(state.numCuts + 1, 12);
+    else              state.numCuts = Math.max(1, state.numCuts - 1);
+    if (ctx.overlays.splitPreview) {
+      ctx.overlays.splitPreview = { ...ctx.overlays.splitPreview, numCuts: state.numCuts };
+    }
+    ctx.redraw();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Right-click split mode — hold right mouse button to preview, release to cut
+// ---------------------------------------------------------------------------
+
+export const rightClickSplitMode: InteractionMode = {
+  onMouseDown(_e, _ctx) {},
+
+  onMouseMove(e, ctx) {
+    updateCutSplitPreview(e, ctx);
+  },
+
+  onMouseUp(e, ctx) {
+    if (e.button !== 2) return;
+    commitCutSplit(ctx);
+    ctx.canvasEl.style.cursor = '';
+  },
+
+  onMouseLeave(_e, ctx) {
+    ctx.overlays.splitPreview = null;
+    ctx.setMode(idleMode, {});
+    ctx.canvasEl.style.cursor = '';
     ctx.redraw();
   },
 
