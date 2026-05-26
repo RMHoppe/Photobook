@@ -28,6 +28,29 @@ export function localFontsSupported() {
     return typeof window.queryLocalFonts === 'function';
 }
 /**
+ * Like loadLocalFonts() but returns an error code instead of silently returning [].
+ * Use this when you need to distinguish "not supported" from "denied".
+ */
+export async function tryLoadLocalFonts() {
+    if (typeof window.queryLocalFonts !== 'function') {
+        return { families: [], error: 'not_supported' };
+    }
+    let faces;
+    try {
+        faces = await window.queryLocalFonts();
+    }
+    catch {
+        return { families: [], error: 'denied' };
+    }
+    _fontsByFamily = new Map();
+    for (const face of faces) {
+        const list = _fontsByFamily.get(face.family) ?? [];
+        list.push(face);
+        _fontsByFamily.set(face.family, list);
+    }
+    return { families: [..._fontsByFamily.keys()].sort((a, b) => a.localeCompare(b)), error: null };
+}
+/**
  * Return the raw TTF/OTF bytes for the best-matching face of `family`.
  * Returns null if the family was not discovered or the blob read fails.
  */

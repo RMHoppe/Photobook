@@ -6,3 +6,4 @@ Cargo.lock
 
 # TypeScript compilation output
 **.js
+!web/lib/marked.esm.js

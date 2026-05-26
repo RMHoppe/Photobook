@@ -26,7 +26,7 @@ pub const MIN_FRAC: f32 = 0.02;
 // Face content
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ImageContent {
     pub image_id: Option<String>,
     pub object_fit: ObjectFit,
@@ -85,7 +85,7 @@ pub enum Orientation {
 // Edge
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Edge {
     pub id: EdgeId,
     pub orientation: Orientation,
@@ -101,7 +101,7 @@ pub struct Edge {
 // Face
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GridFace {
     pub id: FaceId,
     pub left_edge_id: EdgeId,
@@ -117,7 +117,7 @@ pub struct GridFace {
 // GridLayout
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GridLayout {
     pub faces: HashMap<FaceId, GridFace>,
     pub edges: HashMap<EdgeId, Edge>,
@@ -255,6 +255,8 @@ impl GridLayout {
         let pb     = self.edges.get(&pb_eid)?.offset;
         let pa_bnd = self.edges.get(&pa_eid)?.is_boundary;
         let pb_bnd = self.edges.get(&pb_eid)?.is_boundary;
+        let pa_gap = self.edges.get(&pa_eid).map_or(0.0, |e| e.half_gap);
+        let pb_gap = self.edges.get(&pb_eid).map_or(0.0, |e| e.half_gap);
         if pos <= lo + EPS || pos >= hi - EPS { return None; }
 
         let (div_ori, perp_ori) = match axis {
@@ -279,11 +281,11 @@ impl GridLayout {
         if let Some(e) = self.edges.get_mut(&hi_eid) { e.face_id = new_face_id; }
         self.edges.insert(new_pa_id, Edge {
             id: new_pa_id, orientation: perp_ori.clone(), offset: pa,
-            facing: Facing::Start, half_gap: 0.0, face_id: new_face_id, is_boundary: pa_bnd,
+            facing: Facing::Start, half_gap: pa_gap, face_id: new_face_id, is_boundary: pa_bnd,
         });
         self.edges.insert(new_pb_id, Edge {
             id: new_pb_id, orientation: perp_ori, offset: pb,
-            facing: Facing::End, half_gap: 0.0, face_id: new_face_id, is_boundary: pb_bnd,
+            facing: Facing::End, half_gap: pb_gap, face_id: new_face_id, is_boundary: pb_bnd,
         });
 
         if let Some(f) = self.faces.get_mut(&face_id) {
@@ -316,6 +318,23 @@ impl GridLayout {
             },
         };
         self.faces.insert(new_face_id, new_face);
+
+        // Determine the new divider's half_gap last: if all non-boundary edges
+        // of both resulting faces (excluding the divider itself) share a common
+        // half_gap, adopt that value for the new divider.
+        let other_eids = [lo_eid, pa_eid, pb_eid, hi_eid, new_pa_id, new_pb_id];
+        let gaps: Vec<f32> = other_eids.iter()
+            .filter_map(|&eid| self.edges.get(&eid))
+            .filter(|e| !e.is_boundary)
+            .map(|e| e.half_gap)
+            .collect();
+        if let Some(&first) = gaps.first() {
+            if gaps.iter().all(|&g| (g - first).abs() < EPS) {
+                if let Some(e) = self.edges.get_mut(&div_end_id)   { e.half_gap = first; }
+                if let Some(e) = self.edges.get_mut(&div_start_id) { e.half_gap = first; }
+            }
+        }
+
         Some(new_face_id)
     }
 

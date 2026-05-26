@@ -149,6 +149,28 @@ impl PhotobookEditor {
         self.mark_structure_dirty();
     }
 
+    pub fn select_all_in_rect(&mut self, rx: f32, ry: f32, rw: f32, rh: f32, canvas_w: f32, canvas_h: f32) {
+        self.selection.clear();
+        self.selected_segments.clear();
+        for id in self.collect_faces_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
+            self.selection.push(id);
+        }
+        for id in self.collect_edges_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
+            self.selected_segments.push(id);
+        }
+        self.mark_structure_dirty();
+    }
+
+    pub fn toggle_all_in_rect(&mut self, rx: f32, ry: f32, rw: f32, rh: f32, canvas_w: f32, canvas_h: f32) {
+        for id in self.collect_faces_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
+            self.toggle_selection(id);
+        }
+        for id in self.collect_edges_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
+            self.toggle_segment(id);
+        }
+        self.mark_structure_dirty();
+    }
+
     /// Move selection to the neighbour in `direction` (up/down/left/right).
     pub fn navigate(&mut self, direction: &str) {
         let Some(id) = self.selected_one() else { return };

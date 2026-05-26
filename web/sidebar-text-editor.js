@@ -50,7 +50,7 @@ export class TextElementEditor {
             sel.value = current;
         const btn = this.containerEl.querySelector('#te-btn-load-fonts');
         if (btn) {
-            btn.textContent = '✓';
+            btn.textContent = '✓ Loaded';
             btn.disabled = true;
         }
     }
@@ -73,7 +73,7 @@ export class TextElementEditor {
             <select data-field="font_family">
               ${fontOptions}
             </select>
-            <button id="te-btn-load-fonts" class="te-load-fonts-btn" title="Load system fonts">…</button>
+            <button id="te-btn-load-fonts" class="te-load-fonts-btn">Load System Fonts</button>
           </div>
         </div>
         <div class="bm-grid" style="margin-top:4px">
@@ -86,6 +86,7 @@ export class TextElementEditor {
             <div class="te-style-row">
               <button class="te-toggle-btn" data-toggle="bold" title="Bold"><b>B</b></button>
               <button class="te-toggle-btn" data-toggle="italic" title="Italic"><i>I</i></button>
+              <button class="te-toggle-btn" data-toggle="underline" title="Underline"><u>U</u></button>
             </div>
           </div>
         </div>
@@ -166,6 +167,7 @@ export class TextElementEditor {
         this._setNum('font_size_pt', el.font_size_pt);
         this._setToggle('bold', el.bold);
         this._setToggle('italic', el.italic);
+        this._setToggle('underline', el.underline);
         this._setColor('color', el.color || '#000000');
         this._setAlign(el.align || 'left');
         this._setNum('x_mm', el.x_mm);
@@ -215,6 +217,7 @@ export class TextElementEditor {
             font_size_pt: Math.max(1, gNum('font_size_pt')),
             bold: !!this.containerEl.querySelector('[data-toggle="bold"].active'),
             italic: !!this.containerEl.querySelector('[data-toggle="italic"].active'),
+            underline: !!this.containerEl.querySelector('[data-toggle="underline"].active'),
             color: gStr('color'),
             align: activeAlign?.dataset.align ?? 'left',
             x_mm: gNum('x_mm'),

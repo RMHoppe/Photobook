@@ -101,8 +101,9 @@ export class InlineEditor {
     this.textarea.style.height       = `${textH}px`;
     this.textarea.style.fontSize     = `${fontPx}px`;
     this.textarea.style.fontFamily   = `"${el.font_family}", sans-serif`;
-    this.textarea.style.fontWeight   = el.bold   ? 'bold'   : 'normal';
-    this.textarea.style.fontStyle    = el.italic ? 'italic' : 'normal';
+    this.textarea.style.fontWeight      = el.bold      ? 'bold'      : 'normal';
+    this.textarea.style.fontStyle       = el.italic    ? 'italic'    : 'normal';
+    this.textarea.style.textDecoration  = el.underline ? 'underline' : 'none';
     this.textarea.style.color        = el.color  || '#000';
     this.textarea.style.textAlign    = el.align  || 'left';
     this.textarea.style.lineHeight   = `${lineH}px`;

@@ -20,7 +20,8 @@ type OpenResult =
   | { ok: true; file: SaveFile }
   | { ok: false; reason: 'cancelled' | 'read_error' | 'invalid_json' | 'wrong_format' | 'version_too_new' | 'load_failed' };
 
-export async function saveProject(editor: PhotobookEditor): Promise<SaveResult> {
+export async function saveProject(editor: PhotobookEditor, name = 'project'): Promise<SaveResult> {
+  const filename = name.trim() || 'project';
   const doc = JSON.parse(editor.save_state());
   const envelope: SaveFile = {
     format: 'photobook',
@@ -36,7 +37,7 @@ export async function saveProject(editor: PhotobookEditor): Promise<SaveResult> 
       const handle = await (window as typeof window & {
         showSaveFilePicker(opts?: object): Promise<FileSystemFileHandle>;
       }).showSaveFilePicker({
-        suggestedName: 'project.photobook',
+        suggestedName: `${filename}.photobook`,
         types: [{ description: 'Photobook project', accept: { 'application/json': ['.photobook'] } }],
       });
       const writable = await (handle as FileSystemFileHandle & {
@@ -53,7 +54,7 @@ export async function saveProject(editor: PhotobookEditor): Promise<SaveResult> 
 
   // Fallback: trigger a browser download.
   const url = URL.createObjectURL(blob);
-  const a = Object.assign(document.createElement('a'), { href: url, download: 'project.photobook' });
+  const a = Object.assign(document.createElement('a'), { href: url, download: `${filename}.photobook` });
   a.click();
   URL.revokeObjectURL(url);
   return { ok: true };

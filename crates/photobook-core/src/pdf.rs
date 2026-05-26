@@ -896,41 +896,61 @@ fn draw_text_elements(
         let cos_r = rad.cos();
         let sin_r = rad.sin();
 
+        // Pre-encode all lines (WinAnsi, Latin-1 subset).
+        let encoded_lines: Vec<String> = lines.iter()
+            .map(|line| line.chars().map(|c| if (c as u32) < 256 { c } else { '?' }).collect())
+            .collect();
+
+        use printpdf::lopdf::content::Operation;
+        use printpdf::lopdf::Object::Real;
+
         layer.save_graphics_state();
         layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
         layer.begin_text_section();
         layer.set_font(&font, font_size_pt);
 
-        for (i, line) in lines.iter().enumerate() {
-            if line.is_empty() && i == lines.len() - 1 { continue; }
+        for (i, encoded) in encoded_lines.iter().enumerate() {
+            if encoded.is_empty() && i == encoded_lines.len() - 1 { continue; }
 
-            // Position for this line (advances down by line_h_mm per row).
             let line_offset_mm = i as f32 * line_h_mm;
-            // In the text-rotation frame, "down" is perpendicular to the text direction.
-            // Unrotated: dx=0, dy=-line_offset_mm.  After CCW rotation by rotation_deg:
             let tx_mm = base_x_mm - line_offset_mm * rad.sin();
             let ty_mm = baseline_y_mm - line_offset_mm * rad.cos();
 
-            let tx_pt = mm_to_pt(tx_mm);
-            let ty_pt = mm_to_pt(ty_mm);
-
-            // Tm operator: sets text matrix = rotation + translation.
-            use printpdf::lopdf::content::Operation;
-            use printpdf::lopdf::Object::Real;
             layer.add_operation(Operation::new("Tm", vec![
                 Real(cos_r), Real(sin_r),
                 Real(-sin_r), Real(cos_r),
-                Real(tx_pt), Real(ty_pt),
+                Real(mm_to_pt(tx_mm)), Real(mm_to_pt(ty_mm)),
             ]));
-
-            // Encode to WinAnsi (Latin-1 subset); replace unsupported chars with '?'.
-            let encoded: String = line.chars()
-                .map(|c| if (c as u32) < 256 { c } else { '?' })
-                .collect();
-            layer.write_text(&encoded, &font);
+            layer.write_text(encoded, &font);
         }
 
         layer.end_text_section();
+
+        if el.underline {
+            // Approximate character width: 0.5 em for proportional fonts, drawn along text direction.
+            let avg_char_w_mm = font_size_pt * (25.4 / 72.0) * 0.5;
+            // Underline sits ~15% of font height below the baseline.
+            let ul_below_mm = font_size_pt * (25.4 / 72.0) * 0.15;
+            let ul_thickness = mm_to_pt(font_size_pt * (25.4 / 72.0) * 0.07);
+            layer.add_operation(Operation::new("RG", vec![Real(r), Real(g), Real(b)]));
+            layer.add_operation(Operation::new("w",  vec![Real(ul_thickness)]));
+            for (i, encoded) in encoded_lines.iter().enumerate() {
+                if encoded.is_empty() && i == encoded_lines.len() - 1 { continue; }
+                if encoded.is_empty() { continue; }
+                let line_w_mm = encoded.chars().count() as f32 * avg_char_w_mm;
+                let line_offset_mm = i as f32 * line_h_mm;
+                let ul_x_mm = base_x_mm - line_offset_mm * rad.sin();
+                let ul_y_mm = baseline_y_mm - line_offset_mm * rad.cos() - ul_below_mm;
+                let ul_x_pt = mm_to_pt(ul_x_mm);
+                let ul_y_pt = mm_to_pt(ul_y_mm);
+                let ul_ex_pt = ul_x_pt + mm_to_pt(line_w_mm) * cos_r;
+                let ul_ey_pt = ul_y_pt + mm_to_pt(line_w_mm) * sin_r;
+                layer.add_operation(Operation::new("m", vec![Real(ul_x_pt), Real(ul_y_pt)]));
+                layer.add_operation(Operation::new("l", vec![Real(ul_ex_pt), Real(ul_ey_pt)]));
+                layer.add_operation(Operation::new("S", vec![]));
+            }
+        }
+
         layer.restore_graphics_state();
     }
 }

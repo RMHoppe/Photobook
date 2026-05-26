@@ -83,9 +83,10 @@ export class BoxModelEditor {
     this._setOffset('node-rotation', bm.face_rotation_deg);
 
     // Z-order label
-    const orderRow = this.containerEl.querySelector<HTMLElement>('.bm-order-row');
+    const orderRow     = this.containerEl.querySelector<HTMLElement>('.bm-order-row');
+    const orderSection = orderRow?.closest<HTMLElement>('.bm-section') ?? null;
+    if (orderSection) orderSection.hidden = zIndex === undefined;
     if (orderRow) {
-      orderRow.hidden = zIndex === undefined;
       const orderLabel = orderRow.querySelector<HTMLElement>('.bm-z-label');
       if (orderLabel) orderLabel.textContent = String((zIndex ?? 0) + 1);
     }
@@ -211,7 +212,8 @@ export class BoxModelEditor {
 
     this.containerEl.querySelectorAll<HTMLButtonElement>('[data-dice]').forEach(btn => {
       btn.addEventListener('click', () => {
-        this.onDiceClick(btn.dataset.dice!);
+        const field = btn.dataset.dice === 'node-rotation' ? 'rotation' : btn.dataset.dice!;
+        this.onDiceClick(field);
       });
     });
 

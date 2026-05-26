@@ -36,7 +36,7 @@ pub enum BorderPosition {
     Mixed,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Border {
     /// Legacy single-width field — used as fallback when per-side fields are absent (old saves).
     #[serde(default)]
@@ -98,7 +98,7 @@ impl Border {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BoxModel {
     pub margin: MarginInsets,
     #[serde(default)]
@@ -121,7 +121,7 @@ impl Default for BoxModel {
 /// Per-face margin insets in mm. `None` = "mixed" sentinel for multi-selection;
 /// `None` resolves to 0 mm for layout purposes. Allows negative values so frames
 /// can overlap with their neighbours.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MarginInsets {
     pub top:    Option<f32>,
     pub right:  Option<f32>,
@@ -147,7 +147,7 @@ impl MarginInsets {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct EdgeInsets {
     pub top: f32,
     pub right: f32,

@@ -9,7 +9,7 @@ import { PhotobookEditor, compute_image_cover } from './pkg/photobook_core.js';
 import type {
   SpreadInfo, SpreadSummary, PageSize,
   RenderFrame, Divider, LowDpiFrame,
-  BoxModel, FrameTransform, TransformHandles,
+  BoxModel, FrameTransform,
   ImageCoverResult, TextElement,
   ResolvedSpread, SpreadDelta, XJunction,
 } from './types.js';
@@ -70,20 +70,8 @@ export function getBoxModel(editor: PhotobookEditor): BoxModel {
   return JSON.parse(editor.get_box_model()) as BoxModel;
 }
 
-export function getTransformBoxModel(editor: PhotobookEditor): BoxModel {
-  return JSON.parse(editor.get_transform_box_model()) as BoxModel;
-}
-
 export function getFrameTransform(editor: PhotobookEditor, faceId: number): FrameTransform | null {
   return JSON.parse(editor.get_frame_transform(faceId)) as FrameTransform | null;
-}
-
-export function getSelectedTransformHandles(
-  editor: PhotobookEditor,
-  w: number,
-  h: number,
-): TransformHandles | null {
-  return JSON.parse(editor.get_selected_transform_handles(w, h)) as TransformHandles | null;
 }
 
 // ---------------------------------------------------------------------------

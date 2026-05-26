@@ -34,7 +34,7 @@
     <header id="toolbar">
       <span class="app-title">Photobook</span>
       <div class="toolbar-actions">
-        <button id="btn-open-project" title="Open project file">Open</button>
+        <button id="btn-open-project" title="Open project file">Load</button>
         <button id="btn-save-project" title="Save project file">Save</button>
         <button id="btn-add-text" title="Add text element (T)">+ Text</button>
         <button id="btn-cut-tool" title="Cut tool (K)"><i class="fa-solid fa-scissors" aria-hidden="true"></i> Cut</button>
@@ -46,8 +46,7 @@
       <div class="toolbar-right">
         <button id="btn-undo" title="Undo (Ctrl+Z)" disabled><i class="fa-solid fa-rotate-left" aria-hidden="true"></i> Undo</button>
         <button id="btn-redo" title="Redo (Ctrl+Y)" disabled><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Redo</button>
-        <button id="btn-debug-dump" title="Export PSLG debug dump">Debug</button>
-        <button id="btn-docs" title="Documentation"><i class="fa-solid fa-circle-question" aria-hidden="true"></i> Docs</button>
+<button id="btn-docs" title="Documentation"><i class="fa-solid fa-circle-question" aria-hidden="true"></i> Docs</button>
         <button id="btn-project-settings" title="Project settings" class="icon-btn"><i class="fa-solid fa-gear"></i></button>
       </div>
     </header>
@@ -99,9 +98,9 @@
       <aside id="sidebar-right">
         <div id="sidebar-right-header" class="sidebar-header">Project Settings</div>
         <div id="box-model-editor">
+          <div id="panel-divider"></div>
           <div id="panel-face"></div>
           <div id="panel-text"></div>
-          <div id="panel-divider"></div>
           <div id="panel-photo"></div>
           <div id="panel-project"><p class="no-selection">Select a frame to edit</p></div>
         </div>
@@ -120,6 +119,18 @@
       </div>
     </footer>
   </div>
+
+  <dialog id="save-name-dialog" class="confirm-dialog">
+    <p>Save project as</p>
+    <div class="save-name-row">
+      <input type="text" id="save-name-input" placeholder="project name" autocomplete="off" spellcheck="false" />
+      <span class="save-name-ext">.photobook</span>
+    </div>
+    <div class="confirm-dialog-actions">
+      <button id="btn-save-name-cancel">Cancel</button>
+      <button id="btn-save-name-ok" class="btn-confirm">Save</button>
+    </div>
+  </dialog>
 
   <dialog id="project-settings-modal" class="ps-modal">
     <div class="ps-modal-header">

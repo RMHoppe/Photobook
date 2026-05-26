@@ -171,11 +171,6 @@ export interface FrameTransform {
 }
 
 /** Transform handle pair for the selected node (margin-drag UI). */
-export interface TransformHandles {
-  outer: Rect;
-  inner: Rect;
-}
-
 /** Result of compute_image_cover() — geometry for rendering a covered image. */
 export interface ImageCoverResult {
   sw: number;
@@ -207,6 +202,7 @@ export interface TextElement {
   rotation_deg: number;
   bold: boolean;
   italic: boolean;
+  underline: boolean;
   /** "left" | "center" | "right" */
   align: string;
 }
@@ -244,6 +240,7 @@ export interface Overlays {
   splitPreview: SplitPreview | null;
   swapOverlay: SwapOverlay | null;
   edgeDragPreview: EdgeDragPreview | null;
+  imageDropPreview: ImageDropPreview | null;
 }
 
 export interface EdgeDragPreview {
@@ -262,6 +259,14 @@ export interface SplitPreview {
 export interface SwapOverlay {
   sourceId: number;
   targetId: number | null;
+}
+
+export type DropZone = 'center' | 'top' | 'right' | 'bottom' | 'left';
+
+export interface ImageDropPreview {
+  frameRect: Rect;
+  zone: DropZone;
+  hasExistingImage: boolean;
 }
 
 // ---------------------------------------------------------------------------

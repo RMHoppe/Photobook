@@ -1,8 +1,9 @@
-// undo.ts — Undo/redo stack manager.
-import { UNDO_MAX } from './constants.js';
+// undo.ts — Undo/redo button-state wrapper.
+//
+// The actual history stack lives in Rust (see PhotobookEditor::snapshot_undo,
+// undo, redo). Snapshots are cheap struct clones, not JSON strings, and
+// restores diff-mark dirty bits so incremental rendering survives undo.
 export class UndoManager {
-    undoStack = [];
-    redoStack = [];
     btnUndo;
     btnRedo;
     editor;
@@ -15,34 +16,28 @@ export class UndoManager {
         btnRedo.addEventListener('click', () => this.redo());
     }
     snapshot() {
-        this.undoStack.push(this.editor.save_state());
-        if (this.undoStack.length > UNDO_MAX)
-            this.undoStack.shift();
-        this.redoStack.length = 0;
+        this.editor.snapshot_undo();
         this._updateButtons();
     }
     undo() {
-        if (this.undoStack.length === 0)
-            return;
-        this.redoStack.push(this.editor.save_state());
-        this.editor.load_state(this.undoStack.pop());
-        this._updateButtons();
+        const ok = this.editor.undo();
+        if (ok)
+            this._updateButtons();
+        return ok;
     }
     redo() {
-        if (this.redoStack.length === 0)
-            return;
-        this.undoStack.push(this.editor.save_state());
-        this.editor.load_state(this.redoStack.pop());
-        this._updateButtons();
+        const ok = this.editor.redo();
+        if (ok)
+            this._updateButtons();
+        return ok;
     }
     /** Clear both stacks (called after loading a project file). */
     reset() {
-        this.undoStack = [];
-        this.redoStack = [];
+        this.editor.reset_undo();
         this._updateButtons();
     }
     _updateButtons() {
-        this.btnUndo.disabled = this.undoStack.length === 0;
-        this.btnRedo.disabled = this.redoStack.length === 0;
+        this.btnUndo.disabled = !this.editor.can_undo();
+        this.btnRedo.disabled = !this.editor.can_redo();
     }
 }

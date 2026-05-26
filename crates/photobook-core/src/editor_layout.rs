@@ -392,4 +392,27 @@ impl PhotobookEditor {
         }
         ids
     }
+
+    pub(crate) fn collect_edges_in_rect(
+        &self, rx: f32, ry: f32, rw: f32, rh: f32,
+        canvas_w: f32, canvas_h: f32,
+    ) -> Vec<u32> {
+        let root_rect = self.root_rect_with_bleed(canvas_w, canvas_h);
+        let mm_to_px  = self.mm_to_px(canvas_w);
+        let dividers = GridResolver::new(&self.doc.current_spread().layout, &[], mm_to_px)
+            .resolve_dividers(root_rect);
+        let mut ids = Vec::new();
+        for div in &dividers {
+            let intersects = match div.axis {
+                SplitAxis::Horizontal =>
+                    div.y >= ry && div.y <= ry + rh &&
+                    div.x <= rx + rw && div.x + div.length >= rx,
+                SplitAxis::Vertical =>
+                    div.x >= rx && div.x <= rx + rw &&
+                    div.y <= ry + rh && div.y + div.length >= ry,
+            };
+            if intersects { ids.push(div.segment_id); }
+        }
+        ids
+    }
 }

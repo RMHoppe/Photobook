@@ -9,9 +9,9 @@ import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
 import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
-import { getSpreadInfo, getTextElements, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
-import type { Overlays } from './types.js';
-import { loadLocalFonts, localFontsSupported } from './fonts.js';
+import { getSpreadInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
+import type { Overlays, DropZone, Rect } from './types.js';
+import { loadLocalFonts, localFontsSupported, tryLoadLocalFonts } from './fonts.js';
 import { UndoManager } from './undo.js';
 import { InlineEditor } from './inline-editor.js';
 import { exportPdf } from './export.js';
@@ -36,7 +36,7 @@ const editor = new PhotobookEditor(210, 297, 3);
 const canvasEl = document.getElementById('main-canvas') as HTMLCanvasElement;
 const renderer = new CanvasRenderer(canvasEl, () => redraw());
 
-const overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null };
+const overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null, imageDropPreview: null };
 
 
 
@@ -59,6 +59,18 @@ function spreadRect() {
   if (!info.endpaper_side) return sr;
   const offsetX = info.endpaper_side === 'left' ? sr.w / 2 : 0;
   return { x: sr.x + offsetX, y: sr.y, w: sr.w / 2, h: sr.h };
+}
+
+function computeDropZone(mx: number, my: number, faceRect: Rect): DropZone {
+  const rx = (mx - faceRect.x) / faceRect.w;
+  const ry = (my - faceRect.y) / faceRect.h;
+  const dl = rx, dr = 1 - rx, dt = ry, db = 1 - ry;
+  const minEdge = Math.min(dl, dr, dt, db);
+  if (minEdge > 0.25) return 'center';
+  if (minEdge === dl) return 'left';
+  if (minEdge === dr) return 'right';
+  if (minEdge === dt) return 'top';
+  return 'bottom';
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +253,10 @@ function wireRightSidebar() {
 
   const boxEditor = new BoxModelEditor(
     panelFace,
-    editorCallback((json: string) => editor.set_face_box_model(json)),
+    editorCallback((json: string) => {
+      undoManager.snapshot();
+      editor.set_face_box_model(json);
+    }),
     (direction) => {
       const sel = editor.get_selected();
       if (sel === NULL_ID) return;
@@ -316,6 +331,7 @@ function wireRightSidebar() {
   const textEditor = new TextElementEditor(
     panelText,
     editorCallback((updatedEl) => {
+      undoManager.snapshot();
       const textElements = getTextElements(editor);
       updateTextElement(editor, updatedEl);
       if (renderer.selectedTextIds.size > 1) {
@@ -336,11 +352,6 @@ function wireRightSidebar() {
       }
     }),
   );
-
-  boxModelContainer.addEventListener('focusin', (e) => {
-    const tag = (e.target as HTMLElement).tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') undoManager.snapshot();
-  });
 
   return { boxEditor, dividerPanel, spreadPanel, projectPanel, photoPanel, textEditor };
 }
@@ -461,6 +472,55 @@ deleteSpreadDialog.querySelector('#btn-dsd-confirm')!.addEventListener('click', 
   redraw();
 });
 
+const cannotDeleteDialog = document.createElement('dialog');
+cannotDeleteDialog.className = 'confirm-dialog';
+cannotDeleteDialog.innerHTML = `
+  <p id="cannot-delete-msg"></p>
+  <div class="confirm-dialog-actions">
+    <button id="btn-cdd-ok">OK</button>
+  </div>
+`;
+document.body.appendChild(cannotDeleteDialog);
+cannotDeleteDialog.querySelector('#btn-cdd-ok')!.addEventListener('click', () => {
+  cannotDeleteDialog.close();
+});
+
+const fontAccessWarningDialog = document.createElement('dialog');
+fontAccessWarningDialog.className = 'confirm-dialog';
+fontAccessWarningDialog.innerHTML = `
+  <p id="font-warning-msg"></p>
+  <div class="confirm-dialog-actions">
+    <button id="btn-faw-ok">OK</button>
+  </div>
+`;
+document.body.appendChild(fontAccessWarningDialog);
+fontAccessWarningDialog.querySelector('#btn-faw-ok')!.addEventListener('click', () => {
+  fontAccessWarningDialog.close();
+});
+
+function showFontAccessWarning(code: 'not_supported' | 'denied'): void {
+  const msg = fontAccessWarningDialog.querySelector<HTMLElement>('#font-warning-msg')!;
+  if (code === 'not_supported') {
+    msg.textContent = 'Your browser does not support the Local Font Access API. This feature is currently available in Chrome and Edge.';
+  } else {
+    msg.textContent = 'Permission to access local fonts was denied. You can allow access in your browser\'s site settings.';
+  }
+  fontAccessWarningDialog.showModal();
+}
+
+function showCannotDeleteReason(): void {
+  const min = editor.get_endpapers() ? 3 : 2;
+  const msg = cannotDeleteDialog.querySelector<HTMLElement>('#cannot-delete-msg')!;
+  if (footer.currentIdx === 0) {
+    msg.textContent = 'The first spread cannot be deleted.';
+  } else if (editor.get_spread_count() <= min) {
+    msg.textContent = 'This spread cannot be deleted — the book must contain at least one content spread.';
+  } else {
+    return;
+  }
+  cannotDeleteDialog.showModal();
+}
+
 // ---------------------------------------------------------------------------
 // Undo / redo
 // ---------------------------------------------------------------------------
@@ -567,12 +627,43 @@ canvasEl.addEventListener('mouseup', (e) => {
 canvasEl.addEventListener('dragover', (e) => {
   e.preventDefault();
   e.dataTransfer!.dropEffect = 'copy';
+
+  const layoutRect = renderer.lastLayoutRect;
+  if (!layoutRect.w) return;
+  const canvasRect = canvasEl.getBoundingClientRect();
+  const relX = (e.clientX - canvasRect.left) - layoutRect.x;
+  const relY = (e.clientY - canvasRect.top)  - layoutRect.y;
+  const hitId = editor.hit_test(relX, relY, layoutRect.w, layoutRect.h);
+
+  if (hitId === NULL_ID) {
+    if (overlays.imageDropPreview !== null) { overlays.imageDropPreview = null; redraw(); }
+    return;
+  }
+
+  const frame = renderer.getFrameById(hitId);
+  if (!frame) { overlays.imageDropPreview = null; return; }
+
+  const hasExistingImage = frame.image_id !== undefined;
+  const zone = computeDropZone(relX, relY, frame.face_rect);
+
+  const prev = overlays.imageDropPreview;
+  if (!prev || prev.zone !== zone || prev.frameRect !== frame.face_rect) {
+    overlays.imageDropPreview = { frameRect: frame.face_rect, zone, hasExistingImage };
+    redraw();
+  }
+});
+
+canvasEl.addEventListener('dragleave', () => {
+  if (overlays.imageDropPreview !== null) { overlays.imageDropPreview = null; redraw(); }
 });
 
 canvasEl.addEventListener('drop', (e) => {
   e.preventDefault();
   const raw = e.dataTransfer!.getData('text/plain');
   if (!raw) return;
+
+  const dropPreview = overlays.imageDropPreview;
+  overlays.imageDropPreview = null;
 
   // Payload is always a JSON array of image IDs (one or more).
   let imageIds: string[];
@@ -583,7 +674,6 @@ canvasEl.addEventListener('drop', (e) => {
     imageIds = [raw];
   }
 
-  const sr = spreadRect();
   const layoutRect = renderer.lastLayoutRect;
   const canvasRect = canvasEl.getBoundingClientRect();
   const relX = (e.clientX - canvasRect.left) - layoutRect.x;
@@ -595,12 +685,33 @@ canvasEl.addEventListener('drop', (e) => {
   undoManager.snapshot();
 
   if (imageIds.length === 1) {
-    // Single image — assign directly without splitting.
     const id = imageIds[0];
+    const zone = dropPreview?.zone ?? 'center';
+    const existingImageId = renderer.getFrameById(hitId)?.image_id;
+
     const proxy = sidebar.getProxy(id);
     if (proxy) renderer.cacheImage(id, proxy);
-    editor.assign_image(hitId, id);
-    editor.select_face(hitId);
+
+    if (zone !== 'center') {
+      // Edge drop: split and place new image bordering the chosen edge.
+      const preferVertical = zone === 'left' || zone === 'right';
+      const faceIds = splitFaceForMultiDrop(editor, hitId, 2, preferVertical);
+      // faceIds[0] = leading (left or top), retains the existing image.
+      // faceIds[1] = trailing (right or bottom), starts empty.
+      if (zone === 'left' || zone === 'top') {
+        if (existingImageId) editor.assign_image(faceIds[1], existingImageId);
+        editor.assign_image(faceIds[0], id);
+        editor.select_face(faceIds[0]);
+      } else {
+        editor.assign_image(faceIds[1], id);
+        editor.select_face(faceIds[1]);
+      }
+    } else {
+      // Center drop or empty frame: replace.
+      editor.assign_image(hitId, id);
+      editor.select_face(hitId);
+    }
+
     refreshBoxModel();
     redraw();
     sidebar.ensureDimensions(id).then(dims => {
@@ -794,9 +905,33 @@ document.addEventListener('keydown', (e) => {
 // Toolbar
 // ---------------------------------------------------------------------------
 
-document.getElementById('btn-save-project')!.addEventListener('click', async () => {
-  await saveProject(editor);
-});
+let lastSaveName = 'project';
+
+{
+  const dlg    = document.getElementById('save-name-dialog') as HTMLDialogElement;
+  const input  = document.getElementById('save-name-input')  as HTMLInputElement;
+  const btnOk  = document.getElementById('btn-save-name-ok')     as HTMLButtonElement;
+  const btnCan = document.getElementById('btn-save-name-cancel') as HTMLButtonElement;
+
+  document.getElementById('btn-save-project')!.addEventListener('click', () => {
+    input.value = lastSaveName;
+    dlg.showModal();
+    input.select();
+  });
+
+  const doSave = async () => {
+    const name = input.value.trim() || 'project';
+    lastSaveName = name;
+    dlg.close();
+    await saveProject(editor, name);
+  };
+
+  btnOk.addEventListener('click', doSave);
+  btnCan.addEventListener('click', () => dlg.close());
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); doSave(); }
+  });
+}
 
 document.getElementById('btn-open-project')!.addEventListener('click', async () => {
   const result = await openProject(editor);
@@ -834,18 +969,36 @@ document.getElementById('btn-open-project')!.addEventListener('click', async () 
 document.getElementById('btn-add-spread')!.addEventListener('click', () => {
   undoManager.snapshot();
   editor.add_page();
+  editor.set_current_spread(editor.get_spread_count() - 1);
   redraw();
 });
 
 document.getElementById('btn-remove-spread')!.addEventListener('click', () => {
   if (footer.currentIdx > 0 && editor.get_spread_count() > (editor.get_endpapers() ? 3 : 2)) {
     deleteSpreadDialog.showModal();
+  } else {
+    showCannotDeleteReason();
   }
 });
 
 document.getElementById('btn-add-text')!.addEventListener('click', () => {
-  canvasEl.style.cursor = 'crosshair';
-  setMode(textPlaceMode, {});
+  const spreadInfo = getSpreadInfo(editor);
+  const layoutMm = spreadInfo.endpaper_side ? spreadInfo.page_width_mm : spreadInfo.width_mm;
+  const layoutOffsetMm = spreadInfo.endpaper_side === 'left' ? spreadInfo.page_width_mm : 0;
+  let x_mm = layoutOffsetMm + layoutMm / 2;
+  let y_mm = spreadInfo.height_mm / 2;
+  const existing = getTextElements(editor);
+  const OFFSET_MM = 5;
+  while (existing.some(t => Math.abs(t.x_mm - x_mm) < 1 && Math.abs(t.y_mm - y_mm) < 1)) {
+    x_mm += OFFSET_MM;
+    y_mm += OFFSET_MM;
+  }
+  undoManager.snapshot();
+  const newId = addTextElement(editor, x_mm, y_mm);
+  renderer.selectedTextIds = new Set([newId]);
+  editor.select_face(0xFFFFFFFF);
+  refreshBoxModel();
+  redraw();
 });
 
 document.getElementById('btn-cut-tool')!.addEventListener('click', () => {
@@ -866,14 +1019,6 @@ document.getElementById('btn-export-pdf')!.addEventListener('click', () => {
   exportPdf(editor, () => sidebar.buffersForExport());
 });
 
-document.getElementById('btn-debug-dump')!.addEventListener('click', () => {
-  const dump = editor.get_debug_layout_dump();
-  const blob = new Blob([dump], { type: 'text/plain' });
-  const url  = URL.createObjectURL(blob);
-  const a    = Object.assign(document.createElement('a'), { href: url, download: 'grid-debug.txt' });
-  a.click();
-  URL.revokeObjectURL(url);
-});
 
 const docsPanel = new DocsPanel();
 document.getElementById('btn-docs')!.addEventListener('click', () => docsPanel.open());
@@ -936,9 +1081,11 @@ canvasEl.addEventListener('wheel', (e) => {
 fitCanvas();
 refreshBoxModel();
 
-if (localFontsSupported()) {
-  textEditor.setLoadFontsHandler(async () => {
-    const families = await loadLocalFonts();
-    if (families.length > 0) textEditor.setFontFamilies(families);
-  });
-}
+textEditor.setLoadFontsHandler(async () => {
+  const result = await tryLoadLocalFonts();
+  if (result.error !== null) {
+    showFontAccessWarning(result.error);
+    return;
+  }
+  if (result.families.length > 0) textEditor.setFontFamilies(result.families);
+});

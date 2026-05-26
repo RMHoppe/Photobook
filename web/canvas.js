@@ -1,7 +1,7 @@
 // canvas.ts — All 2D rendering for the double-page spread canvas.
 // Receives data from the Wasm editor and draws using Canvas 2D API.
 import { PAD, RULER_SIZE, NULL_ID } from './constants.js';
-import { getSpreadInfo, getLowDpiFrames, getSelectedTransformHandles, computeImageCover, getTextElements, getResolvedSpreadDelta, getXJunctions, } from './wasm-bridge.js';
+import { getSpreadInfo, getLowDpiFrames, computeImageCover, getTextElements, getResolvedSpreadDelta, getXJunctions, } from './wasm-bridge.js';
 import { drawRulers } from './canvas-draw-rulers.js';
 // ---------------------------------------------------------------------------
 // Geometry cache — avoids repeated JSON parsing on unchanged data
@@ -31,6 +31,10 @@ class SpreadGeometryCache {
         }
     }
     getFrames() { return this._frames; }
+    getFrameById(id) {
+        const idx = this._frameIndex.get(id);
+        return idx !== undefined ? this._frames[idx] : undefined;
+    }
 }
 const BLEED_COLOR = 'rgba(220, 50, 50, 0.35)';
 const SAFE_COLOR = 'rgba(0, 150, 255, 0.65)';
@@ -39,9 +43,6 @@ const SPINE_COLOR = 'rgba(255, 160, 0, 0.85)';
 const FRAME_EMPTY_COLOR = '#ccc';
 const DIVIDER_HOVER_COLOR = '#aaa';
 const SELECTED_COLOR = '#4a90e2';
-const TRANSFORM_COLOR = '#e8a020';
-const TRANSFORM_FILL = 'rgba(232, 160, 32, 0.10)';
-const HANDLE_RADIUS = 8;
 const TEXT_HANDLE_RADIUS = 6;
 const TEXT_SELECTED_COLOR = '#34c9a0';
 const ROTATION_HANDLE_DIST = 22; // px from top-center to rotation handle
@@ -55,8 +56,6 @@ export class CanvasRenderer {
     hoveredTwinHandle = null;
     /** True when the current segment selection was made by clicking a twin handle (not the full-chain divider). */
     twinSegmentSelected = false;
-    hoveredMarginHandle = null;
-    hoveredRotationHandle = false;
     hoveredLeaf;
     _hatchPattern = null;
     _placeholderImg = null;
@@ -86,6 +85,11 @@ export class CanvasRenderer {
     /** Canvas X of the full spread's left edge (differs from lastLayoutRect.x on left-endpaper spreads). */
     fullSpreadOriginX = 0;
     _geoCache = new SpreadGeometryCache();
+    getFrameById(id) {
+        return this._geoCache.getFrameById(id);
+    }
+    /** Bleed extent in CSS px that is currently visible (0 when bleed display is off). */
+    get visibleBleedPx() { return this.showBleed ? this._bleedPx : 0; }
     constructor(canvasEl, onPlaceholderLoad) {
         this.canvas = canvasEl;
         this.ctx = canvasEl.getContext('2d');
@@ -129,7 +133,7 @@ export class CanvasRenderer {
             h: scaledH,
         };
     }
-    draw(editor, overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null }) {
+    draw(editor, overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null, imageDropPreview: null }) {
         const { marqueeRect = null } = overlays;
         const { ctx, dpr, cssW, cssH } = this;
         if (!cssW || !cssH)
@@ -209,7 +213,6 @@ export class CanvasRenderer {
         for (const el of textElements) {
             this._drawTextElement(ctx, el, spreadRect, metrics.mmToPx, this.selectedTextIds.has(el.id));
         }
-        this._drawTransformBox(ctx, editor, layoutRect);
         this._drawGuides(ctx, spreadInfo, spreadRect, pageWPx, pageHPx, spinePx, metrics.mmToPx);
         ctx.restore();
     }
@@ -279,7 +282,7 @@ export class CanvasRenderer {
         ctx.setLineDash([]);
     }
     _drawSplitOverlays(ctx, spreadRect, overlays, renderList) {
-        const { splitPreview, edgeDragPreview, swapOverlay } = overlays;
+        const { splitPreview, edgeDragPreview, swapOverlay, imageDropPreview } = overlays;
         if (splitPreview) {
             const { frameRect, axis, ratio, numCuts } = splitPreview;
             const fx = spreadRect.x + frameRect.x;
@@ -357,6 +360,82 @@ export class CanvasRenderer {
                 }
             }
         }
+        if (imageDropPreview) {
+            this._drawImageDropPreview(ctx, spreadRect, imageDropPreview);
+        }
+    }
+    _drawImageDropPreview(ctx, layoutRect, preview) {
+        const { frameRect, zone, hasExistingImage } = preview;
+        const fx = layoutRect.x + frameRect.x;
+        const fy = layoutRect.y + frameRect.y;
+        const fw = frameRect.w;
+        const fh = frameRect.h;
+        ctx.save();
+        if (zone === 'center') {
+            ctx.fillStyle = 'rgba(74, 144, 226, 0.22)';
+            ctx.fillRect(fx, fy, fw, fh);
+            ctx.strokeStyle = SELECTED_COLOR;
+            ctx.lineWidth = 2.5;
+            ctx.setLineDash([]);
+            ctx.strokeRect(fx, fy, fw, fh);
+        }
+        else {
+            const half = 0.5;
+            let newX = fx, newY = fy, newW = fw, newH = fh;
+            let keepX = fx, keepY = fy, keepW = fw, keepH = fh;
+            let lx1, ly1, lx2, ly2;
+            if (zone === 'left') {
+                newW = fw * half;
+                keepX = fx + fw * half;
+                keepW = fw * half;
+                lx1 = fx + fw * half;
+                ly1 = fy;
+                lx2 = lx1;
+                ly2 = fy + fh;
+            }
+            else if (zone === 'right') {
+                newX = fx + fw * half;
+                newW = fw * half;
+                keepW = fw * half;
+                lx1 = fx + fw * half;
+                ly1 = fy;
+                lx2 = lx1;
+                ly2 = fy + fh;
+            }
+            else if (zone === 'top') {
+                newH = fh * half;
+                keepY = fy + fh * half;
+                keepH = fh * half;
+                lx1 = fx;
+                ly1 = fy + fh * half;
+                lx2 = fx + fw;
+                ly2 = ly1;
+            }
+            else {
+                newY = fy + fh * half;
+                newH = fh * half;
+                keepH = fh * half;
+                lx1 = fx;
+                ly1 = fy + fh * half;
+                lx2 = fx + fw;
+                ly2 = ly1;
+            }
+            ctx.fillStyle = 'rgba(74, 144, 226, 0.35)';
+            ctx.fillRect(newX, newY, newW, newH);
+            ctx.fillStyle = 'rgba(200, 200, 200, 0.18)';
+            ctx.fillRect(keepX, keepY, keepW, keepH);
+            ctx.strokeStyle = SELECTED_COLOR;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 3]);
+            ctx.beginPath();
+            ctx.moveTo(lx1, ly1);
+            ctx.lineTo(lx2, ly2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(fx, fy, fw, fh);
+        }
+        ctx.restore();
     }
     _drawDividerLayer(ctx, spreadRect, editor, renderList, selectedSegmentId, bleedPx) {
         const twinHandles = this._geoCache.twinHandles;
@@ -771,69 +850,11 @@ export class CanvasRenderer {
         editor.set_mouse_pos(layoutRelX, layoutRelY);
         const hov = editor.hovered_divider(layoutRect.w, layoutRect.h);
         const newDivider = hov === 0xFFFFFFFF ? null : hov;
-        let newMarginHandle = null;
-        let newRotationHandle = false;
-        const handles = getSelectedTransformHandles(editor, layoutRect.w, layoutRect.h);
-        if (handles) {
-            // Inverse-rotate the mouse point into the frame's local (unrotated) space so
-            // hit-testing works correctly when face_rotation_deg is non-zero.
-            const selectedLeaf = this._geoCache.getFrames().find(l => l.is_selected);
-            const nodeRotRad = selectedLeaf ? (selectedLeaf.face_rotation_deg * Math.PI) / 180 : 0;
-            let testX = canvasX;
-            let testY = canvasY;
-            if (nodeRotRad !== 0) {
-                const ocx = layoutRect.x + handles.outer.x + handles.outer.w / 2;
-                const ocy = layoutRect.y + handles.outer.y + handles.outer.h / 2;
-                const dx = canvasX - ocx, dy = canvasY - ocy;
-                testX = ocx + dx * Math.cos(nodeRotRad) - dy * Math.sin(nodeRotRad);
-                testY = ocy + dx * Math.sin(nodeRotRad) + dy * Math.cos(nodeRotRad);
-            }
-            for (const h of this._handlePositions(handles, layoutRect)) {
-                const dx = testX - h.cx;
-                const dy = testY - h.cy;
-                if (dx * dx + dy * dy <= HANDLE_RADIUS * HANDLE_RADIUS) {
-                    newMarginHandle = h.side;
-                    break;
-                }
-            }
-            if (!newMarginHandle) {
-                const rh = this._rotationHandlePos(handles, layoutRect);
-                const dx = testX - rh.x;
-                const dy = testY - rh.y;
-                if (dx * dx + dy * dy <= HANDLE_RADIUS * HANDLE_RADIUS)
-                    newRotationHandle = true;
-            }
-        }
-        // Point-like handles take precedence over edge-like dividers.
-        const effectiveDivider = (newMarginHandle !== null || newRotationHandle) ? null : newDivider;
         const newLeaf = editor.hit_test(layoutRelX, layoutRelY, layoutRect.w, layoutRect.h);
-        const changed = effectiveDivider !== this.hoveredDivider
-            || newMarginHandle !== this.hoveredMarginHandle
-            || newRotationHandle !== this.hoveredRotationHandle
-            || newLeaf !== this.hoveredLeaf;
-        this.hoveredDivider = effectiveDivider;
-        this.hoveredMarginHandle = newMarginHandle;
-        this.hoveredRotationHandle = newRotationHandle;
+        const changed = newDivider !== this.hoveredDivider || newLeaf !== this.hoveredLeaf;
+        this.hoveredDivider = newDivider;
         this.hoveredLeaf = newLeaf;
         return changed;
-    }
-    _rotationHandlePos(handles, spreadRect) {
-        const { outer } = handles;
-        return {
-            x: spreadRect.x + outer.x + outer.w / 2,
-            y: spreadRect.y + outer.y - ROTATION_HANDLE_DIST,
-        };
-    }
-    _handlePositions(handles, spreadRect) {
-        const { inner } = handles;
-        const ix = spreadRect.x + inner.x;
-        const iy = spreadRect.y + inner.y;
-        return [
-            { side: 'tl', cx: ix, cy: iy },
-            { side: 'tr', cx: ix + inner.w, cy: iy },
-            { side: 'bl', cx: ix, cy: iy + inner.h },
-            { side: 'br', cx: ix + inner.w, cy: iy + inner.h },
-        ];
     }
     // ---------------------------------------------------------------------------
     // Text element rendering helpers
@@ -885,6 +906,32 @@ export class CanvasRenderer {
                 textX = ox;
             for (let i = 0; i < lines.length; i++) {
                 ctx.fillText(lines[i], textX, oy + i * lineH);
+            }
+            if (el.underline) {
+                const ulY = oy + fontPx * 0.87;
+                const thickness = Math.max(1, fontPx * 0.06);
+                ctx.strokeStyle = el.color || '#000';
+                ctx.lineWidth = thickness;
+                for (let i = 0; i < lines.length; i++) {
+                    const lw = lineWidths[i];
+                    let x0, x1;
+                    if (el.align === 'center') {
+                        x0 = textX - lw / 2;
+                        x1 = textX + lw / 2;
+                    }
+                    else if (el.align === 'right') {
+                        x0 = textX - lw;
+                        x1 = textX;
+                    }
+                    else {
+                        x0 = textX;
+                        x1 = textX + lw;
+                    }
+                    ctx.beginPath();
+                    ctx.moveTo(x0, ulY + i * lineH);
+                    ctx.lineTo(x1, ulY + i * lineH);
+                    ctx.stroke();
+                }
             }
             ctx.restore();
         }
@@ -981,82 +1028,6 @@ export class CanvasRenderer {
         }
         return null;
     }
-    _drawTransformBox(ctx, editor, spreadRect) {
-        const handles = getSelectedTransformHandles(editor, spreadRect.w, spreadRect.h);
-        if (!handles)
-            return;
-        const selectedLeaf = this._geoCache.getFrames().find(l => l.is_selected);
-        const nodeRotRad = selectedLeaf ? (selectedLeaf.face_rotation_deg * Math.PI) / 180 : 0;
-        const { outer, inner } = handles;
-        const ox = spreadRect.x + outer.x;
-        const oy = spreadRect.y + outer.y;
-        const ix = spreadRect.x + inner.x;
-        const iy = spreadRect.y + inner.y;
-        const ocx = ox + outer.w / 2;
-        const ocy = oy + outer.h / 2;
-        ctx.save();
-        if (nodeRotRad !== 0) {
-            ctx.translate(ocx, ocy);
-            ctx.rotate(-nodeRotRad);
-            ctx.translate(-ocx, -ocy);
-        }
-        const mTop = inner.y - outer.y;
-        const mBottom = outer.h - mTop - inner.h;
-        const mLeft = inner.x - outer.x;
-        const mRight = outer.w - mLeft - inner.w;
-        if (mTop > 0 || mBottom > 0 || mLeft > 0 || mRight > 0) {
-            ctx.fillStyle = TRANSFORM_FILL;
-            if (mTop > 0)
-                ctx.fillRect(ox, oy, outer.w, mTop);
-            if (mBottom > 0)
-                ctx.fillRect(ox, iy + inner.h, outer.w, mBottom);
-            if (mLeft > 0)
-                ctx.fillRect(ox, iy, mLeft, inner.h);
-            if (mRight > 0)
-                ctx.fillRect(ix + inner.w, iy, mRight, inner.h);
-        }
-        ctx.strokeStyle = TRANSFORM_COLOR;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 3]);
-        ctx.strokeRect(ix, iy, inner.w, inner.h);
-        ctx.setLineDash([]);
-        const positions = this._handlePositions(handles, spreadRect);
-        for (const h of positions) {
-            const isHovered = this.hoveredMarginHandle === h.side;
-            const s = isHovered ? 7 : 5.5;
-            ctx.fillStyle = TRANSFORM_COLOR;
-            ctx.fillRect(h.cx - s / 2, h.cy - s / 2, s, s);
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 1.5;
-            ctx.strokeRect(h.cx - s / 2, h.cy - s / 2, s, s);
-        }
-        // Rotation handle — dashed stem from outer top-center, circle at tip.
-        const rh = this._rotationHandlePos(handles, spreadRect);
-        const stemBaseY = spreadRect.y + outer.y;
-        ctx.strokeStyle = TRANSFORM_COLOR;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 2]);
-        ctx.beginPath();
-        ctx.moveTo(rh.x, stemBaseY);
-        ctx.lineTo(rh.x, rh.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        const rotR = this.hoveredRotationHandle ? 7 : TEXT_HANDLE_RADIUS;
-        ctx.beginPath();
-        ctx.arc(rh.x, rh.y, rotR, 0, Math.PI * 2);
-        ctx.fillStyle = '#fff';
-        ctx.fill();
-        ctx.strokeStyle = TRANSFORM_COLOR;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        // Small arc inside to indicate rotate.
-        ctx.beginPath();
-        ctx.arc(rh.x, rh.y, rotR * 0.45, -Math.PI * 0.75, Math.PI * 0.25);
-        ctx.strokeStyle = TRANSFORM_COLOR;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.restore();
-    }
     toSpreadCoords(clientX, clientY, spreadRect) {
         const rect = this.canvas.getBoundingClientRect();
         const cssX = clientX - rect.left;
@@ -1145,20 +1116,21 @@ export class CanvasRenderer {
     }
     _drawEdgeHoverHint(ctx, sr, edge) {
         const STRIP = 3;
+        const bp = this.visibleBleedPx;
         ctx.save();
         ctx.fillStyle = 'rgba(74, 144, 226, 0.5)';
         switch (edge) {
             case 'top':
-                ctx.fillRect(sr.x, sr.y, sr.w, STRIP);
+                ctx.fillRect(sr.x - bp, sr.y - bp, sr.w + 2 * bp, STRIP);
                 break;
             case 'bottom':
-                ctx.fillRect(sr.x, sr.y + sr.h - STRIP, sr.w, STRIP);
+                ctx.fillRect(sr.x - bp, sr.y + sr.h + bp - STRIP, sr.w + 2 * bp, STRIP);
                 break;
             case 'left':
-                ctx.fillRect(sr.x, sr.y, STRIP, sr.h);
+                ctx.fillRect(sr.x - bp, sr.y - bp, STRIP, sr.h + 2 * bp);
                 break;
             case 'right':
-                ctx.fillRect(sr.x + sr.w - STRIP, sr.y, STRIP, sr.h);
+                ctx.fillRect(sr.x + sr.w + bp - STRIP, sr.y - bp, STRIP, sr.h + 2 * bp);
                 break;
         }
         ctx.restore();

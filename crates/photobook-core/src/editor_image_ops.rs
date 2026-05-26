@@ -100,6 +100,8 @@ impl PhotobookEditor {
 
     pub fn register_image_size(&mut self, image_id: &str, width_px: u32, height_px: u32) {
         self.image_sizes.insert(image_id.to_string(), (width_px, height_px));
+        self.low_dpi_dirty = true;
+        self.low_dpi_cache = None;
     }
 
     /// Split `face_id` into `count` leaf faces using recursive binary halving with

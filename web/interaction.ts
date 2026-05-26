@@ -14,8 +14,8 @@
 //   { sr, relX, relY }
 
 import { NULL_ID } from './constants.js';
-import { computeImageCover, getRenderList, getDividers, getFrameTransform, getTransformBoxModel, getSpreadInfo,
-         getSelectedTransformHandles, addTextElement, moveTextElement, updateTextElement, getTextElements } from './wasm-bridge.js';
+import { computeImageCover, getRenderList, getDividers, getFrameTransform, getSpreadInfo,
+         addTextElement, moveTextElement, updateTextElement, getTextElements } from './wasm-bridge.js';
 import type { PhotobookEditor } from './pkg/photobook_core.js';
 import type { SpreadRect, Overlays, TextElement, TwinHandle, XJunction } from './types.js';
 import type { CanvasRenderer } from './canvas.js';
@@ -104,36 +104,7 @@ interface ImagePanState {
   overflowX: number; overflowY: number;
   hasMoved: boolean;
 }
-type MarginCorner = 'tl' | 'tr' | 'bl' | 'br';
-type MarginKey    = 'top' | 'right' | 'bottom' | 'left';
-
-interface CornerDef {
-  m1: MarginKey; s1: number;
-  m2: MarginKey; s2: number;
-  o1: MarginKey; o2: MarginKey;
-}
-
-const CORNER_DEFS: Record<MarginCorner, CornerDef> = {
-  tl: { m1: 'top',    s1: +1, m2: 'left',  s2: +1, o1: 'bottom', o2: 'right' },
-  tr: { m1: 'top',    s1: +1, m2: 'right', s2: -1, o1: 'bottom', o2: 'left'  },
-  bl: { m1: 'bottom', s1: -1, m2: 'left',  s2: +1, o1: 'top',    o2: 'right' },
-  br: { m1: 'bottom', s1: -1, m2: 'right', s2: -1, o1: 'top',    o2: 'left'  },
-};
-
-interface MarginDragState {
-  corner: MarginCorner;
-  startMouseX: number; startMouseY: number;
-  startMargins: Record<MarginKey, number>;
-  mmToPx: number;
-  marginStepMm: number;
-}
 interface ImageSwapState      { sourceId: number; targetId: number | null; }
-interface NodeRotateDragState {
-  cx: number; cy: number;     // node centre in canvas px
-  startAngle: number;          // atan2 from centre to mouse at drag start
-  startRotDeg: number;
-  hasMoved: boolean;
-}
 interface SplitPreviewState { nodeId: number; axis: 'v' | 'h' | 'quadrant' | null; ratio: number | null; numCuts: number; }
 interface EdgeLiveDragState { edge: 'top' | 'bottom' | 'left' | 'right'; axis: 'h' | 'v'; newIsFirst: boolean; spawned: boolean; segmentId: number; }
 
@@ -171,9 +142,9 @@ export const marqueeMode: InteractionMode = {
     const dragged = rect && (rect.w > 4 || rect.h > 4);
     if (dragged) {
       if (state.shiftKey) {
-        editor.toggle_faces_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
+        editor.toggle_all_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
       } else {
-        editor.select_faces_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
+        editor.select_all_in_rect(rect.x, rect.y, rect.w, rect.h, sr.w, sr.h);
       }
       refreshBoxModel();
     } else if (state.shiftKey) {
@@ -198,11 +169,6 @@ export const marqueeMode: InteractionMode = {
   },
 };
 
-const MARGIN_HANDLE_CURSORS: Record<string, string> = {
-  tl: 'nwse-resize', tr: 'nesw-resize',
-  bl: 'nesw-resize', br: 'nwse-resize',
-};
-
 // ---------------------------------------------------------------------------
 // Idle mode — hit-test helpers (lifted from onMouseDown for readability)
 // ---------------------------------------------------------------------------
@@ -223,45 +189,6 @@ function idleHandleEdgeHit(e: MouseEvent, ctx: InteractionContext, _geo: IdleGeo
   setMode(edgeLiveDragMode, {
     edge, axis, newIsFirst: edge === 'top' || edge === 'left', spawned: false, segmentId: NULL_ID,
   } as EdgeLiveDragState);
-  e.preventDefault();
-}
-
-function idleHandleRotationHandle(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo): void {
-  const { editor, snapshot, setMode } = ctx;
-  const { sr, canvasX, canvasY } = geo;
-  const handles = getSelectedTransformHandles(editor, sr.w, sr.h);
-  if (!handles) return;
-  const { outer } = handles;
-  const cx = sr.x + outer.x + outer.w / 2;
-  const cy = sr.y + outer.y + outer.h / 2;
-  const bm = getTransformBoxModel(editor);
-  snapshot();
-  setMode(nodeRotateDragMode, {
-    cx, cy,
-    startAngle: Math.atan2(canvasY - cy, canvasX - cx),
-    startRotDeg: bm.face_rotation_deg ?? 0,
-    hasMoved: false,
-  } as NodeRotateDragState);
-  e.preventDefault();
-}
-
-function idleHandleMarginHandle(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo): void {
-  const { editor, renderer, snapshot, setMode } = ctx;
-  const { sr, relX, relY } = geo;
-  const corner = renderer.hoveredMarginHandle! as MarginCorner;
-  const bm = getTransformBoxModel(editor);
-  const startMargins: Record<MarginKey, number> = {
-    top: bm.margin.top ?? 0, right: bm.margin.right ?? 0,
-    bottom: bm.margin.bottom ?? 0, left: bm.margin.left ?? 0,
-  };
-  snapshot();
-  const spreadInfo = getSpreadInfo(editor);
-  const layoutMm = spreadInfo.endpaper_side ? spreadInfo.page_width_mm : spreadInfo.width_mm;
-  setMode(marginDragMode, {
-    corner, startMouseX: relX, startMouseY: relY, startMargins,
-    mmToPx: sr.w / layoutMm,
-    marginStepMm: editor.get_margin_step_mm(),
-  } as MarginDragState);
   e.preventDefault();
 }
 
@@ -448,9 +375,6 @@ export const idleMode: InteractionMode = {
       e.preventDefault();
       return;
     }
-    if (renderer.hoveredRotationHandle)         { idleHandleRotationHandle(e, ctx, geo); return; }
-    if (renderer.hoveredMarginHandle !== null)  { idleHandleMarginHandle(e, ctx, geo); return; }
-
     // X-junction handle → begin pinwheel spawn drag.
     if (renderer.hoveredXJunction !== null) {
       const jx = renderer.hoveredXJunction;
@@ -501,35 +425,29 @@ export const idleMode: InteractionMode = {
        newTwinHover.edge_id !== renderer.hoveredTwinHandle.edge_id);
     renderer.hoveredTwinHandle = newTwinHover;
 
-    // X-junction handle hit test — suppressed when a transform box handle is active.
-    const transformHandleActive = newTwinHover !== null
-      || renderer.hoveredRotationHandle
-      || renderer.hoveredMarginHandle !== null;
-    const newXJunction = transformHandleActive ? null : renderer.xJunctionAt(cx, cy, sr);
+    // X-junction handle hit test — suppressed when a twin handle is active.
+    const newXJunction = newTwinHover !== null ? null : renderer.xJunctionAt(cx, cy, sr);
     const xjChanged = (newXJunction !== null) !== (renderer.hoveredXJunction !== null) ||
       (newXJunction !== null && renderer.hoveredXJunction !== null &&
        newXJunction.tl_id !== renderer.hoveredXJunction.tl_id);
     renderer.hoveredXJunction = newXJunction;
 
-    // Detect hover within EDGE_THRESHOLD px outside each spread edge.
+    // Detect hover within EDGE_THRESHOLD px outside the outer visible edge (bleed boundary).
     const EDGE_THRESHOLD = 20;
+    const bp = renderer.visibleBleedPx;
     const rawX = cx - sr.x;
     const rawY = cy - sr.y;
     let edgeHit: 'top' | 'bottom' | 'left' | 'right' | null = null;
-    if (rawX >= 0 && rawX <= sr.w && rawY >= -EDGE_THRESHOLD && rawY < 0) edgeHit = 'top';
-    else if (rawX >= 0 && rawX <= sr.w && rawY > sr.h && rawY <= sr.h + EDGE_THRESHOLD) edgeHit = 'bottom';
-    else if (rawY >= 0 && rawY <= sr.h && rawX >= -EDGE_THRESHOLD && rawX < 0) edgeHit = 'left';
-    else if (rawY >= 0 && rawY <= sr.h && rawX > sr.w && rawX <= sr.w + EDGE_THRESHOLD) edgeHit = 'right';
+    if (rawX >= -bp && rawX <= sr.w + bp && rawY >= -bp - EDGE_THRESHOLD && rawY < -bp) edgeHit = 'top';
+    else if (rawX >= -bp && rawX <= sr.w + bp && rawY > sr.h + bp && rawY <= sr.h + bp + EDGE_THRESHOLD) edgeHit = 'bottom';
+    else if (rawY >= -bp && rawY <= sr.h + bp && rawX >= -bp - EDGE_THRESHOLD && rawX < -bp) edgeHit = 'left';
+    else if (rawY >= -bp && rawY <= sr.h + bp && rawX > sr.w + bp && rawX <= sr.w + bp + EDGE_THRESHOLD) edgeHit = 'right';
     const edgeChanged = edgeHit !== _hoveredEdge;
     _hoveredEdge = edgeHit;
     renderer.hoveredEdge = edgeHit;
 
     if (renderer.hoveredTwinHandle !== null) {
       canvasEl.style.cursor = 'pointer';
-    } else if (renderer.hoveredRotationHandle) {
-      canvasEl.style.cursor = 'grab';
-    } else if (renderer.hoveredMarginHandle !== null) {
-      canvasEl.style.cursor = MARGIN_HANDLE_CURSORS[renderer.hoveredMarginHandle] ?? 'default';
     } else if (renderer.hoveredXJunction !== null) {
       canvasEl.style.cursor = 'crosshair';
     } else if (renderer.hoveredDivider !== null) {
@@ -537,11 +455,20 @@ export const idleMode: InteractionMode = {
       const div = divs.find(d => d.segment_id === renderer.hoveredDivider);
       canvasEl.style.cursor = div ? (div.axis === 'v' ? 'col-resize' : 'row-resize') : 'default';
     } else if (edgeHit) {
-      canvasEl.style.cursor = (edgeHit === 'top' || edgeHit === 'bottom') ? 'n-resize' : 'ew-resize';
+      const EDGE_CURSORS = { top: 's-resize', bottom: 'n-resize', left: 'e-resize', right: 'w-resize' };
+      canvasEl.style.cursor = EDGE_CURSORS[edgeHit];
     } else {
-      // Show I-beam cursor over text elements to hint they are double-click editable.
       const textHit = renderer.hitTestText(cx, cy);
-      canvasEl.style.cursor = textHit ? 'text' : 'default';
+      if (!textHit) {
+        canvasEl.style.cursor = 'default';
+      } else if (renderer.selectedTextIds.has(textHit.id) && textHit.part === 'rotate') {
+        canvasEl.style.cursor = 'grab';
+      } else if (renderer.selectedTextIds.has(textHit.id) && textHit.part === 'corner') {
+        const CORNER_CURSORS = ['nwse-resize', 'nesw-resize', 'nwse-resize', 'nesw-resize'];
+        canvasEl.style.cursor = CORNER_CURSORS[textHit.cornerIndex!] ?? 'nwse-resize';
+      } else {
+        canvasEl.style.cursor = 'text';
+      }
     }
     if (changed || edgeChanged || twinChanged || xjChanged) redraw();
   },
@@ -590,111 +517,6 @@ export const dividerDragMode: InteractionMode = {
   onMouseLeave(e, ctx) {
     dividerDragMode.onMouseUp(e, ctx);
   },
-};
-
-// ---------------------------------------------------------------------------
-// Margin drag mode
-// ---------------------------------------------------------------------------
-
-export const marginDragMode: InteractionMode = {
-  onMouseDown(_e, _ctx) {},
-
-  onMouseMove(e, ctx) {
-    const { editor, toSpread, refreshBoxModel, redraw, modeState } = ctx;
-    const { relX, relY } = toSpread(e);
-    const state = modeState as MarginDragState;
-    const { corner, startMouseX, startMouseY, startMargins, mmToPx, marginStepMm } = state;
-
-    const def = CORNER_DEFS[corner];
-
-    // Raw pixel displacement converted to mm deltas for each primary margin.
-    let d1 = (relY - startMouseY) * def.s1 / mmToPx;
-    let d2 = (relX - startMouseX) * def.s2 / mmToPx;
-    if (marginStepMm > 0) {
-      d1 = Math.round(d1 / marginStepMm) * marginStepMm;
-      d2 = Math.round(d2 / marginStepMm) * marginStepMm;
-    }
-
-    const margins = { ...startMargins };
-    const clamp = (v: number) => v;
-
-    if (e.shiftKey && e.altKey) {
-      // Largest displacement only, plus its opposite.
-      if (Math.abs(d1) >= Math.abs(d2)) {
-        margins[def.m1] = clamp(startMargins[def.m1] + d1);
-        margins[def.o1] = clamp(startMargins[def.o1] + d1);
-      } else {
-        margins[def.m2] = clamp(startMargins[def.m2] + d2);
-        margins[def.o2] = clamp(startMargins[def.o2] + d2);
-      }
-    } else if (e.shiftKey) {
-      // Largest displacement only.
-      if (Math.abs(d1) >= Math.abs(d2)) {
-        margins[def.m1] = clamp(startMargins[def.m1] + d1);
-      } else {
-        margins[def.m2] = clamp(startMargins[def.m2] + d2);
-      }
-    } else if (e.altKey) {
-      // Both primary margins and their opposites.
-      margins[def.m1] = clamp(startMargins[def.m1] + d1);
-      margins[def.m2] = clamp(startMargins[def.m2] + d2);
-      margins[def.o1] = clamp(startMargins[def.o1] + d1);
-      margins[def.o2] = clamp(startMargins[def.o2] + d2);
-    } else {
-      // Default: both primary margins.
-      margins[def.m1] = clamp(startMargins[def.m1] + d1);
-      margins[def.m2] = clamp(startMargins[def.m2] + d2);
-    }
-
-    editor.set_node_margin(margins.top, margins.right, margins.bottom, margins.left);
-    refreshBoxModel();
-    redraw();
-  },
-
-  onMouseUp(_e, ctx) {
-    const { setMode, canvasEl } = ctx;
-    canvasEl.style.cursor = 'default';
-    setMode(idleMode, {});
-  },
-
-  onMouseLeave(e, ctx) {
-    marginDragMode.onMouseUp(e, ctx);
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Node rotation drag mode — horizontal drag rotates the transform-target node.
-// Drag right = clockwise (face_rotation_deg is CCW positive, so right drag subtracts).
-// ---------------------------------------------------------------------------
-
-export const nodeRotateDragMode: InteractionMode = {
-  onMouseDown(_e, _ctx) {},
-
-  onMouseMove(e, ctx) {
-    const { editor, toSpread, refreshBoxModel, redraw, canvasEl, modeState } = ctx;
-    const { canvasX, canvasY } = toSpread(e);
-    const state = modeState as NodeRotateDragState;
-
-    const angle = Math.atan2(canvasY - state.cy, canvasX - state.cx);
-    const delta = -(angle - state.startAngle) * (180 / Math.PI);
-
-    if (!state.hasMoved) {
-      if (Math.abs(delta) < 1) return;
-      state.hasMoved = true;
-    }
-
-    editor.set_face_rotation_deg(state.startRotDeg + delta);
-    canvasEl.style.cursor = 'crosshair';
-    refreshBoxModel();
-    redraw();
-  },
-
-  onMouseUp(_e, ctx) {
-    ctx.canvasEl.style.cursor = 'default';
-    ctx.setMode(idleMode, {});
-  },
-
-  onMouseLeave(e, ctx) { nodeRotateDragMode.onMouseUp(e, ctx); },
 };
 
 // ---------------------------------------------------------------------------

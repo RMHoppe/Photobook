@@ -78,7 +78,13 @@ pub struct PhotobookEditor {
     pub(crate) last_delta_canvas_h_bits: u32,
     pub(crate) snap_disabled: bool,
     pub(crate) pdf_state: Option<Box<crate::pdf::PdfExportState>>,
+
+    // Undo/redo
+    pub(crate) undo_stack: Vec<PhotobookDocument>,
+    pub(crate) redo_stack: Vec<PhotobookDocument>,
 }
+
+pub(crate) const UNDO_MAX: usize = 50;
 
 #[wasm_bindgen]
 impl PhotobookEditor {
@@ -104,6 +110,8 @@ impl PhotobookEditor {
             last_delta_canvas_h_bits: 0,
             snap_disabled: false,
             pdf_state: None,
+            undo_stack: Vec::with_capacity(UNDO_MAX),
+            redo_stack: Vec::with_capacity(UNDO_MAX),
         }
     }
 
@@ -166,6 +174,69 @@ impl PhotobookEditor {
         if self.spread_dirty.len() < n {
             self.spread_dirty.resize(n, true);
         }
+    }
+
+    /// Mark every render cache dirty. Called by `install_doc_full` and by
+    /// doc-wide settings changes whose effect is hard to bound to a subset.
+    pub(crate) fn full_invalidate(&mut self) {
+        let n = self.doc.spreads.len();
+        self.selection.clear();
+        self.structure_dirty = true;
+        self.leaf_dirty.clear();
+        self.low_dpi_dirty = true;
+        self.low_dpi_cache = None;
+        self.spread_dirty = vec![true; n];
+    }
+
+    /// Install `new_doc` as the live document and full-invalidate. Used by
+    /// project loads where there's no useful diff against the prior state.
+    pub(crate) fn install_doc_full(&mut self, new_doc: PhotobookDocument) {
+        self.doc = new_doc;
+        self.full_invalidate();
+    }
+
+    /// `self.doc` has just been replaced; mark dirty bits by diffing it against
+    /// `old`. Preserves cached low-DPI / clean spread state where possible.
+    pub(crate) fn diff_invalidate(&mut self, old: &PhotobookDocument) {
+        let doc_settings_changed = old.page_size         != self.doc.page_size
+            || old.bleed_mm          != self.doc.bleed_mm
+            || old.spine_mm_per_page != self.doc.spine_mm_per_page
+            || old.spine_min_mm      != self.doc.spine_min_mm
+            || old.endpapers         != self.doc.endpapers;
+
+        if doc_settings_changed {
+            self.full_invalidate();
+            return;
+        }
+
+        let new_n = self.doc.spreads.len();
+        if self.spread_dirty.len() != new_n {
+            self.spread_dirty.resize(new_n, false);
+        }
+
+        for i in 0..new_n {
+            if old.spreads.get(i) != Some(&self.doc.spreads[i]) {
+                self.spread_dirty[i] = true;
+            }
+        }
+
+        let cur = self.doc.current_spread;
+        let current_changed = old.current_spread != cur
+            || old.spreads.len() != new_n
+            || old.spreads.get(cur) != self.doc.spreads.get(cur);
+
+        if current_changed {
+            self.structure_dirty = true;
+            self.leaf_dirty.clear();
+            self.low_dpi_dirty = true;
+        }
+        if let Some(c) = &self.low_dpi_cache {
+            if c.spread_idx >= new_n || self.spread_dirty[c.spread_idx] {
+                self.low_dpi_cache = None;
+                self.low_dpi_dirty = true;
+            }
+        }
+        self.selection.clear();
     }
 
     pub(crate) fn root_rect_with_bleed(&self, canvas_w: f32, canvas_h: f32) -> Rect {

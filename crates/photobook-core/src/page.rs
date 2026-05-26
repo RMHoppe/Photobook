@@ -15,7 +15,7 @@ pub enum SpreadKind {
 // ---------------------------------------------------------------------------
 
 /// A free-floating text element on a spread.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TextElement {
     /// Globally unique ID (assigned from PhotobookDocument::next_text_id).
     pub id: u32,
@@ -35,6 +35,8 @@ pub struct TextElement {
     pub rotation_deg: f32,
     pub bold: bool,
     pub italic: bool,
+    #[serde(default)]
+    pub underline: bool,
     /// Text alignment: "left" | "center" | "right".
     pub align: String,
 }
@@ -52,6 +54,7 @@ impl TextElement {
             rotation_deg: 0.0,
             bold: false,
             italic: false,
+            underline: false,
             align: "left".into(),
         }
     }
@@ -62,7 +65,7 @@ impl TextElement {
 // ---------------------------------------------------------------------------
 
 /// A single spread (cover or content pair) with its grid layout.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Spread {
     pub id: u32,
     #[serde(rename = "grid_layout")]
@@ -118,7 +121,7 @@ impl Spread {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PageSize {
     pub width_mm: f32,
     pub height_mm: f32,
@@ -130,7 +133,7 @@ impl Default for PageSize {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PhotobookDocument {
     /// File format version. Used to reject files saved by newer application versions.
     #[serde(default = "PhotobookDocument::schema_v1")]

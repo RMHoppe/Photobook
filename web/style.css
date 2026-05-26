@@ -824,6 +824,16 @@ button.active { background: var(--accent); border-color: var(--accent); }
 .confirm-dialog-actions button:hover { border-color: var(--accent); color: var(--accent); }
 .confirm-dialog-actions .btn-danger { background: #c0392b; border-color: #c0392b; color: #fff; }
 .confirm-dialog-actions .btn-danger:hover { opacity: 0.85; }
+.confirm-dialog-actions .btn-confirm { background: var(--accent); border-color: var(--accent); color: #fff; }
+.confirm-dialog-actions .btn-confirm:hover { opacity: 0.85; }
+.save-name-row { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; }
+.save-name-row input[type="text"] {
+  flex: 1; min-width: 0;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text); padding: 5px 8px; font-size: 13px;
+}
+.save-name-row input[type="text"]:focus { outline: none; border-color: var(--accent); }
+.save-name-ext { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .ilm-header {
   display: flex;
   align-items: center;
@@ -979,16 +989,13 @@ button.primary:hover { background: #5a9fe8; }
 .te-font-family-row select { flex: 1; min-width: 0; width: auto; }
 .te-font-family-row .te-font-family-controls {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   gap: 4px;
-  align-items: center;
 }
 .te-load-fonts-btn {
-  flex: 0 0 auto;
-  padding: 0 6px;
+  align-self: flex-start;
+  padding: 2px 8px;
   font-size: 11px;
-  height: 24px;
-  line-height: 24px;
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-muted);

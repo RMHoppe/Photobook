@@ -1,17 +1,18 @@
-// undo.ts — Undo/redo stack manager.
+// undo.ts — Undo/redo button-state wrapper.
+//
+// The actual history stack lives in Rust (see PhotobookEditor::snapshot_undo,
+// undo, redo). Snapshots are cheap struct clones, not JSON strings, and
+// restores diff-mark dirty bits so incremental rendering survives undo.
 
 import type { PhotobookEditor } from './pkg/photobook_core.js';
-import { UNDO_MAX } from './constants.js';
 
 export class UndoManager {
-  private undoStack: string[] = [];
-  private redoStack: string[] = [];
   private btnUndo: HTMLButtonElement;
   private btnRedo: HTMLButtonElement;
   private editor: PhotobookEditor;
 
   constructor(editor: PhotobookEditor, btnUndo: HTMLButtonElement, btnRedo: HTMLButtonElement) {
-    this.editor = editor;
+    this.editor  = editor;
     this.btnUndo = btnUndo;
     this.btnRedo = btnRedo;
     this._updateButtons();
@@ -21,35 +22,30 @@ export class UndoManager {
   }
 
   snapshot(): void {
-    this.undoStack.push(this.editor.save_state());
-    if (this.undoStack.length > UNDO_MAX) this.undoStack.shift();
-    this.redoStack.length = 0;
+    this.editor.snapshot_undo();
     this._updateButtons();
   }
 
-  undo(): void {
-    if (this.undoStack.length === 0) return;
-    this.redoStack.push(this.editor.save_state());
-    this.editor.load_state(this.undoStack.pop()!);
-    this._updateButtons();
+  undo(): boolean {
+    const ok = this.editor.undo();
+    if (ok) this._updateButtons();
+    return ok;
   }
 
-  redo(): void {
-    if (this.redoStack.length === 0) return;
-    this.undoStack.push(this.editor.save_state());
-    this.editor.load_state(this.redoStack.pop()!);
-    this._updateButtons();
+  redo(): boolean {
+    const ok = this.editor.redo();
+    if (ok) this._updateButtons();
+    return ok;
   }
 
   /** Clear both stacks (called after loading a project file). */
   reset(): void {
-    this.undoStack = [];
-    this.redoStack = [];
+    this.editor.reset_undo();
     this._updateButtons();
   }
 
   private _updateButtons(): void {
-    this.btnUndo.disabled = this.undoStack.length === 0;
-    this.btnRedo.disabled = this.redoStack.length === 0;
+    this.btnUndo.disabled = !this.editor.can_undo();
+    this.btnRedo.disabled = !this.editor.can_redo();
   }
 }

@@ -18,8 +18,7 @@ echo "==> Building test Wasm..."
 wasm-pack build crates/photobook-core \
   --target web \
   --out-dir "$(pwd)/web/test-pkg" \
-  --features wasm-test \
-  --dev
+  --features wasm-test
 
 if [ ! -d "node_modules/@fortawesome" ]; then
   echo "==> Installing npm dependencies..."

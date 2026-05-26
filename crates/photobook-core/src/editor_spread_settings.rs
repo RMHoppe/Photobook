@@ -210,15 +210,48 @@ impl PhotobookEditor {
             Err(_) => return false,
         };
         if doc.schema_version > 1 { return false; }
-        self.doc = doc;
-        self.selection.clear();
-        let n = self.doc.spreads.len();
-        self.structure_dirty = true;
-        self.leaf_dirty.clear();
-        self.low_dpi_dirty = true;
-        self.low_dpi_cache = None;
-        self.spread_dirty = vec![true; n];
+        // Project loads start fresh — drop history and full-invalidate.
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.install_doc_full(doc);
         true
+    }
+
+    // -----------------------------------------------------------------------
+    // Undo / redo (history lives in Rust to avoid JSON round-trips)
+    // -----------------------------------------------------------------------
+
+    /// Push the current document onto the undo stack and clear redo.
+    pub fn snapshot_undo(&mut self) {
+        self.undo_stack.push(self.doc.clone());
+        if self.undo_stack.len() > crate::UNDO_MAX {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(prev) = self.undo_stack.pop() else { return false; };
+        let current = std::mem::replace(&mut self.doc, prev);
+        self.diff_invalidate(&current);
+        self.redo_stack.push(current);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo_stack.pop() else { return false; };
+        let current = std::mem::replace(&mut self.doc, next);
+        self.diff_invalidate(&current);
+        self.undo_stack.push(current);
+        true
+    }
+
+    pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
+    pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
+
+    pub fn reset_undo(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     // -----------------------------------------------------------------------
@@ -277,11 +310,6 @@ impl PhotobookEditor {
         self.doc.spine_min_mm        = spine_min_mm.max(0.0);
         self.doc.margin_step_mm      = margin_step_mm.max(0.0);
         self.doc.print_dpi           = print_dpi.clamp(72.0, 1200.0);
-        self.selection.clear();
-        let n = self.doc.spreads.len();
-        self.structure_dirty = true;
-        self.spread_dirty = vec![true; n];
-        self.low_dpi_dirty = true;
-        self.low_dpi_cache = None;
+        self.full_invalidate();
     }
 }
