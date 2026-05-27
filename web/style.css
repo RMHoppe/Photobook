@@ -762,7 +762,8 @@ button.active { background: var(--accent); border-color: var(--accent); }
 .ps-modal-content {
   padding: 10px;
   overflow-y: auto;
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* ---- Image-loader modal ---- */

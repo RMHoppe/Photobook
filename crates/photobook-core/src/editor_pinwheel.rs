@@ -185,12 +185,32 @@ impl PhotobookEditor {
             (cx2, cx1, cy1, cy2)
         };
 
+        // Capture chain half-gaps before moving edges.
+        let v_gap = v_upper.first().or(v_lower.first())
+            .and_then(|eid| layout.edges.get(eid))
+            .map_or(0.0, |e| e.half_gap);
+        let h_gap = h_left.first().or(h_right.first())
+            .and_then(|eid| layout.edges.get(eid))
+            .map_or(0.0, |e| e.half_gap);
+
         for eid in v_upper { if let Some(e) = layout.edges.get_mut(&eid) { e.offset = vu_off; } }
         for eid in v_lower { if let Some(e) = layout.edges.get_mut(&eid) { e.offset = vl_off; } }
         for eid in h_left  { if let Some(e) = layout.edges.get_mut(&eid) { e.offset = hl_off; } }
         for eid in h_right { if let Some(e) = layout.edges.get_mut(&eid) { e.offset = hr_off; } }
 
         let center_id = layout.add_isolated_face(cx1, cx2, cy1, cy2);
+
+        // Propagate the chain gaps to the new centre face's four edges.
+        let center_edges = layout.faces.get(&center_id).map(|f| {
+            (f.left_edge_id, f.right_edge_id, f.top_edge_id, f.bottom_edge_id)
+        });
+        if let Some((l, r, t, b)) = center_edges {
+            layout.set_half_gap(l, v_gap);
+            layout.set_half_gap(r, v_gap);
+            layout.set_half_gap(t, h_gap);
+            layout.set_half_gap(b, h_gap);
+        }
+
         spread.pinwheel_centers.push(center_id);
     }
 }
