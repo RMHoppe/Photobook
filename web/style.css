@@ -1294,3 +1294,83 @@ button.primary:hover { background: #5a9fe8; }
   white-space: nowrap;
   box-shadow: 0 2px 8px rgba(0,0,0,0.5);
 }
+
+/* ---- Fullscreen Preview Overlay ---- */
+.preview-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 200;
+  background: #0d0d0d;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-top-bar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 14px;
+  flex-shrink: 0;
+}
+
+.preview-close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #888;
+  font-size: 16px;
+  padding: 5px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.preview-close:hover { color: #fff; background: rgba(255,255,255,0.1); border-color: transparent; }
+
+.preview-body {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.preview-nav {
+  flex-shrink: 0;
+  width: 56px;
+  background: transparent;
+  border: none;
+  color: #555;
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: 0;
+  transition: color 0.15s, background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.preview-nav:hover:not(:disabled) { color: #ddd; background: rgba(255,255,255,0.06); }
+.preview-nav:disabled { color: #2d2d2d; cursor: default; }
+
+#preview-canvas-area {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#preview-canvas { display: block; }
+
+.preview-bottom-bar {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+#preview-counter {
+  color: #555;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}

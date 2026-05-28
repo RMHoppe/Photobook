@@ -90,6 +90,7 @@
             <span id="zoom-label">100%</span>
             <button id="btn-zoom-in" title="Zoom in (Ctrl++)">+</button>
             <button id="btn-zoom-fit" title="Reset zoom to 100% (Ctrl+0)">Fit</button>
+            <button id="btn-preview" title="Fullscreen preview" class="icon-btn"><i class="fa-solid fa-expand" aria-hidden="true"></i></button>
           </div>
         </div>
       </main>
@@ -118,6 +119,29 @@
         <span id="spread-count-label" class="spread-count-label"></span>
       </div>
     </footer>
+  </div>
+
+  <!-- Fullscreen preview overlay -->
+  <div id="preview-overlay" class="preview-overlay" hidden>
+    <div class="preview-top-bar">
+      <button id="preview-close" class="preview-close" title="Close preview (Esc)">
+        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="preview-body">
+      <button id="preview-prev" class="preview-nav" title="Previous spread (←)">
+        <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+      </button>
+      <div id="preview-canvas-area">
+        <canvas id="preview-canvas"></canvas>
+      </div>
+      <button id="preview-next" class="preview-nav" title="Next spread (→)">
+        <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="preview-bottom-bar">
+      <span id="preview-counter"></span>
+    </div>
   </div>
 
   <dialog id="save-name-dialog" class="confirm-dialog">

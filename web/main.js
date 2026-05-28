@@ -20,7 +20,7 @@ import { RandomizeDialog } from './randomize-dialog.js';
 // ---------------------------------------------------------------------------
 await init();
 init_panic_hook();
-const editor = new PhotobookEditor(210, 297, 3);
+const editor = new PhotobookEditor(297, 210, 3);
 // ---------------------------------------------------------------------------
 // Canvas
 // ---------------------------------------------------------------------------
@@ -36,7 +36,13 @@ function redraw() {
     renderer.draw(editor, overlays);
     footer.update(editor, renderer);
 }
-window.addEventListener('resize', fitCanvas);
+window.addEventListener('resize', () => {
+    fitCanvas();
+    if (previewActive) {
+        resizePreviewCanvas();
+        renderPreview();
+    }
+});
 function spreadRect() {
     const info = getSpreadInfo(editor);
     const sr = renderer.spreadRect(info);
@@ -686,6 +692,29 @@ document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT'
         || e.target.tagName === 'TEXTAREA')
         return;
+    if (previewActive) {
+        if (e.key === 'Escape') {
+            closePreview();
+            e.preventDefault();
+        }
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            const idx = editor.get_current_spread_index();
+            if (idx > 0) {
+                editor.set_current_spread(idx - 1);
+                renderPreview();
+            }
+            e.preventDefault();
+        }
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            const idx = editor.get_current_spread_index();
+            if (idx < editor.get_spread_count() - 1) {
+                editor.set_current_spread(idx + 1);
+                renderPreview();
+            }
+            e.preventDefault();
+        }
+        return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         undoManager.undo();
         refreshBoxModel();
@@ -719,6 +748,8 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        renderer.panX = 0;
+        renderer.panY = 0;
         setZoom(1.0);
         e.preventDefault();
         return;
@@ -964,9 +995,131 @@ function setZoom(z) {
     document.getElementById('zoom-label').textContent = Math.round(renderer.zoom * 100) + '%';
     redraw();
 }
+function zoomToward(z, mouseX, mouseY) {
+    const oldZoom = renderer.zoom;
+    renderer.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+    const ratio = renderer.zoom / oldZoom;
+    const { cx, cy } = renderer.naturalCenter();
+    renderer.panX = mouseX - cx - (mouseX - cx - renderer.panX) * ratio;
+    renderer.panY = mouseY - cy - (mouseY - cy - renderer.panY) * ratio;
+    document.getElementById('zoom-label').textContent = Math.round(renderer.zoom * 100) + '%';
+    redraw();
+}
 document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(renderer.zoom * 1.25));
 document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(renderer.zoom / 1.25));
-document.getElementById('btn-zoom-fit').addEventListener('click', () => setZoom(1.0));
+document.getElementById('btn-zoom-fit').addEventListener('click', () => {
+    renderer.panX = 0;
+    renderer.panY = 0;
+    setZoom(1.0);
+});
+// ---------------------------------------------------------------------------
+// Fullscreen preview
+// ---------------------------------------------------------------------------
+// Lazily initialised — canvas must be visible before calling getContext('2d').
+// Safari throws when getContext is called on a canvas inside a hidden element,
+// which would abort module execution before fitCanvas() is reached.
+let previewRenderer = null;
+let previewActive = false;
+function openPreview() {
+    previewActive = true;
+    document.getElementById('preview-overlay').removeAttribute('hidden');
+    if (!previewRenderer) {
+        const canvasEl = document.getElementById('preview-canvas');
+        previewRenderer = new CanvasRenderer(canvasEl);
+        previewRenderer.showBleed = false;
+        previewRenderer.showSafeZone = false;
+        previewRenderer.showRulers = false;
+        previewRenderer.previewMode = true;
+    }
+    previewRenderer.imageCache = renderer.imageCache;
+    resizePreviewCanvas();
+    renderPreview();
+}
+function closePreview() {
+    previewActive = false;
+    document.getElementById('preview-overlay').setAttribute('hidden', '');
+    redraw();
+}
+function resizePreviewCanvas() {
+    const area = document.getElementById('preview-canvas-area');
+    previewRenderer.resize(area.clientWidth, area.clientHeight);
+}
+function renderPreview() {
+    const idx = editor.get_current_spread_index();
+    const total = editor.get_spread_count();
+    previewRenderer.draw(editor);
+    document.getElementById('preview-counter').textContent = `${idx + 1} / ${total}`;
+    document.getElementById('preview-prev').disabled = idx === 0;
+    document.getElementById('preview-next').disabled = idx === total - 1;
+}
+document.getElementById('btn-preview').addEventListener('click', openPreview);
+document.getElementById('preview-close').addEventListener('click', closePreview);
+document.getElementById('preview-prev').addEventListener('click', () => {
+    const idx = editor.get_current_spread_index();
+    if (idx > 0) {
+        editor.set_current_spread(idx - 1);
+        renderPreview();
+    }
+});
+document.getElementById('preview-next').addEventListener('click', () => {
+    const idx = editor.get_current_spread_index();
+    if (idx < editor.get_spread_count() - 1) {
+        editor.set_current_spread(idx + 1);
+        renderPreview();
+    }
+});
+// ---------------------------------------------------------------------------
+// Viewport pan — middle mouse drag or Space + left drag
+// ---------------------------------------------------------------------------
+let isPanning = false;
+let spaceDown = false;
+let panStartX = 0;
+let panStartY = 0;
+let panStartOffsetX = 0;
+let panStartOffsetY = 0;
+canvasEl.addEventListener('mousedown', (e) => {
+    if (e.button === 1 || (e.button === 0 && spaceDown)) {
+        isPanning = true;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        panStartOffsetX = renderer.panX;
+        panStartOffsetY = renderer.panY;
+        canvasEl.style.cursor = 'grabbing';
+        e.preventDefault();
+        return;
+    }
+}, true); // capture phase so it fires before interaction mode handlers
+document.addEventListener('mousemove', (e) => {
+    if (!isPanning)
+        return;
+    renderer.panX = panStartOffsetX + (e.clientX - panStartX);
+    renderer.panY = panStartOffsetY + (e.clientY - panStartY);
+    redraw();
+});
+document.addEventListener('mouseup', (e) => {
+    if (!isPanning)
+        return;
+    if (e.button === 1 || e.button === 0) {
+        isPanning = false;
+        canvasEl.style.cursor = spaceDown ? 'grab' : '';
+    }
+});
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !e.repeat
+        && !e.target.closest('input, textarea, [contenteditable]')) {
+        spaceDown = true;
+        if (!isPanning)
+            canvasEl.style.cursor = 'grab';
+        e.preventDefault();
+    }
+}, true);
+document.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') {
+        spaceDown = false;
+        if (!isPanning)
+            canvasEl.style.cursor = '';
+    }
+});
 canvasEl.addEventListener('wheel', (e) => {
     if (currentMode.onWheel) {
         currentMode.onWheel(e, { ...interactionCtx(), modeState });
@@ -975,7 +1128,8 @@ canvasEl.addEventListener('wheel', (e) => {
     }
     if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        setZoom(renderer.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+        const rect = canvasEl.getBoundingClientRect();
+        zoomToward(renderer.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientX - rect.left, e.clientY - rect.top);
         return;
     }
     const layoutRect = renderer.lastLayoutRect;

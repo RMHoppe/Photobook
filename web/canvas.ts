@@ -106,7 +106,10 @@ export class CanvasRenderer {
   showBleed = true;
   showSafeZone = true;
   showRulers = true;
+  previewMode = false;
   zoom = 1.0;
+  panX = 0;
+  panY = 0;
   cssW = 0;
   cssH = 0;
   _dpiBadges: DpiBadge[] = [];
@@ -174,11 +177,24 @@ export class CanvasRenderer {
     }
     const scaledW = fitW * this.zoom;
     const scaledH = fitH * this.zoom;
+    const naturalCx = rulerOffset + PAD + availW / 2;
+    const naturalCy = rulerOffset + PAD + availH / 2;
     return {
-      x: rulerOffset + PAD + (availW - scaledW) / 2,
-      y: rulerOffset + PAD + (availH - scaledH) / 2,
+      x: naturalCx + this.panX - scaledW / 2,
+      y: naturalCy + this.panY - scaledH / 2,
       w: scaledW,
       h: scaledH,
+    };
+  }
+
+  /** Natural (unpanned) center of the spread in CSS canvas coords. */
+  naturalCenter(): { cx: number; cy: number } {
+    const rulerOffset = this.showRulers ? RULER_SIZE : 0;
+    const availW = this.cssW - rulerOffset - PAD * 2;
+    const availH = this.cssH - rulerOffset - PAD * 2;
+    return {
+      cx: rulerOffset + PAD + availW / 2,
+      cy: rulerOffset + PAD + availH / 2,
     };
   }
 
@@ -190,8 +206,10 @@ export class CanvasRenderer {
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cssW, cssH);
-    ctx.fillStyle = '#3c3c3c';
-    ctx.fillRect(0, 0, cssW, cssH);
+    if (!this.previewMode) {
+      ctx.fillStyle = '#3c3c3c';
+      ctx.fillRect(0, 0, cssW, cssH);
+    }
 
     const rulerOffset = this.showRulers ? RULER_SIZE : 0;
     const spreadInfo = getSpreadInfo(editor);
@@ -220,51 +238,54 @@ export class CanvasRenderer {
     const delta = getResolvedSpreadDelta(editor, layoutRect.w, layoutRect.h);
     this._geoCache.applyDelta(delta);
     const renderList = this._geoCache.getFrames();
+    const drawList = this.previewMode ? renderList.filter(f => !!f.image_id) : renderList;
 
-    const lowDpiFrames = getLowDpiFrames(editor, layoutRect.w, layoutRect.h);
+    const lowDpiFrames = this.previewMode ? [] : getLowDpiFrames(editor, layoutRect.w, layoutRect.h);
     const lowDpiMap = new Map<number, number>(lowDpiFrames.map(f => [f.id, f.effective_dpi]));
     const printDpi = editor.get_print_dpi();
     const selectedSegmentId = editor.get_selected_segment();
 
     this._drawSpreadBackground(ctx, spreadRect, spreadInfo, metrics);
-    this._drawFrames(ctx, layoutRect, renderList, lowDpiMap, printDpi, metrics);
+    this._drawFrames(ctx, layoutRect, drawList, lowDpiMap, printDpi, metrics);
 
-    // Grey overlay on the non-printable page.
-    if (endpaperSide) {
-      const npX = endpaperSide === 'left' ? spreadRect.x : spreadRect.x + spreadRect.w / 2;
-      ctx.save();
-      ctx.fillStyle = 'rgba(80, 80, 80, 0.35)';
-      ctx.fillRect(npX, spreadRect.y, spreadRect.w / 2, spreadRect.h);
-      ctx.fillStyle = 'rgba(200, 200, 200, 0.65)';
-      const fontSize = Math.max(10, spreadRect.h * 0.035);
-      ctx.font = `${fontSize}px sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('Not printed', npX + spreadRect.w / 4, spreadRect.y + spreadRect.h / 2);
-      ctx.restore();
-    }
+    if (!this.previewMode) {
+      // Grey overlay on the non-printable page.
+      if (endpaperSide) {
+        const npX = endpaperSide === 'left' ? spreadRect.x : spreadRect.x + spreadRect.w / 2;
+        ctx.save();
+        ctx.fillStyle = 'rgba(80, 80, 80, 0.35)';
+        ctx.fillRect(npX, spreadRect.y, spreadRect.w / 2, spreadRect.h);
+        ctx.fillStyle = 'rgba(200, 200, 200, 0.65)';
+        const fontSize = Math.max(10, spreadRect.h * 0.035);
+        ctx.font = `${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Not printed', npX + spreadRect.w / 4, spreadRect.y + spreadRect.h / 2);
+        ctx.restore();
+      }
 
-    this._drawSafeZone(ctx, spreadRect, spreadInfo, metrics);
-    this._drawSplitOverlays(ctx, layoutRect, overlays, renderList);
-    this._drawDividerLayer(ctx, layoutRect, editor, renderList, selectedSegmentId, bleedPx);
+      this._drawSafeZone(ctx, spreadRect, spreadInfo, metrics);
+      this._drawSplitOverlays(ctx, layoutRect, overlays, renderList);
+      this._drawDividerLayer(ctx, layoutRect, editor, renderList, selectedSegmentId, bleedPx);
 
-    if (marqueeRect) {
-      const { x, y, w, h } = marqueeRect;
-      const mx = layoutRect.x + x;
-      const my = layoutRect.y + y;
-      ctx.save();
-      ctx.fillStyle = 'rgba(74, 144, 226, 0.10)';
-      ctx.fillRect(mx, my, w, h);
-      ctx.strokeStyle = SELECTED_COLOR;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 3]);
-      ctx.strokeRect(mx, my, w, h);
-      ctx.setLineDash([]);
-      ctx.restore();
-    }
+      if (marqueeRect) {
+        const { x, y, w, h } = marqueeRect;
+        const mx = layoutRect.x + x;
+        const my = layoutRect.y + y;
+        ctx.save();
+        ctx.fillStyle = 'rgba(74, 144, 226, 0.10)';
+        ctx.fillRect(mx, my, w, h);
+        ctx.strokeStyle = SELECTED_COLOR;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 3]);
+        ctx.strokeRect(mx, my, w, h);
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
 
-    if (this.showRulers) {
-      drawRulers(ctx, cssW, cssH, spreadRect, spreadInfo, metrics.mmToPx, rulerOffset);
+      if (this.showRulers) {
+        drawRulers(ctx, cssW, cssH, spreadRect, spreadInfo, metrics.mmToPx, rulerOffset);
+      }
     }
 
     // Text elements — drawn after frames but before transform handles.
@@ -274,7 +295,9 @@ export class CanvasRenderer {
       this._drawTextElement(ctx, el, spreadRect, metrics.mmToPx, this.selectedTextIds.has(el.id));
     }
 
-    this._drawGuides(ctx, spreadInfo, spreadRect, pageWPx, pageHPx, spinePx, metrics.mmToPx);
+    if (!this.previewMode) {
+      this._drawGuides(ctx, spreadInfo, spreadRect, pageWPx, pageHPx, spinePx, metrics.mmToPx);
+    }
 
     ctx.restore();
   }
