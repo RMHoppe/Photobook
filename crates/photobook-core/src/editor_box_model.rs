@@ -110,6 +110,10 @@ impl PhotobookEditor {
                 r.border.width = bm.border.width;
             }
             if bm.border.radius >= 0.0 { r.border.radius = bm.border.radius; }
+            if let Some(v) = bm.border.radius_tl { r.border.radius_tl = if v >= 0.0 { Some(v) } else { None }; }
+            if let Some(v) = bm.border.radius_tr { r.border.radius_tr = if v >= 0.0 { Some(v) } else { None }; }
+            if let Some(v) = bm.border.radius_br { r.border.radius_br = if v >= 0.0 { Some(v) } else { None }; }
+            if let Some(v) = bm.border.radius_bl { r.border.radius_bl = if v >= 0.0 { Some(v) } else { None }; }
             if bm.border.color != MIXED_STR {
                 r.border.color = bm.border.color.clone();
             }
@@ -134,6 +138,11 @@ impl PhotobookEditor {
             bm.border.width_right  = Some(r);
             bm.border.width_bottom = Some(b);
             bm.border.width_left   = Some(l);
+            let (rtl, rtr, rbr, rbl) = bm.border.corner_radii();
+            bm.border.radius_tl = Some(rtl);
+            bm.border.radius_tr = Some(rtr);
+            bm.border.radius_br = Some(rbr);
+            bm.border.radius_bl = Some(rbl);
             return serde_json::to_string(&bm).unwrap_or_default();
         }
         let f = &bms[0];
@@ -145,6 +154,7 @@ impl PhotobookEditor {
         };
         // Resolve per-side widths for each face in the selection.
         let (ft, fr, fb, fl) = f.border.side_widths();
+        let (frtl, frtr, frbr, frbl) = f.border.corner_radii();
         let merged = BoxModel {
             margin: MarginInsets {
                 top:    mfm(f.margin.top,    rest.iter().all(|b| b.margin.top    == f.margin.top)),
@@ -159,6 +169,10 @@ impl PhotobookEditor {
                 width_bottom: mfm(Some(fb), rest.iter().all(|b| b.border.side_widths().2 == fb)),
                 width_left:   mfm(Some(fl), rest.iter().all(|b| b.border.side_widths().3 == fl)),
                 radius: mf(f.border.radius, rest.iter().all(|b| b.border.radius == f.border.radius)),
+                radius_tl: mfm(Some(frtl), rest.iter().all(|b| b.border.corner_radii().0 == frtl)),
+                radius_tr: mfm(Some(frtr), rest.iter().all(|b| b.border.corner_radii().1 == frtr)),
+                radius_br: mfm(Some(frbr), rest.iter().all(|b| b.border.corner_radii().2 == frbr)),
+                radius_bl: mfm(Some(frbl), rest.iter().all(|b| b.border.corner_radii().3 == frbl)),
                 color: ms(&f.border.color, rest.iter().all(|b| b.border.color == f.border.color)),
                 position: if rest.iter().all(|b| b.border.position == f.border.position) {
                     f.border.position.clone()

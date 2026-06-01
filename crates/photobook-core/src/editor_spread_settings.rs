@@ -9,14 +9,15 @@ impl PhotobookEditor {
     // -----------------------------------------------------------------------
 
     pub fn add_page(&mut self) {
-        self.doc.add_spread();
+        self.doc.add_spread(); // inserts a settings-cloned spread after the current one
+        let new_idx = (self.doc.current_spread + 1).min(self.doc.spreads.len().saturating_sub(1));
         let (t, r, b, l) = (
             self.doc.default_margin_top,
             self.doc.default_margin_right,
             self.doc.default_margin_bottom,
             self.doc.default_margin_left,
         );
-        if let Some(spread) = self.doc.spreads.last_mut() {
+        if let Some(spread) = self.doc.spreads.get_mut(new_idx) {
             for face in spread.layout.faces.values_mut() {
                 face.box_model.margin.top    = Some(t);
                 face.box_model.margin.right  = Some(r);
@@ -24,8 +25,12 @@ impl PhotobookEditor {
                 face.box_model.margin.left   = Some(l);
             }
         }
+        // Navigate to the freshly inserted spread.
+        self.doc.current_spread = new_idx;
         let n = self.doc.spreads.len();
         self.spread_dirty.resize(n, true);
+        // Indices shifted by the mid-insert; repaint all thumbnails.
+        for d in self.spread_dirty.iter_mut() { *d = true; }
         self.mark_structure_dirty();
     }
 
@@ -173,6 +178,29 @@ impl PhotobookEditor {
         crate::pdf::export_pdf(&self.doc, images_json, fonts_json)
     }
 
+    /// Stage raw image bytes for the next `pdf_export_begin_v2` call.
+    /// The bytes are the original encoded file (JPEG, PNG, …); no base64 needed.
+    pub fn pdf_stage_image(&mut self, id: &str, bytes: Vec<u8>) {
+        self.pdf_staged_images.insert(id.to_string(), bytes);
+    }
+
+    /// Stage raw font bytes for the next `pdf_export_begin_v2` call.
+    pub fn pdf_stage_font(&mut self, family: &str, bold: bool, italic: bool, bytes: Vec<u8>) {
+        let key = format!("{}:{}:{}", family, bold as u8, italic as u8);
+        self.pdf_staged_fonts.insert(key, bytes);
+    }
+
+    /// Phase 1 of the staged export using pre-staged raw bytes (no base64/JSON overhead).
+    /// Consumes the staging buffers. Returns the total spread count, 0 on failure.
+    pub fn pdf_export_begin_v2(&mut self) -> u32 {
+        let images = std::mem::take(&mut self.pdf_staged_images);
+        let fonts  = std::mem::take(&mut self.pdf_staged_fonts);
+        let state  = crate::pdf::pdf_export_begin_with_bytes(&self.doc, images, fonts);
+        let total  = state.as_ref().map_or(0, |s| s.total as u32);
+        self.pdf_state = state.map(Box::new);
+        total
+    }
+
     /// Phase 1 of the staged export. Decodes images/fonts and pre-allocates
     /// one PDF page per spread. Returns the total spread count so the caller
     /// can loop over `pdf_export_spread`. Returns 0 on failure.
@@ -224,8 +252,13 @@ impl PhotobookEditor {
     /// Push the current document onto the undo stack and clear redo.
     pub fn snapshot_undo(&mut self) {
         self.undo_stack.push(self.doc.clone());
-        if self.undo_stack.len() > crate::UNDO_MAX {
-            self.undo_stack.remove(0);
+        // Bound history by approximate memory, not just a fixed count: a snapshot
+        // of a 200-page book is far larger than one of a 2-page book.
+        let mut total: usize = self.undo_stack.iter().map(estimate_doc_bytes).sum();
+        while self.undo_stack.len() > 1
+            && (total > crate::UNDO_BUDGET_BYTES || self.undo_stack.len() > crate::UNDO_MAX) {
+            let removed = self.undo_stack.remove(0);
+            total = total.saturating_sub(estimate_doc_bytes(&removed));
         }
         self.redo_stack.clear();
     }
@@ -312,4 +345,18 @@ impl PhotobookEditor {
         self.doc.print_dpi           = print_dpi.clamp(72.0, 1200.0);
         self.full_invalidate();
     }
+}
+
+/// Cheap upper-bound estimate of a document's retained memory, used to bound the
+/// undo history by bytes instead of a fixed snapshot count. Counts collection
+/// sizes rather than serializing — undo snapshots happen per edit, not per frame.
+fn estimate_doc_bytes(doc: &crate::page::PhotobookDocument) -> usize {
+    let mut bytes = 4096usize;
+    for s in &doc.spreads {
+        bytes += 512;
+        bytes += s.layout.faces.len() * 512;
+        bytes += s.layout.edges.len() * 128;
+        bytes += s.text_elements.len() * 256;
+    }
+    bytes
 }

@@ -99,6 +99,15 @@ impl PhotobookEditor {
             return;
         }
 
+        // If the junction sits too close to a face boundary there is no valid
+        // range for the clamp — bail instead of panicking.
+        if cx_lo >= jx - MIN_FRAC || jx + MIN_FRAC >= cx_hi
+            || cy_lo >= jy - MIN_FRAC || jy + MIN_FRAC >= cy_hi
+        {
+            self.mark_structure_dirty();
+            return;
+        }
+
         let cx1 = (jx - dx).clamp(cx_lo, jx - MIN_FRAC);
         let cx2 = (jx + dx).clamp(jx + MIN_FRAC, cx_hi);
         let cy1 = (jy - dy).clamp(cy_lo, jy - MIN_FRAC);

@@ -78,6 +78,8 @@ pub struct PhotobookEditor {
     pub(crate) last_delta_canvas_h_bits: u32,
     pub(crate) snap_disabled: bool,
     pub(crate) pdf_state: Option<Box<crate::pdf::PdfExportState>>,
+    pub(crate) pdf_staged_images: HashMap<String, Vec<u8>>,
+    pub(crate) pdf_staged_fonts:  HashMap<String, Vec<u8>>,
 
     // Undo/redo
     pub(crate) undo_stack: Vec<PhotobookDocument>,
@@ -85,6 +87,10 @@ pub struct PhotobookEditor {
 }
 
 pub(crate) const UNDO_MAX: usize = 50;
+
+/// Memory budget for the undo history. Snapshots are evicted oldest-first once
+/// the estimated retained bytes exceed this (`UNDO_MAX` remains a hard backstop).
+pub(crate) const UNDO_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 
 #[wasm_bindgen]
 impl PhotobookEditor {
@@ -110,6 +116,8 @@ impl PhotobookEditor {
             last_delta_canvas_h_bits: 0,
             snap_disabled: false,
             pdf_state: None,
+            pdf_staged_images: HashMap::new(),
+            pdf_staged_fonts:  HashMap::new(),
             undo_stack: Vec::with_capacity(UNDO_MAX),
             redo_stack: Vec::with_capacity(UNDO_MAX),
         }

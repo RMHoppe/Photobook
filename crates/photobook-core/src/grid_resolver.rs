@@ -4,7 +4,7 @@ use crate::layout::{
     EdgeInsets, Rect, ResolvedDivider, ResolvedFrame,
     ResolvedSpread, ResolvedTwinHandle, SplitAxis,
 };
-use crate::grid_layout::{EdgeId, FaceId, GridLayout, Orientation};
+use crate::grid_layout::{EdgeId, FaceId, GridFace, GridLayout, Orientation};
 
 // ---------------------------------------------------------------------------
 // GridResolver
@@ -42,43 +42,71 @@ impl<'a> GridResolver<'a> {
     // -----------------------------------------------------------------------
 
     pub fn resolve_frames(&self, root_rect: Rect) -> Vec<ResolvedFrame> {
-        let layout   = self.layout;
-        let mm_to_px = self.mm_to_px;
-
-        let mut frames: Vec<(i32, FaceId, ResolvedFrame)> = layout.faces.values()
+        let mut frames: Vec<(i32, FaceId, ResolvedFrame)> = self.layout.faces.values()
             .filter_map(|face| {
-                let (fx, fy, fw, fh) = layout.face_rect(face.id)?;
-                let raw       = norm_to_px(fx, fy, fw, fh, root_rect);
-                let gi        = self.gap_inset_px(face.id);
-                let gapped    = raw.inset(&gi);
-                let margin_px = face.box_model.margin.resolve().scale(mm_to_px);
-                let inner     = gapped.inset(&margin_px);
-                let (bwt, bwr, bwb, bwl) = face.box_model.border.side_widths();
-                Some((face.z_index, face.id, ResolvedFrame {
-                    id:               face.id,
-                    rect:             inner,
-                    face_rect:        raw,
-                    image_id:         face.image.image_id.clone(),
-                    object_fit:       face.image.object_fit.clone(),
-                    pan_x:            face.image.pan_x,
-                    pan_y:            face.image.pan_y,
-                    scale:            face.image.scale,
-                    rotation_deg:     face.image.rotation_deg,
-                    is_selected:      self.selection.contains(&face.id),
-                    border_width_top:    bwt * mm_to_px,
-                    border_width_right:  bwr * mm_to_px,
-                    border_width_bottom: bwb * mm_to_px,
-                    border_width_left:   bwl * mm_to_px,
-                    border_color:     face.box_model.border.color.clone(),
-                    border_position:  face.box_model.border.position.clone(),
-                    border_radius:    face.box_model.border.radius * mm_to_px,
-                    face_rotation_deg: face.box_model.face_rotation_deg.unwrap_or(0.0),
-                }))
+                let frame = self.resolve_one_frame(face, root_rect)?;
+                Some((face.z_index, face.id, frame))
             })
             .collect();
 
         frames.sort_by_key(|(z, id, _)| (*z, *id));
         frames.into_iter().map(|(_, _, f)| f).collect()
+    }
+
+    /// Resolve only the frames for the given face ids — the incremental render
+    /// path. O(k) in the number of dirty faces rather than O(n) over the whole
+    /// layout. Order is irrelevant: the TS geometry cache updates frames in
+    /// place by id, so no z-sort is needed here.
+    pub fn resolve_frames_for(
+        &self,
+        root_rect: Rect,
+        ids: &std::collections::HashSet<FaceId>,
+    ) -> Vec<ResolvedFrame> {
+        ids.iter()
+            .filter_map(|id| {
+                let face = self.layout.faces.get(id)?;
+                self.resolve_one_frame(face, root_rect)
+            })
+            .collect()
+    }
+
+    /// Resolve a single face into a `ResolvedFrame`. Each face is independent —
+    /// its rect, gap inset, and box model don't depend on sibling *frames* — so
+    /// this is safe to call for an arbitrary subset.
+    fn resolve_one_frame(&self, face: &GridFace, root_rect: Rect) -> Option<ResolvedFrame> {
+        let layout   = self.layout;
+        let mm_to_px = self.mm_to_px;
+        let (fx, fy, fw, fh) = layout.face_rect(face.id)?;
+        let raw       = norm_to_px(fx, fy, fw, fh, root_rect);
+        let gi        = self.gap_inset_px(face.id);
+        let gapped    = raw.inset(&gi);
+        let margin_px = face.box_model.margin.resolve().scale(mm_to_px);
+        let inner     = gapped.inset(&margin_px);
+        let (bwt, bwr, bwb, bwl) = face.box_model.border.side_widths();
+        let (crtl, crtr, crbr, crbl) = face.box_model.border.corner_radii();
+        Some(ResolvedFrame {
+            id:               face.id,
+            rect:             inner,
+            face_rect:        raw,
+            image_id:         face.image.image_id.clone(),
+            object_fit:       face.image.object_fit.clone(),
+            pan_x:            face.image.pan_x,
+            pan_y:            face.image.pan_y,
+            scale:            face.image.scale,
+            rotation_deg:     face.image.rotation_deg,
+            is_selected:      self.selection.contains(&face.id),
+            border_width_top:    bwt * mm_to_px,
+            border_width_right:  bwr * mm_to_px,
+            border_width_bottom: bwb * mm_to_px,
+            border_width_left:   bwl * mm_to_px,
+            border_color:     face.box_model.border.color.clone(),
+            border_position:  face.box_model.border.position.clone(),
+            border_radius:    crtl * mm_to_px,
+            border_radius_tr: crtr * mm_to_px,
+            border_radius_br: crbr * mm_to_px,
+            border_radius_bl: crbl * mm_to_px,
+            face_rotation_deg: face.box_model.face_rotation_deg.unwrap_or(0.0),
+        })
     }
 
     // -----------------------------------------------------------------------

@@ -153,6 +153,11 @@ export class PhotobookEditor {
      */
     pdf_export_begin(images_json: string, fonts_json: string): number;
     /**
+     * Phase 1 of the staged export using pre-staged raw bytes (no base64/JSON overhead).
+     * Consumes the staging buffers. Returns the total spread count, 0 on failure.
+     */
+    pdf_export_begin_v2(): number;
+    /**
      * Phase 3 of the staged export. Serialises and returns the finished PDF,
      * then clears the internal state.
      */
@@ -162,6 +167,15 @@ export class PhotobookEditor {
      * Call this `total` times (the value returned by `pdf_export_begin`).
      */
     pdf_export_spread(): void;
+    /**
+     * Stage raw font bytes for the next `pdf_export_begin_v2` call.
+     */
+    pdf_stage_font(family: string, bold: boolean, italic: boolean, bytes: Uint8Array): void;
+    /**
+     * Stage raw image bytes for the next `pdf_export_begin_v2` call.
+     * The bytes are the original encoded file (JPEG, PNG, …); no base64 needed.
+     */
+    pdf_stage_image(id: string, bytes: Uint8Array): void;
     redo(): boolean;
     register_image_size(image_id: string, width_px: number, height_px: number): void;
     remove_page(spread_idx: number): void;
@@ -335,8 +349,11 @@ export interface InitOutput {
     readonly photobookeditor_move_spread: (a: number, b: number, c: number) => void;
     readonly photobookeditor_move_text_element: (a: number, b: number, c: number, d: number) => void;
     readonly photobookeditor_pdf_export_begin: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly photobookeditor_pdf_export_begin_v2: (a: number) => number;
     readonly photobookeditor_pdf_export_finish: (a: number) => [number, number];
     readonly photobookeditor_pdf_export_spread: (a: number) => void;
+    readonly photobookeditor_pdf_stage_font: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly photobookeditor_pdf_stage_image: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly photobookeditor_redo: (a: number) => number;
     readonly photobookeditor_register_image_size: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly photobookeditor_remove_page: (a: number, b: number) => void;
@@ -367,6 +384,8 @@ export interface InitOutput {
     readonly photobookeditor_update_pinwheel_spawn: (a: number, b: number, c: number) => void;
     readonly photobookeditor_update_text_element: (a: number, b: number, c: number) => void;
     readonly photobookeditor_get_face_box_model: (a: number) => [number, number];
+    readonly wasm_test_list: () => [number, number];
+    readonly wasm_test_run: (a: number, b: number) => void;
     readonly photobookeditor_begin_divider_drag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly photobookeditor_begin_edge_panel_drag: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
     readonly photobookeditor_can_delete_segment: (a: number, b: number) => number;
@@ -413,8 +432,6 @@ export interface InitOutput {
     readonly photobookeditor_toggle_selection: (a: number, b: number) => void;
     readonly photobookeditor_update_divider_drag: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly photobookeditor_update_edge_panel_drag: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly wasm_test_list: () => [number, number];
-    readonly wasm_test_run: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

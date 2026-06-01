@@ -6,7 +6,7 @@ import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
 import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
-import { getSpreadInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
+import { getSpreadInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
 import { loadLocalFonts, localFontsSupported, tryLoadLocalFonts } from './fonts.js';
 import { UndoManager } from './undo.js';
 import { InlineEditor } from './inline-editor.js';
@@ -15,11 +15,29 @@ import { DocsPanel } from './docs-panel.js';
 import { saveProject, openProject } from './project-io.js';
 import { ImageLoaderModal } from './image-loader-modal.js';
 import { RandomizeDialog } from './randomize-dialog.js';
+import { showToast } from './toast.js';
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 await init();
 init_panic_hook();
+// Global error boundary — surface uncaught errors/rejections as a toast instead
+// of failing silently. A Rust panic poisons the WASM instance (every later call
+// throws "unreachable"); detect that case and prompt a reload-with-recovery.
+let wasmPoisoned = false;
+function reportUncaught(err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const poisoned = /unreachable|recursive use of an object|null pointer passed to rust/i.test(msg);
+    if (poisoned && !wasmPoisoned) {
+        wasmPoisoned = true;
+        showToast('The editor hit an internal error and must be reloaded. Save your project first if you can.', 'error');
+    }
+    else if (!poisoned) {
+        showToast('Unexpected error: ' + msg, 'error');
+    }
+}
+window.addEventListener('error', (e) => reportUncaught(e.error ?? e.message));
+window.addEventListener('unhandledrejection', (e) => reportUncaught(e.reason));
 const editor = new PhotobookEditor(297, 210, 3);
 // ---------------------------------------------------------------------------
 // Canvas
@@ -36,12 +54,28 @@ function redraw() {
     renderer.draw(editor, overlays);
     footer.update(editor, renderer);
 }
+// Coalesce high-frequency redraws (mousemove, resize) into one per animation
+// frame so we never render more than once per repaint.
+let _redrawScheduled = false;
+function scheduleRedraw() {
+    if (_redrawScheduled)
+        return;
+    _redrawScheduled = true;
+    requestAnimationFrame(() => { _redrawScheduled = false; redraw(); });
+}
+let _resizeScheduled = false;
 window.addEventListener('resize', () => {
-    fitCanvas();
-    if (previewActive) {
-        resizePreviewCanvas();
-        renderPreview();
-    }
+    if (_resizeScheduled)
+        return;
+    _resizeScheduled = true;
+    requestAnimationFrame(() => {
+        _resizeScheduled = false;
+        fitCanvas();
+        if (previewActive) {
+            resizePreviewCanvas();
+            renderPreview();
+        }
+    });
 });
 function spreadRect() {
     const info = getSpreadInfo(editor);
@@ -94,6 +128,12 @@ const sidebar = new ImageSidebar(document.getElementById('image-grid'), document
         refreshBoxModel();
     redraw();
 });
+// When the sidebar evicts a proxy bitmap, also evict from the canvas cache and
+// close it immediately so GPU memory is released rather than waiting for GC.
+sidebar.onBitmapEvicted = (id, bitmap) => {
+    renderer.evictImage(id);
+    bitmap.close();
+};
 // ---------------------------------------------------------------------------
 // Image-loader modal
 // ---------------------------------------------------------------------------
@@ -224,11 +264,12 @@ function wireRightSidebar() {
         undoManager.snapshot();
         editor.set_face_box_model(json);
     }), (direction) => {
-        const sel = editor.get_selected();
-        if (sel === NULL_ID)
+        const ids = getAllSelected(editor);
+        if (ids.length === 0)
             return;
         undoManager.snapshot();
-        editor.move_face_z_order(sel, direction);
+        for (const id of ids)
+            editor.move_face_z_order(id, direction);
         refreshBoxModel();
         redraw();
     }, (field) => { randomizeDialog.show(field); }, (transform) => {
@@ -247,6 +288,21 @@ function wireRightSidebar() {
                 editor.rotate_selection_ccw();
                 break;
         }
+        redraw();
+    }, () => {
+        // Randomize layering: shuffle the selection, then bring each to front in
+        // turn so their relative stacking ends up random.
+        const ids = getAllSelected(editor);
+        if (ids.length < 2)
+            return;
+        undoManager.snapshot();
+        for (let i = ids.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [ids[i], ids[j]] = [ids[j], ids[i]];
+        }
+        for (const id of ids)
+            editor.move_face_z_order(id, 'front');
+        refreshBoxModel();
         redraw();
     });
     const dividerPanel = new DividerPanel(panelDivider, (gap) => { undoManager.snapshot(); editor.set_selected_segment_gap(gap); redraw(); });
@@ -493,7 +549,9 @@ function toSpread(e) {
 }
 const interactionCtx = () => ({
     editor, renderer, overlays, canvasEl, spreadRect, toSpread,
-    snapshot: () => undoManager.snapshot(), refreshBoxModel, redraw,
+    // Coalesce interaction-driven redraws (per-mousemove during a drag) into one
+    // paint per animation frame.
+    snapshot: () => undoManager.snapshot(), refreshBoxModel, redraw: scheduleRedraw,
     setMode,
     onTextSelected: (id) => {
         renderer.selectedTextIds = new Set([id]);
@@ -937,7 +995,9 @@ document.getElementById('btn-open-project').addEventListener('click', async () =
 document.getElementById('btn-add-spread').addEventListener('click', () => {
     undoManager.snapshot();
     editor.add_page();
-    editor.set_current_spread(editor.get_spread_count() - 1);
+    // add_page inserts after the current spread and makes it current; mirror that
+    // in the UI instead of jumping to the last spread.
+    editor.set_current_spread(editor.get_current_spread_index());
     redraw();
 });
 document.getElementById('btn-remove-spread').addEventListener('click', () => {

@@ -26,7 +26,8 @@
 //   - Shift+Click: extend selection range from last-clicked item.
 //   - Drag: initiates a canvas drop using the dragged image; does not alter
 //     the sidebar selection.
-import { PROXY_MAX_PX, THUMB_MAX_PX, DECODE_CONCURRENCY, IMAGE_EXTS } from './constants.js';
+import { PROXY_MAX_PX, THUMB_MAX_PX, DECODE_CONCURRENCY, IMAGE_EXTS, PROXY_CACHE_BUDGET_BYTES, BUFFER_CACHE_BUDGET_BYTES } from './constants.js';
+import { LruCache, rasterBytes } from './lru.js';
 export class ImageSidebar {
     gridEl;
     breadcrumbEl;
@@ -40,8 +41,11 @@ export class ImageSidebar {
     _handles = new Map();
     /** Full file index for the <input webkitdirectory> fallback, keyed by stripped relative path. */
     _fallbackFiles = new Map();
-    _proxies = new Map(); // 800px, for canvas rendering
-    _buffers = new Map(); // lazy, for PDF export
+    /** Called when a proxy bitmap is evicted from the LRU cache. Wire this up
+     *  in main.ts to also evict from the canvas cache and call bitmap.close(). */
+    onBitmapEvicted = null;
+    _proxies = new LruCache(PROXY_CACHE_BUDGET_BYTES, rasterBytes, (id, bitmap) => this.onBitmapEvicted?.(id, bitmap)); // 800px, for canvas rendering
+    _buffers = new LruCache(BUFFER_CACHE_BUDGET_BYTES, b => b.byteLength); // lazy, for PDF export
     _dims = new Map(); // natural dims, lazy
     _sizes = new Map(); // file sizes in bytes
     /** IDs loaded directly from raw buffers (no FileSystemFileHandle). */
@@ -55,6 +59,14 @@ export class ImageSidebar {
     // Semaphore
     _active = 0;
     _queue = [];
+    // Off-thread proxy decode. `undefined` = not yet created; `null` = permanently
+    // failed after too many crashes (falls back to main thread forever).
+    _decodeWorker = undefined;
+    _decodeWorkerCrashes = 0;
+    static MAX_WORKER_CRASHES = 3;
+    _decodeReqSeq = 0;
+    _decodePending = new Map();
+    _cancelledReqIds = new Set();
     // IntersectionObserver — fires when a grid item enters the scroll viewport
     _observer;
     _emptyStateEl;
@@ -163,6 +175,8 @@ export class ImageSidebar {
     }
     async _loadCurrentDir() {
         const { handle } = this._breadcrumb.at(-1);
+        // Cancel any queued or in-flight decodes from the previous directory.
+        this._cancelPendingDecodes();
         // Tear down current display, preserving buffer-loaded images.
         this._observer.disconnect();
         for (const el of this.gridEl.querySelectorAll('.folder-thumb, .image-thumb')) {
@@ -408,7 +422,7 @@ export class ImageSidebar {
             }
             finally {
                 this._active--;
-                this._queue.shift()?.();
+                this._queue.shift()?.fn();
             }
         };
         if (this._active < DECODE_CONCURRENCY) {
@@ -416,8 +430,16 @@ export class ImageSidebar {
             run();
         }
         else {
-            this._queue.push(() => { this._active++; run(); });
+            this._queue.push({ id, fn: () => { this._active++; run(); } });
         }
+    }
+    /** Cancel pending (queued + in-flight) decode requests from a prior directory scan. */
+    _cancelPendingDecodes() {
+        this._queue = [];
+        for (const [reqId] of this._decodePending) {
+            this._cancelledReqIds.add(reqId);
+        }
+        // In-flight worker requests are not recalled — we just discard their responses.
     }
     async _getFile(id) {
         const handle = this._handles.get(id);
@@ -434,10 +456,9 @@ export class ImageSidebar {
         // resizeWidth produces a downsampled proxy; fall back to full size on Safari.
         let proxy;
         try {
-            proxy = await createImageBitmap(file, {
-                resizeWidth: PROXY_MAX_PX,
-                resizeQuality: 'medium',
-            });
+            // Decode + downsize off the main thread (fresh read is transferred to
+            // the worker); fall back to a direct main-thread decode on failure.
+            proxy = await this._decodeProxy(await file.arrayBuffer(), PROXY_MAX_PX);
         }
         catch {
             proxy = await createImageBitmap(file);
@@ -449,6 +470,76 @@ export class ImageSidebar {
     // -------------------------------------------------------------------------
     // Public accessors
     // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // Off-thread proxy decode
+    // -------------------------------------------------------------------------
+    _getDecodeWorker() {
+        if (this._decodeWorker !== undefined)
+            return this._decodeWorker;
+        try {
+            const w = new Worker(new URL('./decode-worker.js', import.meta.url), { type: 'module' });
+            w.addEventListener('message', (e) => {
+                const m = e.data;
+                if (this._cancelledReqIds.has(m.reqId)) {
+                    this._cancelledReqIds.delete(m.reqId);
+                    this._decodePending.delete(m.reqId);
+                    m.bitmap?.close(); // release GPU memory for cancelled decodes
+                    return;
+                }
+                const pending = this._decodePending.get(m.reqId);
+                if (!pending)
+                    return;
+                this._decodePending.delete(m.reqId);
+                if (m.ok && m.bitmap)
+                    pending.resolve(m.bitmap);
+                else
+                    pending.reject(new Error(m.message ?? 'decode failed'));
+            });
+            w.addEventListener('error', () => {
+                for (const p of this._decodePending.values())
+                    p.reject(new Error('decode worker crashed'));
+                this._decodePending.clear();
+                this._decodeWorkerCrashes++;
+                // After too many crashes, give up permanently; otherwise allow lazy re-creation.
+                this._decodeWorker = this._decodeWorkerCrashes >= ImageSidebar.MAX_WORKER_CRASHES
+                    ? null
+                    : undefined;
+            });
+            this._decodeWorker = w;
+        }
+        catch {
+            this._decodeWorkerCrashes++;
+            this._decodeWorker = this._decodeWorkerCrashes >= ImageSidebar.MAX_WORKER_CRASHES
+                ? null
+                : undefined;
+        }
+        // If the field is `undefined` it means we want to retry next call; return
+        // null to the caller so this request falls back to the main thread.
+        return this._decodeWorker ?? null;
+    }
+    /**
+     * Decode + downsize to a proxy ImageBitmap. `bytes` is transferred to the
+     * worker, so pass a buffer the caller no longer needs (a fresh read or copy).
+     */
+    async _decodeProxy(bytes, maxWidth) {
+        const worker = this._getDecodeWorker();
+        if (!worker)
+            return this._decodeMainThread(bytes, maxWidth);
+        const reqId = ++this._decodeReqSeq;
+        return new Promise((resolve, reject) => {
+            this._decodePending.set(reqId, { resolve, reject });
+            worker.postMessage({ reqId, bytes, maxWidth }, [bytes]);
+        });
+    }
+    async _decodeMainThread(bytes, maxWidth) {
+        const blob = new Blob([bytes]);
+        try {
+            return await createImageBitmap(blob, { resizeWidth: maxWidth, resizeQuality: 'medium' });
+        }
+        catch {
+            return await createImageBitmap(blob);
+        }
+    }
     /** Returns the 800px proxy ImageBitmap, or null if not yet decoded. */
     getProxy(id) {
         return this._proxies.get(id) ?? null;
@@ -521,17 +612,9 @@ export class ImageSidebar {
         this._buffers.set(id, buf);
         this._sizes.set(id, buf.byteLength);
         this._loadedIds.add(id);
-        const blob = new Blob([buf]);
-        let proxy;
-        try {
-            proxy = await createImageBitmap(blob, {
-                resizeWidth: PROXY_MAX_PX,
-                resizeQuality: 'medium',
-            });
-        }
-        catch {
-            proxy = await createImageBitmap(blob);
-        }
+        // Decode the proxy off-thread. Transfer a copy so the cached buffer (kept
+        // in _buffers for export) isn't detached.
+        const proxy = await this._decodeProxy(buf.slice(0), PROXY_MAX_PX);
         this._proxies.set(id, proxy);
         // Add grid item and paint thumbnail immediately.
         const name = id.split('/').at(-1) ?? id;

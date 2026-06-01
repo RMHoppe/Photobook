@@ -21,3 +21,9 @@ export const PROXY_QUALITY = 0.85;
 export const DECODE_CONCURRENCY = 4;
 /** Image file extensions recognised by the sidebar and image-loader modal. */
 export const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'];
+/** Byte budget for the canvas decoded-image cache (LRU-evicted). */
+export const CANVAS_IMAGE_BUDGET_BYTES = 192 * 1024 * 1024;
+/** Byte budget for the sidebar proxy-bitmap cache (LRU-evicted). */
+export const PROXY_CACHE_BUDGET_BYTES = 128 * 1024 * 1024;
+/** Byte budget for the sidebar raw-file-buffer cache (LRU-evicted; refilled from disk on miss). */
+export const BUFFER_CACHE_BUDGET_BYTES = 256 * 1024 * 1024;

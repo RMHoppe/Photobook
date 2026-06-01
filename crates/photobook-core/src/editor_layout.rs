@@ -170,12 +170,8 @@ impl PhotobookEditor {
         }
 
         if !self.leaf_dirty.is_empty() {
-            let dirty_ids = self.leaf_dirty.iter().copied().collect::<Vec<_>>();
-            let all_frames = GridResolver::new(&spread.layout, &self.selection, mm_to_px)
-                .resolve_frames(rect);
-            let updated: Vec<ResolvedFrame> = all_frames.into_iter()
-                .filter(|f| dirty_ids.contains(&f.id))
-                .collect();
+            let updated = GridResolver::new(&spread.layout, &self.selection, mm_to_px)
+                .resolve_frames_for(rect, &self.leaf_dirty);
             self.leaf_dirty.clear();
             let delta = SpreadDelta { full: None, updated_frames: Some(&updated) };
             return serde_json::to_string(&delta).unwrap_or_default();

@@ -74,7 +74,11 @@ export interface RenderFrame {
   border_width_left: number;
   border_color: string;
   border_position: BorderPosition;
+  /** Per-corner radii in canvas px (TL/TR/BR/BL). */
   border_radius: number;
+  border_radius_tr: number;
+  border_radius_br: number;
+  border_radius_bl: number;
   face_rotation_deg: number;
 }
 
@@ -140,6 +144,11 @@ export interface Border {
   position: BorderPosition;
   /** Corner radius in mm. 0 = sharp corners. -1 = mixed (multi-selection sentinel). */
   radius: number;
+  /** Per-corner radii in mm (TL/TR/BR/BL). null = mixed sentinel; absent = use uniform `radius`. */
+  radius_tl?: number | null;
+  radius_tr?: number | null;
+  radius_br?: number | null;
+  radius_bl?: number | null;
 }
 
 /** Face margin insets in mm. null = mixed (multi-selection sentinel); allows negative values. */

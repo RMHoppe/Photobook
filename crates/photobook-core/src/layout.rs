@@ -55,9 +55,18 @@ pub struct Border {
     pub color: String,
     #[serde(default)]
     pub position: BorderPosition,
-    /// Corner radius in mm. 0 = sharp corners.
+    /// Corner radius in mm. 0 = sharp corners. Uniform fallback when no per-corner values.
     #[serde(default)]
     pub radius: f32,
+    /// Per-corner radii in mm (TL, TR, BR, BL). None = use uniform `radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius_tl: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius_tr: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius_br: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius_bl: Option<f32>,
 }
 
 fn default_border_color() -> String { "#000000".to_string() }
@@ -70,6 +79,7 @@ impl Default for Border {
             color: default_border_color(),
             position: BorderPosition::Centered,
             radius: 0.0,
+            radius_tl: None, radius_tr: None, radius_br: None, radius_bl: None,
         }
     }
 }
@@ -95,6 +105,23 @@ impl Border {
     pub fn any_nonzero(&self) -> bool {
         let (t, r, b, l) = self.side_widths();
         t > 0.0 || r > 0.0 || b > 0.0 || l > 0.0
+    }
+
+    /// Returns (TL, TR, BR, BL) corner radii in mm.
+    /// Uses per-corner fields when any are present; falls back to uniform `radius`.
+    pub fn corner_radii(&self) -> (f32, f32, f32, f32) {
+        if self.radius_tl.is_some() || self.radius_tr.is_some()
+            || self.radius_br.is_some() || self.radius_bl.is_some()
+        {
+            (
+                self.radius_tl.unwrap_or(0.0),
+                self.radius_tr.unwrap_or(0.0),
+                self.radius_br.unwrap_or(0.0),
+                self.radius_bl.unwrap_or(0.0),
+            )
+        } else {
+            (self.radius, self.radius, self.radius, self.radius)
+        }
     }
 }
 
@@ -224,8 +251,11 @@ pub struct ResolvedFrame {
     pub border_width_left: f32,
     pub border_color: String,
     pub border_position: BorderPosition,
-    /// Corner radius in canvas px (converted from mm). 0 = sharp corners.
+    /// Per-corner radii in canvas px. `border_radius` = TL, then TR, BR, BL.
     pub border_radius: f32,
+    pub border_radius_tr: f32,
+    pub border_radius_br: f32,
+    pub border_radius_bl: f32,
     /// Face-level visual rotation in degrees (counter-clockwise). Always resolved; never None.
     pub face_rotation_deg: f32,
 }

@@ -1,17 +1,26 @@
-// export.ts — PDF export logic, isolated from the main app bootstrap.
+// export.ts — orchestrates PDF export. The heavy work (PDF generation) runs in
+// export-worker.ts so the UI thread stays responsive and a panic during export
+// is isolated to the worker.
 import { getTextElements } from './wasm-bridge.js';
 import { getFontBytes } from './fonts.js';
-export function bufferToBase64(buffer) {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    const chunkSize = 8192;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+import { showToast } from './toast.js';
+// --- Worker lifecycle (lazily created, recreated after a crash) ---------------
+let worker = null;
+function getWorker() {
+    if (!worker) {
+        worker = new Worker(new URL('./export-worker.js', import.meta.url), { type: 'module' });
     }
-    return btoa(binary);
+    return worker;
 }
+function killWorker() {
+    worker?.terminate();
+    worker = null;
+}
+// --- Request ID (correlates messages to a single in-flight export) -----------
+let _exportSeq = 0;
 export async function exportPdf(editor, getBuffers) {
     const btn = document.getElementById('btn-export-pdf');
+    const cancelBtn = document.getElementById('btn-cancel-export');
     const progress = document.getElementById('export-progress');
     const bar = progress.querySelector('.export-progress-bar');
     const setProgress = (fraction) => {
@@ -19,30 +28,20 @@ export async function exportPdf(editor, getBuffers) {
     };
     btn.disabled = true;
     btn.textContent = 'Exporting…';
+    if (cancelBtn)
+        cancelBtn.hidden = false;
     setProgress(0);
     progress.hidden = false;
-    // Yield once so the browser paints the initial bar state before we block.
-    await new Promise(r => setTimeout(r, 0));
     try {
-        console.group('[PDF export]');
-        // --- Step 1: collect image buffers (used images only) ---
+        // --- Gather inputs on the main thread (cheap: IDs, JSON, buffer refs) ---
         const usedIds = new Set(JSON.parse(editor.get_used_image_ids()));
-        console.log(`Step 1: loading buffers for ${usedIds.size} used image(s)…`);
+        const documentJson = editor.save_state();
         const images = [];
-        let loaded = 0;
         for await (const entry of getBuffers()) {
             if (!usedIds.has(entry.id))
                 continue;
-            console.log(`  image "${entry.id}": ${entry.width_px}×${entry.height_px}, raw ${(entry.buffer.byteLength / 1024).toFixed(1)} KB`);
-            const b64 = bufferToBase64(entry.buffer);
-            console.log(`  → base64 length: ${b64.length} chars (${(b64.length / 1024).toFixed(1)} KB)`);
-            images.push({ id: entry.id, data_base64: b64, width_px: entry.width_px, height_px: entry.height_px });
-            loaded++;
-            setProgress(loaded / Math.max(usedIds.size, 1) * 0.15);
+            images.push({ id: entry.id, buffer: entry.buffer, width_px: entry.width_px, height_px: entry.height_px });
         }
-        console.log(`Step 1 done: ${images.length} image(s) collected`);
-        // --- Step 2: collect font buffers ---
-        console.log('Step 2: loading font buffers…');
         const fonts = [];
         const seenFontKeys = new Set();
         for (const el of getTextElements(editor)) {
@@ -51,53 +50,71 @@ export async function exportPdf(editor, getBuffers) {
                 continue;
             seenFontKeys.add(key);
             const buf = await getFontBytes(el.font_family, el.bold, el.italic);
-            if (buf) {
-                const b64 = bufferToBase64(buf);
-                console.log(`  font "${el.font_family}" bold=${el.bold} italic=${el.italic}: raw ${(buf.byteLength / 1024).toFixed(1)} KB`);
-                fonts.push({ family: el.font_family, bold: el.bold, italic: el.italic, data_base64: b64 });
-            }
+            if (buf)
+                fonts.push({ family: el.font_family, bold: el.bold, italic: el.italic, buffer: buf });
         }
-        console.log(`Step 2 done: ${fonts.length} font(s) collected`);
-        // --- Step 3: serialise to JSON ---
-        console.log('Step 3: serialising to JSON…');
-        const imagesJson = JSON.stringify(images);
-        const fontsJson = JSON.stringify(fonts);
-        console.log(`  images JSON: ${(imagesJson.length / 1024).toFixed(1)} KB`);
-        console.log(`  fonts JSON:  ${(fontsJson.length / 1024).toFixed(1)} KB`);
-        setProgress(0.15);
-        // --- Step 4: WASM export — one spread per tick so the bar advances ---
-        console.log('Step 4: rendering PDF spreads…');
-        const t0 = performance.now();
-        const total = editor.pdf_export_begin(imagesJson, fontsJson);
-        console.log(`  ${total} spread(s) to render`);
-        for (let i = 0; i < total; i++) {
-            // Yield so the browser repaints the bar before the next WASM call.
-            await new Promise(r => setTimeout(r, 0));
-            editor.pdf_export_spread();
-            setProgress(0.15 + (i + 1) / total * 0.85);
-            console.log(`  spread ${i + 1}/${total} done`);
-        }
-        const pdfBytes = editor.pdf_export_finish();
-        console.log(`Step 4 done in ${(performance.now() - t0).toFixed(0)} ms — PDF size: ${(pdfBytes.length / 1024).toFixed(1)} KB`);
-        // --- Step 5: trigger download ---
-        console.log('Step 5: triggering download…');
-        const blob = new Blob([pdfBytes.slice()], { type: 'application/pdf' });
+        setProgress(0.1);
+        // --- Hand off to the worker. Image/font buffers are COPIED (structured
+        // clone, not transferred) so the sidebar's cached buffers stay intact. ---
+        const reqId = ++_exportSeq;
+        const w = getWorker();
+        const pdfBytes = await new Promise((resolve, reject) => {
+            const onMessage = (e) => {
+                const m = e.data;
+                if (m.reqId !== reqId)
+                    return; // stale response from a previous export
+                if (m.type === 'progress')
+                    setProgress(m.fraction);
+                else if (m.type === 'done') {
+                    cleanup();
+                    resolve(m.pdf);
+                }
+                else if (m.type === 'error') {
+                    cleanup();
+                    reject(new Error(m.message));
+                }
+            };
+            const onError = (ev) => {
+                cleanup();
+                killWorker(); // poisoned WASM instance — drop it so the next export is fresh
+                reject(new Error(ev.message || 'Export worker crashed'));
+            };
+            const onCancel = () => {
+                cleanup();
+                killWorker();
+                reject(new Error('Export cancelled'));
+            };
+            const cleanup = () => {
+                w.removeEventListener('message', onMessage);
+                w.removeEventListener('error', onError);
+                cancelBtn?.removeEventListener('click', onCancel);
+            };
+            w.addEventListener('message', onMessage);
+            w.addEventListener('error', onError);
+            cancelBtn?.addEventListener('click', onCancel, { once: true });
+            w.postMessage({ type: 'export', reqId, documentJson, images, fonts });
+        });
+        // --- Trigger download ---
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = 'photobook.pdf';
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 5000);
-        console.log('Export complete.');
     }
     catch (err) {
-        console.error('PDF export failed at the step above ↑', err);
-        alert('PDF export failed: ' + err.message);
+        const msg = err.message;
+        if (msg !== 'Export cancelled') {
+            console.error('PDF export failed', err);
+            showToast('PDF export failed: ' + msg, 'error');
+        }
     }
     finally {
-        console.groupEnd();
         btn.disabled = false;
         btn.textContent = 'Export PDF';
+        if (cancelBtn)
+            cancelBtn.hidden = true;
         progress.hidden = true;
         setProgress(0);
     }

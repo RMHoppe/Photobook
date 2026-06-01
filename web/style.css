@@ -526,12 +526,49 @@ button.active { background: var(--accent); border-color: var(--accent); }
 }
 .bm-dice-btn:hover { opacity: 1; color: var(--accent); border-color: var(--accent); }
 
-/* Randomize dialog — floats in bottom-left of the canvas area */
+/* Toggle switch for box-model sections (border, corner radius). */
+.bm-switch {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.bm-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.bm-switch-track {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 9px;
+  transition: background 0.15s ease;
+}
+.bm-switch-track::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 2px;
+  top: 2px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s ease;
+}
+.bm-switch input:checked + .bm-switch-track { background: var(--accent); }
+.bm-switch input:checked + .bm-switch-track::before { transform: translateX(14px); }
+.bm-enable-body[hidden] { display: none; }
+
+/* Randomize dialog — floats in the top-right of the canvas area */
 #randomize-dialog { display: none; }
 #randomize-dialog:not([hidden]) {
   position: absolute;
-  bottom: 14px;
-  left: 14px;
+  top: 14px;
+  right: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;

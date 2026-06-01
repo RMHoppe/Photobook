@@ -2,14 +2,14 @@ import { getAllSelected } from './wasm-bridge.js';
 import type { PhotobookEditor } from './pkg/photobook_core.js';
 
 const DEFAULTS: Record<string, { title: string; min: string; max: string; step: string }> = {
-  rotation:        { title: 'Randomize Rotation',        min: '-15', max: '15',  step: '0.5' },
-  'margin-all':    { title: 'Randomize Margin',           min: '0',   max: '10',  step: '0.5' },
-  'margin-v':      { title: 'Randomize Vertical Margin',  min: '0',   max: '10',  step: '0.5' },
-  'margin-h':      { title: 'Randomize Horiz. Margin',    min: '0',   max: '10',  step: '0.5' },
-  'margin-top':    { title: 'Randomize Top Margin',       min: '0',   max: '10',  step: '0.5' },
-  'margin-right':  { title: 'Randomize Right Margin',     min: '0',   max: '10',  step: '0.5' },
-  'margin-bottom': { title: 'Randomize Bottom Margin',    min: '0',   max: '10',  step: '0.5' },
-  'margin-left':   { title: 'Randomize Left Margin',      min: '0',   max: '10',  step: '0.5' },
+  rotation:        { title: 'Randomize Rotation',        min: '-5',  max: '5',   step: '0.5' },
+  'margin-all':    { title: 'Randomize Margin',           min: '-10', max: '0',   step: '0.5' },
+  'margin-v':      { title: 'Randomize Vertical Margin',  min: '-10', max: '0',   step: '0.5' },
+  'margin-h':      { title: 'Randomize Horiz. Margin',    min: '-10', max: '0',   step: '0.5' },
+  'margin-top':    { title: 'Randomize Top Margin',       min: '-10', max: '0',   step: '0.5' },
+  'margin-right':  { title: 'Randomize Right Margin',     min: '-10', max: '0',   step: '0.5' },
+  'margin-bottom': { title: 'Randomize Bottom Margin',    min: '-10', max: '0',   step: '0.5' },
+  'margin-left':   { title: 'Randomize Left Margin',      min: '-10', max: '0',   step: '0.5' },
   'bw-all':        { title: 'Randomize Border Width',     min: '0',   max: '3',   step: '0.5' },
   'bw-v':          { title: 'Randomize Vert. Border',     min: '0',   max: '3',   step: '0.5' },
   'bw-h':          { title: 'Randomize Horiz. Border',    min: '0',   max: '3',   step: '0.5' },
@@ -18,6 +18,13 @@ const DEFAULTS: Record<string, { title: string; min: string; max: string; step: 
   'bw-bottom':     { title: 'Randomize Bottom Border',    min: '0',   max: '3',   step: '0.5' },
   'bw-left':       { title: 'Randomize Left Border',      min: '0',   max: '3',   step: '0.5' },
   'border-radius': { title: 'Randomize Corner Radius',    min: '0',   max: '10',  step: '0.5' },
+  'radius-all':    { title: 'Randomize Corner Radius',    min: '0',   max: '15',  step: '0.5' },
+  'radius-v':      { title: 'Randomize TL+BR Radius',     min: '0',   max: '15',  step: '0.5' },
+  'radius-h':      { title: 'Randomize TR+BL Radius',     min: '0',   max: '15',  step: '0.5' },
+  'radius-top':    { title: 'Randomize Top-Left',         min: '0',   max: '15',  step: '0.5' },
+  'radius-right':  { title: 'Randomize Top-Right',        min: '0',   max: '15',  step: '0.5' },
+  'radius-bottom': { title: 'Randomize Bottom-Right',     min: '0',   max: '15',  step: '0.5' },
+  'radius-left':   { title: 'Randomize Bottom-Left',      min: '0',   max: '15',  step: '0.5' },
 };
 
 export class RandomizeDialog {

@@ -44,7 +44,12 @@ pub(crate) struct DecodedImage {
 pub(crate) struct PdfExportState {
     pub pdf_doc:       PdfDocumentReference,
     pub layers:        Vec<PdfLayerReference>,
-    pub decoded:       HashMap<String, DecodedImage>,
+    /// Raw encoded image bytes, decoded on demand (keyed by image id).
+    image_src:         HashMap<String, Vec<u8>>,
+    /// LRU cache of decoded images, bounded by `DECODED_IMAGE_BUDGET_BYTES`.
+    decoded:           HashMap<String, DecodedImage>,
+    decoded_order:     std::collections::VecDeque<String>,
+    decoded_bytes:     usize,
     pub font_bytes_map: HashMap<String, Vec<u8>>,
     pub font_cache:    HashMap<String, IndirectFontRef>,
     pub bleed:         f32,
@@ -54,30 +59,53 @@ pub(crate) struct PdfExportState {
     pub total:         usize,
 }
 
-/// Phase 1 — decode images/fonts, allocate one PDF page per spread.
-/// Returns `None` only if the document has no spreads.
-pub(crate) fn pdf_export_begin(
-    doc: &PhotobookDocument,
-    images_json: &str,
-    fonts_json: &str,
-) -> Option<PdfExportState> {
-    use base64::Engine;
+/// Budget for decoded (uncompressed) images held in memory during export.
+/// Images are decoded lazily per spread and evicted LRU to stay under this.
+const DECODED_IMAGE_BUDGET_BYTES: usize = 384 * 1024 * 1024;
 
-    let font_entries: Vec<FontEntry> = serde_json::from_str(fonts_json).unwrap_or_default();
-    let mut font_bytes_map: HashMap<String, Vec<u8>> = HashMap::new();
-    for fe in font_entries {
-        let key = format!("{}:{}:{}", fe.family, fe.bold as u8, fe.italic as u8);
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&fe.data_base64) {
-            font_bytes_map.insert(key, bytes);
+impl PdfExportState {
+    /// Ensure `id` is decoded and cached, decoding from `image_src` on miss and
+    /// evicting least-recently-used entries to stay under the byte budget.
+    fn ensure_decoded(&mut self, id: &str) {
+        if self.decoded.contains_key(id) {
+            self.touch_decoded(id);
+            return;
+        }
+        let Some(bytes) = self.image_src.get(id) else { return; };
+        let Some(decoded) = decode_image_bytes(bytes) else { return; };
+        let sz = decoded_size_bytes(&decoded);
+        self.decoded.insert(id.to_string(), decoded);
+        self.decoded_order.push_back(id.to_string());
+        self.decoded_bytes += sz;
+        self.evict_decoded();
+    }
+
+    fn touch_decoded(&mut self, id: &str) {
+        if let Some(pos) = self.decoded_order.iter().position(|x| x == id) {
+            if let Some(s) = self.decoded_order.remove(pos) {
+                self.decoded_order.push_back(s);
+            }
         }
     }
 
-    let image_entries: Vec<ImageEntry> = serde_json::from_str(images_json).unwrap_or_default();
-    let decoded: HashMap<String, DecodedImage> = image_entries
-        .into_iter()
-        .filter_map(|e| decode_image(&e.data_base64).map(|d| (e.id, d)))
-        .collect();
+    fn evict_decoded(&mut self) {
+        while self.decoded_bytes > DECODED_IMAGE_BUDGET_BYTES && self.decoded_order.len() > 1 {
+            let Some(old) = self.decoded_order.pop_front() else { break; };
+            if let Some(d) = self.decoded.remove(&old) {
+                self.decoded_bytes = self.decoded_bytes.saturating_sub(decoded_size_bytes(&d));
+            }
+        }
+    }
+}
 
+/// Phase 1 — allocate one PDF page per spread using pre-decoded byte maps.
+/// The fast path: callers have already decoded base64 or provided raw bytes.
+/// Returns `None` only if the document has no spreads.
+pub(crate) fn pdf_export_begin_with_bytes(
+    doc: &PhotobookDocument,
+    image_src: HashMap<String, Vec<u8>>,
+    font_bytes_map: HashMap<String, Vec<u8>>,
+) -> Option<PdfExportState> {
     let total = doc.spreads.len();
     if total == 0 { return None; }
 
@@ -109,7 +137,10 @@ pub(crate) fn pdf_export_begin(
     Some(PdfExportState {
         pdf_doc,
         layers,
-        decoded,
+        image_src,
+        decoded: HashMap::new(),
+        decoded_order: std::collections::VecDeque::new(),
+        decoded_bytes: 0,
         font_bytes_map,
         font_cache: HashMap::new(),
         bleed,
@@ -118,6 +149,37 @@ pub(crate) fn pdf_export_begin(
         next_spread: 0,
         total,
     })
+}
+
+/// Phase 1 — decode images/fonts from base64 JSON, allocate one PDF page per spread.
+/// Returns `None` only if the document has no spreads.
+pub(crate) fn pdf_export_begin(
+    doc: &PhotobookDocument,
+    images_json: &str,
+    fonts_json: &str,
+) -> Option<PdfExportState> {
+    use base64::Engine;
+
+    let font_entries: Vec<FontEntry> = serde_json::from_str(fonts_json).unwrap_or_default();
+    let mut font_bytes_map: HashMap<String, Vec<u8>> = HashMap::new();
+    for fe in font_entries {
+        let key = format!("{}:{}:{}", fe.family, fe.bold as u8, fe.italic as u8);
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&fe.data_base64) {
+            font_bytes_map.insert(key, bytes);
+        }
+    }
+
+    let image_entries: Vec<ImageEntry> = serde_json::from_str(images_json).unwrap_or_default();
+    // Base64-decode (cheap) up front; full image decode is deferred to the
+    // spread that actually uses each image (see `ensure_decoded`).
+    let mut image_src: HashMap<String, Vec<u8>> = HashMap::new();
+    for e in image_entries {
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&e.data_base64) {
+            image_src.insert(e.id, bytes);
+        }
+    }
+
+    pdf_export_begin_with_bytes(doc, image_src, font_bytes_map)
 }
 
 /// Phase 2 — render the next pending spread into the PDF.
@@ -178,6 +240,10 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
     }).collect();
 
     // Pass 1: prepare per-frame placement data and deduplicate crops.
+    // Images are decoded on demand immediately before use so the LRU budget
+    // never evicts an image before it has been rendered (the pre-spread upfront
+    // decode loop was the cause: with N large images the first could be evicted
+    // by the time the render pass started).
     type CropKey = (String, u32, u32, u32, u32);
     let mut xobj_cache: HashMap<CropKey, XObjectRef> = HashMap::new();
     let mut pending: Vec<(Rect, f32, f32, Prepared)> = Vec::new();
@@ -187,10 +253,12 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
         let Some(face) = spread.layout.faces.get(face_id) else { continue };
 
         let node_rotation    = face.box_model.face_rotation_deg.unwrap_or(0.0);
-        let border_radius_mm = face.box_model.border.radius.max(0.0);
+        let (crtl, crtr, crbr, crbl) = face.box_model.border.corner_radii();
+        let border_radius_mm = crtl.max(crtr).max(crbr).max(crbl).max(0.0);
         let frame_page       = frame_page_rect(spread_rect, region.x);
 
         if let Some(ref img_id) = face.image.image_id {
+            state.ensure_decoded(img_id);
             if let Some(decoded_img) = state.decoded.get(img_id.as_str()) {
                 if let Some(prep) = prepare_image(
                     decoded_img, &frame_page, bleed, ph,
@@ -278,13 +346,18 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
 // Image decoding
 // ---------------------------------------------------------------------------
 
-fn decode_image(data_base64: &str) -> Option<DecodedImage> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data_base64).ok()?;
-    let format = image::guess_format(&bytes).ok()?;
-    let img = image::load_from_memory_with_format(&bytes, format).ok()?;
+fn decode_image_bytes(bytes: &[u8]) -> Option<DecodedImage> {
+    let format = image::guess_format(bytes).ok()?;
+    let img = image::load_from_memory_with_format(bytes, format).ok()?;
     let is_jpeg = matches!(format, image::ImageFormat::Jpeg);
     Some(DecodedImage { img, is_jpeg })
+}
+
+/// Approximate retained bytes for a decoded image (RGBA, 4 bytes/px).
+fn decoded_size_bytes(d: &DecodedImage) -> usize {
+    (d.img.width() as usize)
+        .saturating_mul(d.img.height() as usize)
+        .saturating_mul(4)
 }
 
 // ---------------------------------------------------------------------------
@@ -755,7 +828,8 @@ fn draw_border_rect(
             ),
             BorderPosition::Centered | BorderPosition::Mixed => (frame.x, frame.y, frame.w, frame.h),
         };
-        let base_r = border.radius.max(0.0);
+        let (cr0, cr1, cr2, cr3) = border.corner_radii();
+        let base_r = cr0.max(cr1).max(cr2).max(cr3).max(0.0);
         let stroke_r = match border.position {
             BorderPosition::Inner  => (base_r - hw).max(0.0),
             BorderPosition::Outer  => base_r + hw,

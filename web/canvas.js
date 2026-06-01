@@ -1,7 +1,8 @@
 // canvas.ts — All 2D rendering for the double-page spread canvas.
 // Receives data from the Wasm editor and draws using Canvas 2D API.
-import { PAD, RULER_SIZE, NULL_ID } from './constants.js';
-import { getSpreadInfo, getLowDpiFrames, computeImageCover, getTextElements, getResolvedSpreadDelta, getXJunctions, } from './wasm-bridge.js';
+import { PAD, RULER_SIZE, NULL_ID, CANVAS_IMAGE_BUDGET_BYTES } from './constants.js';
+import { LruCache, rasterBytes } from './lru.js';
+import { getSpreadInfo, getLowDpiFrames, computeImageCover, getTextElements, getResolvedSpreadDelta, getXJunctions, getSpreadMargin, } from './wasm-bridge.js';
 import { drawRulers } from './canvas-draw-rulers.js';
 // ---------------------------------------------------------------------------
 // Geometry cache — avoids repeated JSON parsing on unchanged data
@@ -50,7 +51,7 @@ export class CanvasRenderer {
     canvas;
     ctx;
     dpr;
-    imageCache = new Map();
+    imageCache = new LruCache(CANVAS_IMAGE_BUDGET_BYTES, rasterBytes);
     hoveredDivider = null;
     hoveredEdge = null;
     hoveredTwinHandle = null;
@@ -77,6 +78,8 @@ export class CanvasRenderer {
     _xJunctions = [];
     /** Bleed in CSS px as of the last draw — needed for junction hit-testing. */
     _bleedPx = 0;
+    /** Spread margin in CSS px as of the last draw — needed for junction hit-testing. */
+    _spreadMarginPx = { top: 0, right: 0, bottom: 0, left: 0 };
     /** Currently hovered X-junction handle, or null. */
     hoveredXJunction = null;
     /** ID of the currently selected text element (null = none). */
@@ -112,6 +115,9 @@ export class CanvasRenderer {
     }
     cacheImage(id, imgElement) {
         this.imageCache.set(id, imgElement);
+    }
+    evictImage(id) {
+        this.imageCache.delete(id);
     }
     spreadRect(spreadInfo) {
         const rulerOffset = this.showRulers ? RULER_SIZE : 0;
@@ -208,7 +214,14 @@ export class CanvasRenderer {
             }
             this._drawSafeZone(ctx, spreadRect, spreadInfo, metrics);
             this._drawSplitOverlays(ctx, layoutRect, overlays, renderList);
-            this._drawDividerLayer(ctx, layoutRect, editor, renderList, selectedSegmentId, bleedPx);
+            const spreadMargin = getSpreadMargin(editor);
+            const marginPx = {
+                top: spreadMargin.top * mmToPx,
+                right: spreadMargin.right * mmToPx,
+                bottom: spreadMargin.bottom * mmToPx,
+                left: spreadMargin.left * mmToPx,
+            };
+            this._drawDividerLayer(ctx, layoutRect, editor, renderList, selectedSegmentId, bleedPx, marginPx);
             if (marqueeRect) {
                 const { x, y, w, h } = marqueeRect;
                 const mx = layoutRect.x + x;
@@ -459,7 +472,7 @@ export class CanvasRenderer {
         }
         ctx.restore();
     }
-    _drawDividerLayer(ctx, spreadRect, editor, renderList, selectedSegmentId, bleedPx) {
+    _drawDividerLayer(ctx, spreadRect, editor, renderList, selectedSegmentId, bleedPx, marginPx) {
         const twinHandles = this._geoCache.twinHandles;
         const selectedTwin = this.twinSegmentSelected && selectedSegmentId !== NULL_ID
             ? twinHandles.find(th => th.edge_id === selectedSegmentId) ?? null
@@ -542,11 +555,12 @@ export class CanvasRenderer {
         }
         // X-junction handles — only visible while hovering a divider (or the handle itself).
         this._bleedPx = bleedPx;
+        this._spreadMarginPx = marginPx;
         this._xJunctions = getXJunctions(editor);
         if (this.hoveredDivider !== null || this.hoveredXJunction !== null) {
             for (const jx of this._xJunctions) {
-                const cx = spreadRect.x + (-bleedPx + jx.nx * (spreadRect.w + 2 * bleedPx));
-                const cy = spreadRect.y + (-bleedPx + jx.ny * (spreadRect.h + 2 * bleedPx));
+                const cx = spreadRect.x + (-bleedPx + marginPx.left + jx.nx * (spreadRect.w + 2 * bleedPx - marginPx.left - marginPx.right));
+                const cy = spreadRect.y + (-bleedPx + marginPx.top + jx.ny * (spreadRect.h + 2 * bleedPx - marginPx.top - marginPx.bottom));
                 const isHovered = this.hoveredXJunction !== null
                     && this.hoveredXJunction.tl_id === jx.tl_id;
                 this._drawXJunctionHandle(ctx, cx, cy, isHovered);
@@ -564,12 +578,17 @@ export class CanvasRenderer {
             ctx.rotate(-nodeRad);
             ctx.translate(-fcx, -fcy);
         }
-        const rad = Math.max(0, frame.border_radius ?? 0);
+        const rtl = Math.max(0, frame.border_radius ?? 0);
+        const rtr = Math.max(0, frame.border_radius_tr ?? 0);
+        const rbr = Math.max(0, frame.border_radius_br ?? 0);
+        const rbl = Math.max(0, frame.border_radius_bl ?? 0);
+        const radii = [rtl, rtr, rbr, rbl];
+        const anyRad = rtl > 0 || rtr > 0 || rbr > 0 || rbl > 0;
         // Image (clipped to frame bounds, with rounded corners if radius > 0).
         ctx.save();
         ctx.beginPath();
-        if (rad > 0)
-            ctx.roundRect(rx, ry, rw, rh, rad);
+        if (anyRad)
+            ctx.roundRect(rx, ry, rw, rh, radii);
         else
             ctx.rect(rx, ry, rw, rh);
         ctx.clip();
@@ -595,22 +614,22 @@ export class CanvasRenderer {
                 ctx.lineWidth = lw;
                 ctx.beginPath();
                 if (frame.border_position === 'inner') {
-                    const br = Math.max(0, rad - hw);
-                    if (br > 0)
+                    const br = radii.map(r => Math.max(0, r - hw));
+                    if (anyRad)
                         ctx.roundRect(rx + hw, ry + hw, rw - lw, rh - lw, br);
                     else
                         ctx.rect(rx + hw, ry + hw, rw - lw, rh - lw);
                 }
                 else if (frame.border_position === 'outer') {
-                    const br = rad + hw;
-                    if (br > 0)
+                    const br = radii.map(r => r > 0 ? r + hw : 0);
+                    if (anyRad)
                         ctx.roundRect(rx - hw, ry - hw, rw + lw, rh + lw, br);
                     else
                         ctx.rect(rx - hw, ry - hw, rw + lw, rh + lw);
                 }
                 else {
-                    if (rad > 0)
-                        ctx.roundRect(rx, ry, rw, rh, rad);
+                    if (anyRad)
+                        ctx.roundRect(rx, ry, rw, rh, radii);
                     else
                         ctx.rect(rx, ry, rw, rh);
                 }
@@ -653,8 +672,8 @@ export class CanvasRenderer {
             ctx.lineWidth = 1;
             ctx.setLineDash([]);
             ctx.beginPath();
-            if (rad > 0)
-                ctx.roundRect(rx, ry, rw, rh, rad);
+            if (anyRad)
+                ctx.roundRect(rx, ry, rw, rh, radii);
             else
                 ctx.rect(rx, ry, rw, rh);
             ctx.stroke();
@@ -1126,15 +1145,32 @@ export class CanvasRenderer {
     xJunctionAt(canvasX, canvasY, spreadRect) {
         const HIT_R = 11;
         const bp = this._bleedPx;
+        const mp = this._spreadMarginPx;
         for (const jx of this._xJunctions) {
-            const cx = spreadRect.x + (-bp + jx.nx * (spreadRect.w + 2 * bp));
-            const cy = spreadRect.y + (-bp + jx.ny * (spreadRect.h + 2 * bp));
+            const cx = spreadRect.x + (-bp + mp.left + jx.nx * (spreadRect.w + 2 * bp - mp.left - mp.right));
+            const cy = spreadRect.y + (-bp + mp.top + jx.ny * (spreadRect.h + 2 * bp - mp.top - mp.bottom));
             const dx = canvasX - cx;
             const dy = canvasY - cy;
             if (dx * dx + dy * dy <= HIT_R * HIT_R)
                 return jx;
         }
         return null;
+    }
+    /**
+     * Convert a canvas-space point to normalized grid coords, accounting for
+     * bleed and spread margins. Mirrors `root_rect_with_bleed` in Rust.
+     */
+    canvasToNorm(cx, cy, sr) {
+        const bp = this._bleedPx;
+        const mp = this._spreadMarginPx;
+        const rootX = sr.x - bp + mp.left;
+        const rootY = sr.y - bp + mp.top;
+        const rootW = sr.w + 2 * bp - mp.left - mp.right;
+        const rootH = sr.h + 2 * bp - mp.top - mp.bottom;
+        return {
+            nx: (cx - rootX) / rootW,
+            ny: (cy - rootY) / rootH,
+        };
     }
     _drawEdgeHoverHint(ctx, sr, edge) {
         const STRIP = 3;

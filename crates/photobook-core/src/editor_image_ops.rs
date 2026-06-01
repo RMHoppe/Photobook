@@ -89,6 +89,13 @@ impl PhotobookEditor {
             "bw-bottom"     => { face.box_model.border.width_bottom = Some(value); }
             "bw-left"       => { face.box_model.border.width_left   = Some(value); }
             "border-radius" => { face.box_model.border.radius = value.max(0.0); }
+            "radius-all"    => { let v = value.max(0.0); let b = &mut face.box_model.border; b.radius_tl = Some(v); b.radius_tr = Some(v); b.radius_br = Some(v); b.radius_bl = Some(v); }
+            "radius-v"      => { let v = value.max(0.0); face.box_model.border.radius_tl = Some(v); face.box_model.border.radius_br = Some(v); }
+            "radius-h"      => { let v = value.max(0.0); face.box_model.border.radius_tr = Some(v); face.box_model.border.radius_bl = Some(v); }
+            "radius-top"    => { face.box_model.border.radius_tl = Some(value.max(0.0)); }
+            "radius-right"  => { face.box_model.border.radius_tr = Some(value.max(0.0)); }
+            "radius-bottom" => { face.box_model.border.radius_br = Some(value.max(0.0)); }
+            "radius-left"   => { face.box_model.border.radius_bl = Some(value.max(0.0)); }
             _ => {}
         }
         self.mark_structure_dirty();

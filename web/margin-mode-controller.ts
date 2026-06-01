@@ -47,36 +47,47 @@ export class MarginModeController {
   }
 }
 
+export interface SideLabels {
+  all?: string; v?: string; h?: string;
+  top?: string; right?: string; bottom?: string; left?: string;
+}
+
 export function marginSectionHtml(
   title: string,
   fieldFn: (name: string, label: string) => string,
   ns = 'margin',
+  labels?: SideLabels,
 ): string {
+  const L = {
+    all: 'All', v: 'Vertical', h: 'Horizontal',
+    top: 'Top', right: 'Right', bottom: 'Bottom', left: 'Left',
+    ...(labels ?? {}),
+  };
   return `
       <div class="bm-section">
         <div class="bm-section-header">
           <h4>${title}</h4>
           <div class="margin-mode-bar">
-            <button class="margin-mode-btn" data-${ns}-mode="all"  title="All sides equal"><i class="fa-regular fa-square"></i></button>
-            <button class="margin-mode-btn" data-${ns}-mode="xy"   title="Vertical / Horizontal"><i class="fa-solid fa-border-top-left"></i></button>
-            <button class="margin-mode-btn" data-${ns}-mode="each" title="Each side individually"><i class="fa-solid fa-border-none"></i></button>
+            <button class="margin-mode-btn" data-${ns}-mode="all"  title="All equal"><i class="fa-regular fa-square"></i></button>
+            <button class="margin-mode-btn" data-${ns}-mode="xy"   title="Paired"><i class="fa-solid fa-border-top-left"></i></button>
+            <button class="margin-mode-btn" data-${ns}-mode="each" title="Each individually"><i class="fa-solid fa-border-none"></i></button>
           </div>
         </div>
         <div class="margin-pane" data-${ns}-pane="all">
-          <div class="bm-grid">${fieldFn(`${ns}-all`, 'All')}</div>
+          <div class="bm-grid">${fieldFn(`${ns}-all`, L.all)}</div>
         </div>
         <div class="margin-pane" data-${ns}-pane="xy">
           <div class="bm-grid">
-            ${fieldFn(`${ns}-v`, 'Vertical')}
-            ${fieldFn(`${ns}-h`, 'Horizontal')}
+            ${fieldFn(`${ns}-v`, L.v)}
+            ${fieldFn(`${ns}-h`, L.h)}
           </div>
         </div>
         <div class="margin-pane" data-${ns}-pane="each">
           <div class="bm-grid">
-            ${fieldFn(`${ns}-top`,    'Top')}
-            ${fieldFn(`${ns}-right`,  'Right')}
-            ${fieldFn(`${ns}-bottom`, 'Bottom')}
-            ${fieldFn(`${ns}-left`,   'Left')}
+            ${fieldFn(`${ns}-top`,    L.top)}
+            ${fieldFn(`${ns}-right`,  L.right)}
+            ${fieldFn(`${ns}-bottom`, L.bottom)}
+            ${fieldFn(`${ns}-left`,   L.left)}
           </div>
         </div>
       </div>`;

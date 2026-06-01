@@ -9,6 +9,10 @@
 import { debounce } from './utils.js';
 import { numFieldWithDice, colorField, selectField, bindInputs } from './ui-fields.js';
 import { MarginModeController, marginSectionHtml, detectMarginMode } from './margin-mode-controller.js';
+// Defaults applied when a toggleable section is first enabled, so the effect is
+// immediately visible instead of a no-op zero.
+const BORDER_DEFAULT_MM = 5;
+const RADIUS_DEFAULT_MM = 10;
 export class BoxModelEditor {
     containerEl;
     onChange;
@@ -16,15 +20,18 @@ export class BoxModelEditor {
     onDiceClick;
     _multiSel = false;
     onLayoutTransform;
+    onLayerRandomize;
     _built = false;
     _marginCtrl;
     _borderWidthCtrl;
-    constructor(containerEl, onChange, onZOrder, onDiceClick, onLayoutTransform) {
+    _radiusCtrl;
+    constructor(containerEl, onChange, onZOrder, onDiceClick, onLayoutTransform, onLayerRandomize) {
         this.containerEl = containerEl;
         this.onChange = onChange;
         this.onZOrder = onZOrder;
         this.onDiceClick = onDiceClick;
         this.onLayoutTransform = onLayoutTransform;
+        this.onLayerRandomize = onLayerRandomize;
     }
     clear() {
         this.containerEl.innerHTML = '<p class="no-selection">Select a frame to edit</p>';
@@ -58,7 +65,13 @@ export class BoxModelEditor {
             left: border.width_left ?? null,
         };
         this._updateSidesUI(this._borderWidthCtrl, 'bw', bw);
-        this._set('border-radius', border.radius ?? 0);
+        const rad = {
+            top: border.radius_tl ?? null,
+            right: border.radius_tr ?? null,
+            bottom: border.radius_br ?? null,
+            left: border.radius_bl ?? null,
+        };
+        this._updateSidesUI(this._radiusCtrl, 'radius', rad);
         this._set('border-color', border.color ?? '#000000');
         this._set('border-position', border.position ?? 'centered');
         // Node transform (undefined/null → show Mixed placeholder)
@@ -66,13 +79,19 @@ export class BoxModelEditor {
         // Z-order label
         const orderRow = this.containerEl.querySelector('.bm-order-row');
         const orderSection = orderRow?.closest('.bm-section') ?? null;
+        // Show Layer controls for a single frame OR a multi-selection (the order
+        // buttons apply to every selected frame).
         if (orderSection)
-            orderSection.hidden = zIndex === undefined;
+            orderSection.hidden = zIndex === undefined && selectionCount <= 1;
         if (orderRow) {
             const orderLabel = orderRow.querySelector('.bm-z-label');
             if (orderLabel)
-                orderLabel.textContent = String((zIndex ?? 0) + 1);
+                orderLabel.textContent = zIndex === undefined ? '—' : String(zIndex + 1);
         }
+        const layerRand = this.containerEl.querySelector('.bm-layer-randomize');
+        if (layerRand)
+            layerRand.hidden = !this._multiSel;
+        this._applyEnableVisibility();
     }
     // ---------------------------------------------------------------------------
     // Private helpers
@@ -138,24 +157,100 @@ export class BoxModelEditor {
             el.placeholder = '';
         }
     }
+    // -------------------------------------------------------------------------
+    // Section enable toggles (border, corner radius)
+    // -------------------------------------------------------------------------
+    _onEnableToggle(group, enabled) {
+        if (group === 'border') {
+            if (enabled) {
+                const cur = this._readCurrentSides(this._borderWidthCtrl, 'bw');
+                const allZero = ['top', 'right', 'bottom', 'left']
+                    .every(k => cur[k] !== null && cur[k] <= 0);
+                if (allZero) {
+                    this._borderWidthCtrl.setMode('all');
+                    this._setOffset('bw-all', BORDER_DEFAULT_MM);
+                }
+            }
+            else {
+                this._borderWidthCtrl.setMode('all');
+                this._setOffset('bw-all', 0);
+            }
+        }
+        else if (group === 'radius') {
+            if (enabled) {
+                const cur = this._readCurrentSides(this._radiusCtrl, 'radius');
+                const allZero = ['top', 'right', 'bottom', 'left']
+                    .every(k => cur[k] !== null && cur[k] <= 0);
+                if (allZero) {
+                    this._radiusCtrl.setMode('all');
+                    this._setOffset('radius-all', RADIUS_DEFAULT_MM);
+                }
+            }
+            else {
+                this._radiusCtrl.setMode('all');
+                this._setOffset('radius-all', 0);
+            }
+        }
+        this._applyEnableVisibility();
+        this._emit();
+    }
+    /** Derive each toggleable section's enabled state from its current values and
+     *  reflect it in the checkbox + body visibility. */
+    _applyEnableVisibility() {
+        const bwCur = this._readCurrentSides(this._borderWidthCtrl, 'bw');
+        const borderOn = ['top', 'right', 'bottom', 'left']
+            .some(k => bwCur[k] === null || bwCur[k] > 0);
+        const radCur = this._readCurrentSides(this._radiusCtrl, 'radius');
+        const radiusOn = ['top', 'right', 'bottom', 'left']
+            .some(k => radCur[k] === null || radCur[k] > 0);
+        this._setSectionEnabled('border', borderOn);
+        this._setSectionEnabled('radius', radiusOn);
+    }
+    _setSectionEnabled(group, enabled) {
+        const section = this.containerEl.querySelector(`[data-section="${group}"]`);
+        if (!section)
+            return;
+        const cb = section.querySelector(`[data-enable="${group}"]`);
+        if (cb)
+            cb.checked = enabled;
+        const body = section.querySelector('.bm-enable-body');
+        if (body)
+            body.hidden = !enabled;
+    }
     _build() {
         this._built = true;
         this.containerEl.dataset.panel = 'boxmodel';
         this.containerEl.innerHTML = `
       ${marginSectionHtml('Margin (mm)', (name, label) => numFieldWithDice(name, label, { min: null }))}
-      ${marginSectionHtml('Border width (mm)', (name, label) => numFieldWithDice(name, label), 'bw')}
-      <div class="bm-section">
-        <h4>Border style</h4>
-        <div class="bm-grid">
-          ${numFieldWithDice('border-radius', 'Radius (mm)')}
-          ${colorField('border-color', 'Color')}
+      <div class="bm-section" data-section="border">
+        <div class="bm-section-header">
+          <h4>Border</h4>
+          <label class="bm-switch"><input type="checkbox" data-enable="border" /><span class="bm-switch-track"></span></label>
         </div>
-        <div class="bm-grid" style="margin-top:4px">
-          ${selectField('border-position', 'Position', [
+        <div class="bm-enable-body">
+          ${marginSectionHtml('Width (mm)', (name, label) => numFieldWithDice(name, label), 'bw')}
+          <div class="bm-grid" style="margin-top:4px">
+            ${colorField('border-color', 'Color')}
+          </div>
+          <div class="bm-grid" style="margin-top:4px">
+            ${selectField('border-position', 'Position', [
             ['inner', 'Inner'],
             ['centered', 'Centered'],
             ['outer', 'Outer'],
         ], true)}
+          </div>
+        </div>
+      </div>
+      <div class="bm-section" data-section="radius">
+        <div class="bm-section-header">
+          <h4>Corner radius</h4>
+          <label class="bm-switch"><input type="checkbox" data-enable="radius" /><span class="bm-switch-track"></span></label>
+        </div>
+        <div class="bm-enable-body">
+          ${marginSectionHtml('Radius (mm)', (name, label) => numFieldWithDice(name, label), 'radius', {
+            v: 'TL + BR', h: 'TR + BL',
+            top: 'Top-left', right: 'Top-right', bottom: 'Bot-right', left: 'Bot-left',
+        })}
         </div>
       </div>
       <div class="bm-section">
@@ -173,7 +268,7 @@ export class BoxModelEditor {
         </div>
       </div>
       <div class="bm-section">
-        <h4>Order</h4>
+        <h4>Layer</h4>
         <div class="bm-order-row">
           <div class="bm-order-btns">
             <button class="bm-order-btn" data-zorder="back"  title="Send to back"><i class="fa-solid fa-angles-down"></i></button>
@@ -182,6 +277,7 @@ export class BoxModelEditor {
             <button class="bm-order-btn" data-zorder="front" title="Bring to front"><i class="fa-solid fa-angles-up"></i></button>
           </div>
           <span class="bm-z-label">—</span>
+          <button class="bm-order-btn bm-layer-randomize" data-layer-randomize title="Randomize layering of selected frames" hidden><i class="fa-solid fa-dice"></i></button>
         </div>
       </div>
     `;
@@ -190,6 +286,11 @@ export class BoxModelEditor {
             btn.addEventListener('click', () => {
                 this.onZOrder(btn.dataset.zorder);
             });
+        });
+        this.containerEl.querySelector('[data-layer-randomize]')
+            ?.addEventListener('click', () => this.onLayerRandomize());
+        this.containerEl.querySelectorAll('[data-enable]').forEach(cb => {
+            cb.addEventListener('change', () => this._onEnableToggle(cb.dataset.enable, cb.checked));
         });
         this.containerEl.querySelectorAll('[data-dice]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -222,6 +323,8 @@ export class BoxModelEditor {
         this._marginCtrl.bindButtons(mode => this._setSidesMode(this._marginCtrl, 'margin', mode));
         this._borderWidthCtrl = new MarginModeController(this.containerEl, 'bw');
         this._borderWidthCtrl.bindButtons(mode => this._setSidesMode(this._borderWidthCtrl, 'bw', mode));
+        this._radiusCtrl = new MarginModeController(this.containerEl, 'radius');
+        this._radiusCtrl.bindButtons(mode => this._setSidesMode(this._radiusCtrl, 'radius', mode));
     }
     // ---------------------------------------------------------------------------
     // Field value readers (used by _emit)
@@ -324,6 +427,7 @@ export class BoxModelEditor {
     }
     _emit = debounce(() => {
         const bw = this._readCurrentSides(this._borderWidthCtrl, 'bw');
+        const rad = this._readCurrentSides(this._radiusCtrl, 'radius');
         const bm = {
             margin: this._readCurrentSides(this._marginCtrl, 'margin'),
             border: {
@@ -331,7 +435,11 @@ export class BoxModelEditor {
                 width_right: bw.right,
                 width_bottom: bw.bottom,
                 width_left: bw.left,
-                radius: this._gNum('border-radius'),
+                radius: -1,
+                radius_tl: rad.top,
+                radius_tr: rad.right,
+                radius_br: rad.bottom,
+                radius_bl: rad.left,
                 color: this._gColor('border-color'),
                 position: this._gSel('border-position'),
             },

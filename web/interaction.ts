@@ -1070,14 +1070,13 @@ export const pinwheelSpawnMode: InteractionMode = {
   onMouseDown(_e, _ctx) {},
 
   onMouseMove(e, ctx) {
-    const { editor, refreshBoxModel, redraw, modeState, canvasEl } = ctx;
+    const { editor, renderer, refreshBoxModel, redraw, modeState, canvasEl } = ctx;
     const state  = modeState as PinwheelSpawnState;
     const sr     = state.spreadRect;
     const rect   = canvasEl.getBoundingClientRect();
     const cx     = e.clientX - rect.left;
     const cy     = e.clientY - rect.top;
-    const nx     = (cx - sr.x) / sr.w;
-    const ny     = (cy - sr.y) / sr.h;
+    const { nx, ny } = renderer.canvasToNorm(cx, cy, sr);
     editor.update_pinwheel_spawn(nx, ny);
     refreshBoxModel();
     redraw();
