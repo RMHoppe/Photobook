@@ -1208,6 +1208,15 @@ button.primary:hover { background: #5a9fe8; }
   border-radius: 2px;
   transition: width 0.1s ease-out;
 }
+@keyframes wasm-loading-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.wasm-loading-bar--indeterminate {
+  width: 25%;
+  transition: none;
+  animation: wasm-loading-slide 1.2s ease-in-out infinite;
+}
 .wasm-loading-pct {
   font-size: 11px;
   color: var(--text-muted);

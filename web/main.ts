@@ -37,7 +37,14 @@ function _setWasmProgress(pct: number): void {
 {
   const wasmUrl = new URL('./pkg/photobook_core_bg.wasm', import.meta.url);
   const res = await fetch(wasmUrl);
-  const total = parseInt(res.headers.get('content-length') ?? '0', 10);
+  // content-length is the compressed size; if content-encoding is set the
+  // decompressed chunks will exceed it, making percentage nonsensical.
+  const compressed = res.headers.has('content-encoding');
+  const total = compressed ? 0 : parseInt(res.headers.get('content-length') ?? '0', 10);
+  if (compressed) {
+    _wasmLoadingBar.classList.add('wasm-loading-bar--indeterminate');
+    _wasmLoadingPct.style.visibility = 'hidden';
+  }
   let loaded = 0;
 
   const tracked = new ReadableStream<Uint8Array>({
