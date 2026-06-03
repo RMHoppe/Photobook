@@ -213,9 +213,13 @@ impl PhotobookEditor {
 
     /// Phase 2 of the staged export. Renders one spread into the PDF.
     /// Call this `total` times (the value returned by `pdf_export_begin`).
-    pub fn pdf_export_spread(&mut self) {
+    /// Returns a JSON string with per-phase timing data for profiling.
+    pub fn pdf_export_spread(&mut self) -> String {
         if let Some(state) = self.pdf_state.as_mut() {
-            crate::pdf::pdf_export_spread_one(state, &self.doc);
+            let times = crate::pdf::pdf_export_spread_one(state, &self.doc);
+            serde_json::to_string(&times).unwrap_or_default()
+        } else {
+            "{}".to_string()
         }
     }
 

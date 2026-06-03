@@ -29,7 +29,7 @@ mod js_sys_date {
         }
 
         #[inline(always)]
-        pub fn format(&self, format: impl ToString) -> String {
+        pub fn format(&self, _format: impl ToString) -> String {
             // TODO
             "".into()
         }
@@ -83,7 +83,7 @@ mod unix_epoch_stub_date {
         }
 
         #[inline(always)]
-        pub fn format(&self, format: impl ToString) -> String {
+        pub fn format(&self, _format: impl ToString) -> String {
             // TODO
             "".into()
         }

@@ -311,15 +311,12 @@ fn main() {
 )]
 // Disallow `println!`. Use `debug!` for debug output
 // (which is provided by the `log` crate).
-#![cfg_attr(all(not(test), feature = "clippy"), warn(result_unwrap_used))]
 
 #[cfg(feature = "logging")]
 #[macro_use]
 pub extern crate log;
 #[cfg(feature = "embedded_images")]
 pub extern crate image as image_crate;
-#[cfg(all(feature = "js-sys", target_arch = "wasm32", target_os = "unknown"))]
-extern crate js_sys;
 
 pub use lopdf;
 

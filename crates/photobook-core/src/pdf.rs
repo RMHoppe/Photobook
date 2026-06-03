@@ -11,6 +11,33 @@ use crate::utils::image_cover_factors;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// ---------------------------------------------------------------------------
+// Wall-clock helper — js_sys::Date::now() in WASM, SystemTime otherwise
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+fn now_ms() -> f64 { js_sys::Date::now() }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
+}
+
+// ---------------------------------------------------------------------------
+// Per-spread phase timing — returned from pdf_export_spread_one
+// ---------------------------------------------------------------------------
+
+#[derive(Default, Serialize)]
+pub(crate) struct SpreadTimes {
+    pub decode_ms:   f64,
+    pub crop_ms:     f64,
+    pub resample_ms: f64,
+    pub encode_ms:   f64,
+    pub image_count: u32,
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct ImageEntry {
     pub id: String,
@@ -28,9 +55,15 @@ pub struct FontEntry {
 }
 
 /// Decoded image ready for cropping.
+/// `orig_w`/`orig_h` are the full-resolution source dimensions — equal to
+/// `img.width()`/`img.height()` for a full decode, smaller when a JPEG
+/// scale-factor decode was used. All geometry computation uses these values
+/// so that placement and crop math is independent of the chosen scale.
 pub(crate) struct DecodedImage {
     img: image::DynamicImage,
     is_jpeg: bool,
+    orig_w: u32,
+    orig_h: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,15 +97,30 @@ pub(crate) struct PdfExportState {
 const DECODED_IMAGE_BUDGET_BYTES: usize = 384 * 1024 * 1024;
 
 impl PdfExportState {
-    /// Ensure `id` is decoded and cached, decoding from `image_src` on miss and
-    /// evicting least-recently-used entries to stay under the byte budget.
-    fn ensure_decoded(&mut self, id: &str) {
-        if self.decoded.contains_key(id) {
-            self.touch_decoded(id);
-            return;
+    /// Ensure `id` is decoded at a resolution sufficient for `need_w × need_h`
+    /// output pixels. For JPEG sources this picks the coarsest 1/N scale factor
+    /// that still exceeds the needed dimensions, saving significant decode time.
+    /// If a cached entry already has sufficient resolution it is reused as-is;
+    /// if it is too small (image used at larger size on a later spread) it is
+    /// evicted and re-decoded at the higher scale.
+    fn ensure_decoded_scaled(&mut self, id: &str, need_w: u32, need_h: u32) {
+        if let Some(cached) = self.decoded.get(id) {
+            if cached.img.width() >= need_w && cached.img.height() >= need_h {
+                self.touch_decoded(id);
+                return;
+            }
+            // Cached version too small — evict before re-decoding at higher res.
+            let sz = decoded_size_bytes(cached);
+            self.decoded_bytes = self.decoded_bytes.saturating_sub(sz);
+            self.decoded.remove(id);
+            if let Some(pos) = self.decoded_order.iter().position(|x| x == id) {
+                self.decoded_order.remove(pos);
+            }
         }
         let Some(bytes) = self.image_src.get(id) else { return; };
-        let Some(decoded) = decode_image_bytes(bytes) else { return; };
+        let decoded = jpeg_scaled_decode(bytes, need_w, need_h)
+            .or_else(|| decode_image_bytes(bytes));
+        let Some(decoded) = decoded else { return; };
         let sz = decoded_size_bytes(&decoded);
         self.decoded.insert(id.to_string(), decoded);
         self.decoded_order.push_back(id.to_string());
@@ -183,10 +231,10 @@ pub(crate) fn pdf_export_begin(
 }
 
 /// Phase 2 — render the next pending spread into the PDF.
-/// Call this `total` times (once per spread).
-pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookDocument) {
+/// Call this `total` times (once per spread). Returns per-phase timing data.
+pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookDocument) -> SpreadTimes {
     let i = state.next_spread;
-    if i >= state.total { return; }
+    if i >= state.total { return SpreadTimes::default(); }
 
     let spread   = &doc.spreads[i];
     let spread_w = doc.spread_width_mm(spread);
@@ -239,14 +287,30 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
         (*id, Rect::new(r.x + layout_offset_x, r.y, r.w, r.h))
     }).collect();
 
+    // Pre-pass: compute the minimum decoded resolution needed for each image on
+    // this spread so the JPEG scale-factor decode uses the right 1/N.
+    // Safety factor 1.5× covers cover-scale overflow and moderate rotation.
+    let mut image_need: HashMap<&str, (u32, u32)> = HashMap::new();
+    for (face_id, spread_rect) in &rooms_mm {
+        let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
+        let Some(face) = spread.layout.faces.get(face_id) else { continue };
+        if let Some(ref img_id) = face.image.image_id {
+            let fp = frame_page_rect(spread_rect, region.x);
+            let need_w = ((fp.w / 25.4 * state.print_dpi) * 1.5).ceil() as u32;
+            let need_h = ((fp.h / 25.4 * state.print_dpi) * 1.5).ceil() as u32;
+            let e = image_need.entry(img_id.as_str()).or_insert((0, 0));
+            e.0 = e.0.max(need_w);
+            e.1 = e.1.max(need_h);
+        }
+    }
+
     // Pass 1: prepare per-frame placement data and deduplicate crops.
     // Images are decoded on demand immediately before use so the LRU budget
-    // never evicts an image before it has been rendered (the pre-spread upfront
-    // decode loop was the cause: with N large images the first could be evicted
-    // by the time the render pass started).
+    // never evicts an image before it has been rendered.
     type CropKey = (String, u32, u32, u32, u32);
     let mut xobj_cache: HashMap<CropKey, XObjectRef> = HashMap::new();
     let mut pending: Vec<(Rect, f32, f32, Prepared)> = Vec::new();
+    let mut times = SpreadTimes::default();
 
     for (face_id, spread_rect) in &rooms_mm {
         let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
@@ -258,13 +322,18 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
         let frame_page       = frame_page_rect(spread_rect, region.x);
 
         if let Some(ref img_id) = face.image.image_id {
-            state.ensure_decoded(img_id);
+            let (need_w, need_h) = image_need.get(img_id.as_str()).copied().unwrap_or((0, 0));
+            let t = now_ms();
+            state.ensure_decoded_scaled(img_id, need_w, need_h);
+            times.decode_ms += now_ms() - t;
+
             if let Some(decoded_img) = state.decoded.get(img_id.as_str()) {
                 if let Some(prep) = prepare_image(
                     decoded_img, &frame_page, bleed, ph,
                     face.image.pan_x, face.image.pan_y,
                     face.image.scale, face.image.rotation_deg,
                     state.print_dpi,
+                    &mut times,
                 ) {
                     let key: CropKey = (
                         img_id.clone(),
@@ -276,6 +345,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
                     }).clone();
                     pending.push((frame_page, node_rotation, border_radius_mm,
                                   Prepared { xobj_ref: Some(xobj_ref), ..prep }));
+                    times.image_count += 1;
                 }
             }
         }
@@ -319,6 +389,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
     }
 
     state.next_spread += 1;
+    times
 }
 
 /// Phase 3 — serialize the finished PDF to bytes.
@@ -337,7 +408,7 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
         return Vec::new();
     };
     while state.next_spread < state.total {
-        pdf_export_spread_one(&mut state, doc);
+        let _ = pdf_export_spread_one(&mut state, doc);
     }
     pdf_export_finish(state)
 }
@@ -350,7 +421,57 @@ fn decode_image_bytes(bytes: &[u8]) -> Option<DecodedImage> {
     let format = image::guess_format(bytes).ok()?;
     let img = image::load_from_memory_with_format(bytes, format).ok()?;
     let is_jpeg = matches!(format, image::ImageFormat::Jpeg);
-    Some(DecodedImage { img, is_jpeg })
+    let (orig_w, orig_h) = (img.width(), img.height());
+    Some(DecodedImage { img, is_jpeg, orig_w, orig_h })
+}
+
+/// Attempt a scale-factor JPEG decode. Returns `None` for non-JPEG bytes,
+/// unreadable files, or when no scale reduction is useful (denom would be 1).
+fn jpeg_scaled_decode(bytes: &[u8], need_w: u32, need_h: u32) -> Option<DecodedImage> {
+    use jpeg_decoder::PixelFormat;
+
+    if image::guess_format(bytes).ok() != Some(image::ImageFormat::Jpeg) {
+        return None;
+    }
+
+    // Read just the JPEG header to get source dimensions.
+    let mut hdr = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
+    hdr.read_info().ok()?;
+    let info = hdr.info()?;
+    let (orig_w, orig_h) = (info.width as u32, info.height as u32);
+
+    // Pick the coarsest 1/N that still delivers >= need_w × need_h decoded pixels.
+    let denom = pick_scale_denom(orig_w, orig_h, need_w, need_h);
+    if denom == 1 { return None; } // no benefit — caller will do a full decode
+
+    let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
+    dec.scale(1u16, denom).ok()?;
+    let pixels = dec.decode().ok()?;
+    let scaled_info = dec.info()?;
+    let (sw, sh) = (scaled_info.width as u32, scaled_info.height as u32);
+
+    let img = match scaled_info.pixel_format {
+        PixelFormat::RGB24 => image::DynamicImage::ImageRgb8(
+            image::RgbImage::from_raw(sw, sh, pixels)?,
+        ),
+        PixelFormat::L8 => image::DynamicImage::ImageLuma8(
+            image::GrayImage::from_raw(sw, sh, pixels)?,
+        ),
+        _ => return None, // CMYK or other — caller falls back to full decode
+    };
+    Some(DecodedImage { img, is_jpeg: true, orig_w, orig_h })
+}
+
+/// Largest power-of-2 denominator such that `src / denom >= need` on both axes.
+fn pick_scale_denom(src_w: u32, src_h: u32, need_w: u32, need_h: u32) -> u16 {
+    let mut best = 1u16;
+    for d in [2u16, 4, 8] {
+        let d32 = d as u32;
+        if src_w / d32 >= need_w && src_h / d32 >= need_h {
+            best = d;
+        }
+    }
+    best
 }
 
 /// Approximate retained bytes for a decoded image (RGBA, 4 bytes/px).
@@ -500,14 +621,21 @@ fn prepare_image(
     user_scale: f32,
     rotation_deg: f32,
     print_dpi: f32,
+    times: &mut SpreadTimes,
 ) -> Option<Prepared> {
     let img_w = decoded.img.width();
     let img_h = decoded.img.height();
     if img_w == 0 || img_h == 0 { return None; }
 
+    // Use the original source dimensions for all physical-size and geometry
+    // computations. For a scale-factor JPEG decode orig_w/orig_h are larger
+    // than img_w/img_h; for a full decode they are equal.
+    let orig_w = decoded.orig_w;
+    let orig_h = decoded.orig_h;
+
     let dpi = 300.0_f32;
-    let nat_w_mm = img_w as f32 / dpi * 25.4;
-    let nat_h_mm = img_h as f32 / dpi * 25.4;
+    let nat_w_mm = orig_w as f32 / dpi * 25.4;
+    let nat_h_mm = orig_h as f32 / dpi * 25.4;
     if nat_w_mm <= 0.0 || nat_h_mm <= 0.0 { return None; }
 
     // 1–3. Cover scale, rotation compensation, and total scale via shared helper.
@@ -525,38 +653,54 @@ fn prepare_image(
     let y_img_center = frame_cy_pdf + (pan_y - 0.5) * overflow_y;
     let y_mm = y_img_center - sh / 2.0;
 
-    // 5. Compute the crop rectangle in image pixel space.
+    // 5. Compute the crop rectangle in original-image pixel coords.
     let crop = compute_crop(
         frame_rect, bleed, page_h_mm,
-        img_w, img_h, sw, sh, x_mm, y_mm, rotation_deg,
+        orig_w, orig_h, sw, sh, x_mm, y_mm, rotation_deg,
     );
 
-    // 6. Crop the image.
-    let cropped = decoded.img.crop_imm(crop.left, crop.top, crop.width, crop.height);
+    // 6. Map the original-coord crop into decoded-image pixel coords, then crop.
+    //    When scale_factor == 1 (full decode) these are identical.
+    let t = now_ms();
+    let sc_left   = (crop.left as u64 * img_w as u64 / orig_w as u64) as u32;
+    let sc_top    = (crop.top  as u64 * img_h as u64 / orig_h as u64) as u32;
+    let sc_right  = ((crop.left + crop.width)  as u64 * img_w as u64).div_ceil(orig_w as u64) as u32;
+    let sc_bottom = ((crop.top  + crop.height) as u64 * img_h as u64).div_ceil(orig_h as u64) as u32;
+    let sc_right  = sc_right.min(img_w);
+    let sc_bottom = sc_bottom.min(img_h);
+    let sc_w = sc_right.saturating_sub(sc_left).max(1);
+    let sc_h = sc_bottom.saturating_sub(sc_top).max(1);
+    let cropped = decoded.img.crop_imm(sc_left, sc_top, sc_w, sc_h);
+    times.crop_ms += now_ms() - t;
 
-    // 7. Resample to print_dpi (downsample only — never upsample source pixels).
-    //    rendered size of the crop in inches:
-    let crop_rendered_w_in = crop.width  as f32 * sw / (img_w as f32 * 25.4);
-    let crop_rendered_h_in = crop.height as f32 * sh / (img_h as f32 * 25.4);
-    let target_w = ((crop_rendered_w_in * print_dpi).round() as u32).clamp(1, crop.width);
-    let target_h = ((crop_rendered_h_in * print_dpi).round() as u32).clamp(1, crop.height);
-    let final_img = if target_w < crop.width || target_h < crop.height {
-        cropped.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3)
+    // 7. Resample to print_dpi — use original-coord crop extents for the size
+    //    calculation so the result is correct regardless of decode scale.
+    let crop_rendered_w_in = crop.width  as f32 * sw / (orig_w as f32 * 25.4);
+    let crop_rendered_h_in = crop.height as f32 * sh / (orig_h as f32 * 25.4);
+    let target_w = ((crop_rendered_w_in * print_dpi).round() as u32).clamp(1, sc_w);
+    let target_h = ((crop_rendered_h_in * print_dpi).round() as u32).clamp(1, sc_h);
+    let t = now_ms();
+    let final_img = if target_w < sc_w || target_h < sc_h {
+        cropped.resize_exact(target_w, target_h, image::imageops::FilterType::Triangle)
     } else {
         cropped
     };
+    times.resample_ms += now_ms() - t;
 
     // 8. Build ImageXObject (JPEG or FlateDecode depending on source format).
+    let t = now_ms();
     let xobj = image_to_xobject(&final_img, decoded.is_jpeg)?;
+    times.encode_ms += now_ms() - t;
 
-    // 9. Adjust placement.
-    let new_x_mm = x_mm + crop.left as f32 * sw / img_w as f32;
-    let new_y_mm = y_mm + (img_h - crop.top - crop.height) as f32 * sh / img_h as f32;
+    // 9. Adjust placement — all in original-coord space so scaling is transparent.
+    let new_x_mm = x_mm + crop.left as f32 * sw / orig_w as f32;
+    let new_y_mm = y_mm + (orig_h - crop.top - crop.height) as f32 * sh / orig_h as f32;
     let final_scale_x = crop.width  as f32 * total_scale / final_img.width()  as f32;
     let final_scale_y = crop.height as f32 * total_scale / final_img.height() as f32;
 
-    let rot_cx_px = (img_w / 2).saturating_sub(crop.left);
-    let rot_cy_px = (img_h / 2).saturating_sub(crop.top);
+    // Rotation centre in original-image pixel space (relative to crop origin).
+    let rot_cx_px = (orig_w / 2).saturating_sub(crop.left);
+    let rot_cy_px = (orig_h / 2).saturating_sub(crop.top);
     let rotate = if rotation_deg.abs() > 0.001 {
         Some(ImageRotation {
             angle_ccw_degrees: rotation_deg,

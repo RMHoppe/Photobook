@@ -190,7 +190,7 @@ impl PdfLayerReference {
         // add gs operator to stream
         page_mut.layers[self.layer.0]
             .operations
-            .push(lopdf::content::Operation::new(
+            .push(Operation::new(
                 "gs",
                 vec![lopdf::Object::Name(new_ref.gs_name.as_bytes().to_vec())],
             ));
@@ -211,7 +211,7 @@ impl PdfLayerReference {
         let new_ref = page_mut.add_graphics_state(new_overprint_state);
         page_mut.layers[self.layer.0]
             .operations
-            .push(lopdf::content::Operation::new(
+            .push(Operation::new(
                 "gs",
                 vec![lopdf::Object::Name(new_ref.gs_name.as_bytes().to_vec())],
             ));
@@ -233,7 +233,7 @@ impl PdfLayerReference {
 
         page_mut.layers[self.layer.0]
             .operations
-            .push(lopdf::content::Operation::new(
+            .push(Operation::new(
                 "gs",
                 vec![lopdf::Object::Name(new_ref.gs_name.as_bytes().to_vec())],
             ));
@@ -542,7 +542,7 @@ impl PdfLayerReference {
 
         page_mut.layers[self.layer.0]
             .operations
-            .push(lopdf::content::Operation::new(
+            .push(Operation::new(
                 "Do",
                 vec![lopdf::Object::Name(name.as_bytes().to_vec())],
             ));

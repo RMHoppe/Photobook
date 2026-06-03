@@ -685,6 +685,25 @@ export class ImageSidebar {
   }
 
   /**
+   * Registers an image File dragged from the OS directly onto the canvas.
+   * Populates all three caches (buffer, proxy, dims) so the image is
+   * immediately renderable and exportable, without adding a sidebar tile.
+   */
+  async registerExternalFile(id: string, file: File): Promise<void> {
+    const buf = await file.arrayBuffer();
+    this._buffers.set(id, buf);
+    this._sizes.set(id, buf.byteLength);
+    this._loadedIds.add(id);
+
+    const proxy = await this._decodeProxy(buf.slice(0), PROXY_MAX_PX);
+    this._proxies.set(id, proxy);
+
+    const bm = await createImageBitmap(new Blob([buf]));
+    this._dims.set(id, [bm.width, bm.height]);
+    bm.close();
+  }
+
+  /**
    * Removes all buffer-loaded images (added via loadImageFromBuffer).
    * Called before loading a new project so stale images from the previous
    * session don't remain in the sidebar.
@@ -706,21 +725,22 @@ export class ImageSidebar {
   }
 
   /**
-   * Async generator that yields buffer entries for every image in the sidebar.
-   * Files not yet read are fetched on demand. Suitable for PDF export.
+   * Async generator that yields buffer entries for the given set of image IDs.
+   * All files are fetched in parallel to minimise I/O wait. Suitable for PDF export.
    */
-  async *buffersForExport(): AsyncGenerator<ImageBufferEntry> {
-    const allIds = new Set([...this._handles.keys(), ...this._fallbackFiles.keys(), ...this._loadedIds]);
-    for (const id of allIds) {
-      const buf  = await this.getBuffer(id);
-      if (!buf) continue;
+  async *buffersForExport(usedIds: ReadonlySet<string>): AsyncGenerator<ImageBufferEntry> {
+    const allIds = [...new Set([...this._handles.keys(), ...this._fallbackFiles.keys(), ...this._loadedIds])];
+    const ids = allIds.filter(id => usedIds.has(id));
+
+    const results = await Promise.all(ids.map(async (id) => {
+      const buf = await this.getBuffer(id);
+      if (!buf) return null;
       const dims = await this.ensureDimensions(id);
-      yield {
-        id,
-        buffer:    buf,
-        width_px:  dims?.[0] ?? 0,
-        height_px: dims?.[1] ?? 0,
-      };
+      return { id, buffer: buf, width_px: dims?.[0] ?? 0, height_px: dims?.[1] ?? 0 };
+    }));
+
+    for (const entry of results) {
+      if (entry) yield entry;
     }
   }
 }

@@ -716,30 +716,43 @@ canvasEl.addEventListener('dragleave', () => {
   if (overlays.imageDropPreview !== null) { overlays.imageDropPreview = null; redraw(); }
 });
 
-canvasEl.addEventListener('drop', (e) => {
+canvasEl.addEventListener('drop', async (e) => {
   e.preventDefault();
-  const raw = e.dataTransfer!.getData('text/plain');
-  if (!raw) return;
 
   const dropPreview = overlays.imageDropPreview;
   overlays.imageDropPreview = null;
-
-  // Payload is always a JSON array of image IDs (one or more).
-  let imageIds: string[];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    imageIds = Array.isArray(parsed) ? (parsed as string[]) : [raw];
-  } catch {
-    imageIds = [raw];
-  }
 
   const layoutRect = renderer.lastLayoutRect;
   const canvasRect = canvasEl.getBoundingClientRect();
   const relX = (e.clientX - canvasRect.left) - layoutRect.x;
   const relY = (e.clientY - canvasRect.top)  - layoutRect.y;
-
   const hitId = editor.hit_test(relX, relY, layoutRect.w, layoutRect.h);
   if (hitId === NULL_ID) return;
+
+  // Determine the image IDs from either a sidebar drag or an OS file drop.
+  let imageIds: string[];
+  const raw = e.dataTransfer!.getData('text/plain');
+  if (raw) {
+    // Sidebar drag: payload is a JSON array of image IDs.
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      imageIds = Array.isArray(parsed) ? (parsed as string[]) : [raw];
+    } catch {
+      imageIds = [raw];
+    }
+  } else {
+    // External OS drag: register each dropped image file into the sidebar caches.
+    const files = Array.from(e.dataTransfer!.files).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    imageIds = [];
+    for (const file of files) {
+      const id = `external/${file.name}`;
+      await sidebar.registerExternalFile(id, file);
+      const proxy = sidebar.getProxy(id);
+      if (proxy) renderer.cacheImage(id, proxy);
+      imageIds.push(id);
+    }
+  }
 
   undoManager.snapshot();
 
@@ -1091,7 +1104,7 @@ document.getElementById('btn-cut-tool')!.addEventListener('click', () => {
 });
 
 document.getElementById('btn-export-pdf')!.addEventListener('click', () => {
-  exportPdf(editor, () => sidebar.buffersForExport());
+  exportPdf(editor, (usedIds) => sidebar.buffersForExport(usedIds));
 });
 
 
