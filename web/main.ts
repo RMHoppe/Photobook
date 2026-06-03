@@ -25,7 +25,41 @@ import { showToast } from './toast.js';
 // Init
 // ---------------------------------------------------------------------------
 
-await init();
+const _wasmLoadingOverlay = document.getElementById('wasm-loading') as HTMLElement;
+const _wasmLoadingBar = document.getElementById('wasm-loading-bar') as HTMLElement;
+const _wasmLoadingPct = document.getElementById('wasm-loading-pct') as HTMLElement;
+
+function _setWasmProgress(pct: number): void {
+  _wasmLoadingBar.style.width = pct + '%';
+  _wasmLoadingPct.textContent = Math.round(pct) + '%';
+}
+
+{
+  const wasmUrl = new URL('./pkg/photobook_core_bg.wasm', import.meta.url);
+  const res = await fetch(wasmUrl);
+  const total = parseInt(res.headers.get('content-length') ?? '0', 10);
+  let loaded = 0;
+
+  const tracked = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const reader = res.body!.getReader();
+      function pump(): void {
+        reader.read().then(({ done, value }) => {
+          if (done) { controller.close(); return; }
+          loaded += value.byteLength;
+          if (total > 0) _setWasmProgress((loaded / total) * 100);
+          controller.enqueue(value);
+          pump();
+        }).catch((err: unknown) => controller.error(err));
+      }
+      pump();
+    }
+  });
+
+  await init(new Response(tracked, { headers: res.headers }));
+}
+
+_wasmLoadingOverlay.remove();
 init_panic_hook();
 
 // Global error boundary — surface uncaught errors/rejections as a toast instead

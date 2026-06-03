@@ -11,6 +11,17 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="wasm-loading" class="wasm-loading-overlay">
+    <div class="wasm-loading-card">
+      <div class="wasm-loading-title">Photobook</div>
+      <div class="wasm-loading-label">Loading editor…</div>
+      <div class="wasm-loading-track">
+        <div id="wasm-loading-bar" class="wasm-loading-bar"></div>
+      </div>
+      <div id="wasm-loading-pct" class="wasm-loading-pct">0%</div>
+    </div>
+  </div>
+
   <div id="mobile-landing">
     <div class="mobile-card">
       <i class="fa-solid fa-desktop mobile-hero-icon" aria-hidden="true"></i>
