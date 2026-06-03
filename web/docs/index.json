@@ -1,10 +1,14 @@
 [
-  { "title": "Getting Started",   "file": "getting-started.md" },
-  { "title": "Working with Images", "file": "images.md" },
-  { "title": "Adjusting Images",   "file": "image-adjustments.md" },
-  { "title": "Text Elements",     "file": "text-elements.md" },
-  { "title": "Spreads & Pages",   "file": "spreads.md" },
-  { "title": "Exporting to PDF",  "file": "export-pdf.md" },
-  { "title": "Keyboard Shortcuts","file": "shortcuts.md" },
-  { "title": "Glossary",          "file": "glossary.md" }
+  { "title": "Getting Started",           "file": "getting-started.md" },
+  { "title": "Spreads & Pages",           "file": "spreads.md" },
+  { "title": "Frames & Layout",           "file": "layout.md" },
+  { "title": "Working with Images",       "file": "images.md" },
+  { "title": "Adjusting Images",          "file": "image-adjustments.md" },
+  { "title": "Frame Styling",             "file": "frame-properties.md" },
+  { "title": "Text Elements",             "file": "text-elements.md" },
+  { "title": "Canvas Navigation",         "file": "canvas-navigation.md" },
+  { "title": "Project Settings & Saving", "file": "project.md" },
+  { "title": "Exporting to PDF",          "file": "export-pdf.md" },
+  { "title": "Keyboard Shortcuts",        "file": "shortcuts.md" },
+  { "title": "Glossary",                  "file": "glossary.md" }
 ]
