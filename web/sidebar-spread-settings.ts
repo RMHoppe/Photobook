@@ -2,7 +2,7 @@
 
 import type { SpreadSettingsData } from './types.js';
 import { debounce } from './utils.js';
-import { numField, colorField, bindInputs } from './ui-fields.js';
+import { numField, colorField, bindInputs, setNumField, readNumField } from './ui-fields.js';
 import { MarginModeController, marginSectionHtml, type MarginMode, detectMarginMode } from './margin-mode-controller.js';
 
 const SPREAD_MARGIN_DEFAULT_MM = 10;
@@ -98,17 +98,7 @@ export class SpreadSettingsPanel {
   }
 
   private _setNum(name: string, value: number | null): void {
-    const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-    if (!el) return;
-    if (value === null) {
-      el.value = '';
-      el.placeholder = 'Mixed';
-      (el.dataset as DOMStringMap).mixed = '1';
-    } else {
-      delete (el.dataset as DOMStringMap).mixed;
-      el.placeholder = '';
-      el.value = value.toFixed(2);
-    }
+    setNumField(this.containerEl, name, value);
   }
 
   private _setColor(name: string, value: string): void {
@@ -144,12 +134,7 @@ export class SpreadSettingsPanel {
   }
 
   private _readCurrentMargins(): { top: number | null; right: number | null; bottom: number | null; left: number | null } {
-    const g = (name: string): number | null => {
-      const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-      if (!el || el.dataset.mixed) return null;
-      const v = parseFloat(el.value);
-      return isNaN(v) ? null : v;
-    };
+    const g = (name: string) => readNumField(this.containerEl, name);
     if (this._marginCtrl.mode === 'all') {
       const v = g('margin-all');
       return { top: v, right: v, bottom: v, left: v };

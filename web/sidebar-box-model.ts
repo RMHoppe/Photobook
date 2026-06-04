@@ -9,7 +9,7 @@
 
 import type { BoxModel } from './types.js';
 import { debounce } from './utils.js';
-import { numFieldWithDice, colorField, selectField, bindInputs } from './ui-fields.js';
+import { numFieldWithDice, colorField, selectField, bindInputs, setNumField, readNumField } from './ui-fields.js';
 import { MarginModeController, marginSectionHtml, type MarginMode, type Sides, type SideLabels, detectMarginMode } from './margin-mode-controller.js';
 
 export type LayoutTransform = 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw';
@@ -32,6 +32,11 @@ export class BoxModelEditor {
   private _marginCtrl!: MarginModeController;
   private _borderWidthCtrl!: MarginModeController;
   private _radiusCtrl!: MarginModeController;
+  private readonly _groups = [
+    { group: 'margin', ctrl: () => this._marginCtrl,      ns: 'margin', def: MARGIN_DEFAULT_MM },
+    { group: 'border', ctrl: () => this._borderWidthCtrl, ns: 'bw',     def: BORDER_DEFAULT_MM },
+    { group: 'radius', ctrl: () => this._radiusCtrl,      ns: 'radius', def: RADIUS_DEFAULT_MM },
+  ];
 
   constructor(
     containerEl: HTMLElement,
@@ -161,65 +166,29 @@ export class BoxModelEditor {
     }
   }
 
-  /** Like _set but treats null/undefined as the mixed sentinel (for fields that can be negative). */
-  private _setOffset(name: string, value: unknown): void {
-    const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-    if (!el) return;
-    delete el.dataset.mixed;
-    if (value == null) {
-      el.value = '';
-      el.placeholder = 'Mixed';
-      el.dataset.mixed = '1';
-    } else {
-      el.value = typeof value === 'number' ? value.toFixed(2) : String(value);
-      el.placeholder = '';
-    }
+  private _setOffset(name: string, value: number | null | undefined): void {
+    setNumField(this.containerEl, name, value);
   }
 
   // -------------------------------------------------------------------------
-  // Section enable toggles (border, corner radius)
+  // Section enable toggles
   // -------------------------------------------------------------------------
 
   private _onEnableToggle(group: string, enabled: boolean): void {
-    if (group === 'margin') {
-      if (enabled) {
-        const cur = this._readCurrentSides(this._marginCtrl, 'margin');
-        const allZero = (['top', 'right', 'bottom', 'left'] as const)
-          .every(k => cur[k] !== null && (cur[k] as number) <= 0);
-        if (allZero) {
-          this._marginCtrl.setMode('all');
-          this._setOffset('margin-all', MARGIN_DEFAULT_MM);
-        }
-      } else {
-        this._marginCtrl.setMode('all');
-        this._setOffset('margin-all', 0);
+    const g = this._groups.find(g => g.group === group);
+    if (!g) return;
+    const ctrl = g.ctrl();
+    if (enabled) {
+      const cur = this._readCurrentSides(ctrl, g.ns);
+      const allZero = (['top', 'right', 'bottom', 'left'] as const)
+        .every(k => cur[k] !== null && (cur[k] as number) <= 0);
+      if (allZero) {
+        ctrl.setMode('all');
+        this._setOffset(`${g.ns}-all`, g.def);
       }
-    } else if (group === 'border') {
-      if (enabled) {
-        const cur = this._readCurrentSides(this._borderWidthCtrl, 'bw');
-        const allZero = (['top', 'right', 'bottom', 'left'] as const)
-          .every(k => cur[k] !== null && (cur[k] as number) <= 0);
-        if (allZero) {
-          this._borderWidthCtrl.setMode('all');
-          this._setOffset('bw-all', BORDER_DEFAULT_MM);
-        }
-      } else {
-        this._borderWidthCtrl.setMode('all');
-        this._setOffset('bw-all', 0);
-      }
-    } else if (group === 'radius') {
-      if (enabled) {
-        const cur = this._readCurrentSides(this._radiusCtrl, 'radius');
-        const allZero = (['top', 'right', 'bottom', 'left'] as const)
-          .every(k => cur[k] !== null && (cur[k] as number) <= 0);
-        if (allZero) {
-          this._radiusCtrl.setMode('all');
-          this._setOffset('radius-all', RADIUS_DEFAULT_MM);
-        }
-      } else {
-        this._radiusCtrl.setMode('all');
-        this._setOffset('radius-all', 0);
-      }
+    } else {
+      ctrl.setMode('all');
+      this._setOffset(`${g.ns}-all`, 0);
     }
     this._applyEnableVisibility();
     this._emit();
@@ -228,18 +197,12 @@ export class BoxModelEditor {
   /** Derive each toggleable section's enabled state from its current values and
    *  reflect it in the checkbox + body visibility. */
   private _applyEnableVisibility(): void {
-    const marginCur = this._readCurrentSides(this._marginCtrl, 'margin');
-    const marginOn = (['top', 'right', 'bottom', 'left'] as const)
-      .some(k => marginCur[k] === null || (marginCur[k] as number) > 0);
-    const bwCur = this._readCurrentSides(this._borderWidthCtrl, 'bw');
-    const borderOn = (['top', 'right', 'bottom', 'left'] as const)
-      .some(k => bwCur[k] === null || (bwCur[k] as number) > 0);
-    const radCur = this._readCurrentSides(this._radiusCtrl, 'radius');
-    const radiusOn = (['top', 'right', 'bottom', 'left'] as const)
-      .some(k => radCur[k] === null || (radCur[k] as number) > 0);
-    this._setSectionEnabled('margin', marginOn);
-    this._setSectionEnabled('border', borderOn);
-    this._setSectionEnabled('radius', radiusOn);
+    for (const { group, ctrl, ns } of this._groups) {
+      const cur = this._readCurrentSides(ctrl(), ns);
+      const on = (['top', 'right', 'bottom', 'left'] as const)
+        .some(k => cur[k] === null || (cur[k] as number) > 0);
+      this._setSectionEnabled(group, on);
+    }
   }
 
   private _setSectionEnabled(group: string, enabled: boolean): void {
@@ -392,10 +355,7 @@ export class BoxModelEditor {
   }
 
   private _gOffset(name: string): number | null {
-    const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-    if (!el || el.dataset.mixed) return null;
-    const v = parseFloat(el.value);
-    return isNaN(v) ? 0 : v;
+    return readNumField(this.containerEl, name);
   }
 
   // ---------------------------------------------------------------------------
