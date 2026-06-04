@@ -418,6 +418,7 @@ button.active { background: var(--accent); border-color: var(--accent); }
 .margin-mode-btn.active { background: #505050; color: var(--text); border-color: #606060; }
 .margin-pane { display: none; }
 .margin-pane.active { display: block; }
+.bm-enable-body > .margin-mode-bar { margin-bottom: 6px; }
 .ps-toggle-row { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; user-select: none; }
 
 .bm-grid {

@@ -16,6 +16,7 @@ export type LayoutTransform = 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw';
 
 // Defaults applied when a toggleable section is first enabled, so the effect is
 // immediately visible instead of a no-op zero.
+const MARGIN_DEFAULT_MM = 10;
 const BORDER_DEFAULT_MM = 5;
 const RADIUS_DEFAULT_MM = 10;
 
@@ -180,7 +181,20 @@ export class BoxModelEditor {
   // -------------------------------------------------------------------------
 
   private _onEnableToggle(group: string, enabled: boolean): void {
-    if (group === 'border') {
+    if (group === 'margin') {
+      if (enabled) {
+        const cur = this._readCurrentSides(this._marginCtrl, 'margin');
+        const allZero = (['top', 'right', 'bottom', 'left'] as const)
+          .every(k => cur[k] !== null && (cur[k] as number) <= 0);
+        if (allZero) {
+          this._marginCtrl.setMode('all');
+          this._setOffset('margin-all', MARGIN_DEFAULT_MM);
+        }
+      } else {
+        this._marginCtrl.setMode('all');
+        this._setOffset('margin-all', 0);
+      }
+    } else if (group === 'border') {
       if (enabled) {
         const cur = this._readCurrentSides(this._borderWidthCtrl, 'bw');
         const allZero = (['top', 'right', 'bottom', 'left'] as const)
@@ -214,12 +228,16 @@ export class BoxModelEditor {
   /** Derive each toggleable section's enabled state from its current values and
    *  reflect it in the checkbox + body visibility. */
   private _applyEnableVisibility(): void {
+    const marginCur = this._readCurrentSides(this._marginCtrl, 'margin');
+    const marginOn = (['top', 'right', 'bottom', 'left'] as const)
+      .some(k => marginCur[k] === null || (marginCur[k] as number) > 0);
     const bwCur = this._readCurrentSides(this._borderWidthCtrl, 'bw');
     const borderOn = (['top', 'right', 'bottom', 'left'] as const)
       .some(k => bwCur[k] === null || (bwCur[k] as number) > 0);
     const radCur = this._readCurrentSides(this._radiusCtrl, 'radius');
     const radiusOn = (['top', 'right', 'bottom', 'left'] as const)
       .some(k => radCur[k] === null || (radCur[k] as number) > 0);
+    this._setSectionEnabled('margin', marginOn);
     this._setSectionEnabled('border', borderOn);
     this._setSectionEnabled('radius', radiusOn);
   }
@@ -237,7 +255,7 @@ export class BoxModelEditor {
     this._built = true;
     this.containerEl.dataset.panel = 'boxmodel';
     this.containerEl.innerHTML = `
-      ${marginSectionHtml('Margin (mm)', (name, label) => numFieldWithDice(name, label, { min: null }))}
+      ${marginSectionHtml('Margin (mm)', (name, label) => numFieldWithDice(name, label, { min: null }), 'margin', undefined, 'margin')}
       <div class="bm-section" data-section="border">
         <div class="bm-section-header">
           <h4>Border</h4>
