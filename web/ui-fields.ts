@@ -36,6 +36,29 @@ export function colorField(name: string, label: string): string {
   return wrapField(label, `<input type="color" data-field="${name}" value="#000000" />`);
 }
 
+/** Write a numeric value into a [data-field] input. null/undefined → Mixed placeholder. */
+export function setNumField(container: HTMLElement, name: string, value: number | null | undefined): void {
+  const el = container.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
+  if (!el) return;
+  delete el.dataset.mixed;
+  if (value == null) {
+    el.value = '';
+    el.placeholder = 'Mixed';
+    el.dataset.mixed = '1';
+  } else {
+    el.value = value.toFixed(2);
+    el.placeholder = '';
+  }
+}
+
+/** Read a numeric value from a [data-field] input. Returns null if mixed; 0 if empty (not mixed). */
+export function readNumField(container: HTMLElement, name: string): number | null {
+  const el = container.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
+  if (!el || el.dataset.mixed) return null;
+  const v = parseFloat(el.value);
+  return isNaN(v) ? 0 : v;
+}
+
 export function bindInputs(container: HTMLElement, handler: () => void, selector = 'input, select'): void {
   container.querySelectorAll<HTMLElement>(selector).forEach(el => {
     const onInput = () => { delete el.dataset.mixed; handler(); };

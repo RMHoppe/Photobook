@@ -2,8 +2,10 @@
 
 import type { SpreadSettingsData } from './types.js';
 import { debounce } from './utils.js';
-import { numField, colorField, bindInputs } from './ui-fields.js';
+import { numField, colorField, bindInputs, setNumField, readNumField } from './ui-fields.js';
 import { MarginModeController, marginSectionHtml, type MarginMode, detectMarginMode } from './margin-mode-controller.js';
+
+const SPREAD_MARGIN_DEFAULT_MM = 10;
 export type { SpreadSettingsData };
 
 export class SpreadSettingsPanel {
@@ -27,7 +29,7 @@ export class SpreadSettingsPanel {
   private _build(): void {
     this._built = true;
     this.containerEl.innerHTML = `
-      ${marginSectionHtml('Spread margin (mm)', (name, label) => numField(name, label))}
+      ${marginSectionHtml('Spread margin (mm)', (name, label) => numField(name, label), 'margin', undefined, 'spread-margin')}
       <div class="bm-section">
         <h4>Page backgrounds</h4>
         <div class="bm-grid">
@@ -38,6 +40,10 @@ export class SpreadSettingsPanel {
     `;
 
     bindInputs(this.containerEl, () => this._emit(), 'input');
+
+    this.containerEl.querySelectorAll<HTMLInputElement>('[data-enable]').forEach(cb => {
+      cb.addEventListener('change', () => this._onEnableToggle(cb.checked));
+    });
 
     this._marginCtrl = new MarginModeController(this.containerEl);
     this._marginCtrl.bindButtons(mode => this._setMarginMode(mode));
@@ -60,20 +66,39 @@ export class SpreadSettingsPanel {
     }
     this._setColor('left-bg',  data.left_bg  || '#ffffff');
     this._setColor('right-bg', data.right_bg || '#ffffff');
+    this._applyEnableVisibility();
+  }
+
+  private _onEnableToggle(enabled: boolean): void {
+    if (enabled) {
+      const m = this._readCurrentMargins();
+      const allZero = (['top', 'right', 'bottom', 'left'] as const)
+        .every(k => (m[k] ?? 0) <= 0);
+      if (allZero) {
+        this._marginCtrl.setMode('all');
+        this._setNum('margin-all', SPREAD_MARGIN_DEFAULT_MM);
+      }
+    } else {
+      this._marginCtrl.setMode('all');
+      this._setNum('margin-all', 0);
+    }
+    this._applyEnableVisibility();
+    this._emit();
+  }
+
+  private _applyEnableVisibility(): void {
+    const m = this._readCurrentMargins();
+    const marginsOn = (['top', 'right', 'bottom', 'left'] as const)
+      .some(k => (m[k] ?? 0) > 0);
+    const section = this.containerEl.querySelector<HTMLElement>('[data-section="spread-margin"]');
+    const cb = section?.querySelector<HTMLInputElement>('[data-enable="spread-margin"]');
+    const body = section?.querySelector<HTMLElement>('.bm-enable-body');
+    if (cb) cb.checked = marginsOn;
+    if (body) body.hidden = !marginsOn;
   }
 
   private _setNum(name: string, value: number | null): void {
-    const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-    if (!el) return;
-    if (value === null) {
-      el.value = '';
-      el.placeholder = 'Mixed';
-      (el.dataset as DOMStringMap).mixed = '1';
-    } else {
-      delete (el.dataset as DOMStringMap).mixed;
-      el.placeholder = '';
-      el.value = value.toFixed(2);
-    }
+    setNumField(this.containerEl, name, value);
   }
 
   private _setColor(name: string, value: string): void {
@@ -109,12 +134,7 @@ export class SpreadSettingsPanel {
   }
 
   private _readCurrentMargins(): { top: number | null; right: number | null; bottom: number | null; left: number | null } {
-    const g = (name: string): number | null => {
-      const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-      if (!el || el.dataset.mixed) return null;
-      const v = parseFloat(el.value);
-      return isNaN(v) ? null : v;
-    };
+    const g = (name: string) => readNumField(this.containerEl, name);
     if (this._marginCtrl.mode === 'all') {
       const v = g('margin-all');
       return { top: v, right: v, bottom: v, left: v };

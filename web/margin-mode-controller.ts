@@ -57,22 +57,20 @@ export function marginSectionHtml(
   fieldFn: (name: string, label: string) => string,
   ns = 'margin',
   labels?: SideLabels,
+  enableKey?: string,
 ): string {
   const L = {
     all: 'All', v: 'Vertical', h: 'Horizontal',
     top: 'Top', right: 'Right', bottom: 'Bottom', left: 'Left',
     ...(labels ?? {}),
   };
-  return `
-      <div class="bm-section">
-        <div class="bm-section-header">
-          <h4>${title}</h4>
-          <div class="margin-mode-bar">
-            <button class="margin-mode-btn" data-${ns}-mode="all"  title="All equal"><i class="fa-regular fa-square"></i></button>
-            <button class="margin-mode-btn" data-${ns}-mode="xy"   title="Paired"><i class="fa-solid fa-border-top-left"></i></button>
-            <button class="margin-mode-btn" data-${ns}-mode="each" title="Each individually"><i class="fa-solid fa-border-none"></i></button>
-          </div>
-        </div>
+  const modebar = `
+            <div class="margin-mode-bar">
+              <button class="margin-mode-btn" data-${ns}-mode="all"  title="All equal"><i class="fa-regular fa-square"></i></button>
+              <button class="margin-mode-btn" data-${ns}-mode="xy"   title="Paired"><i class="fa-solid fa-border-top-left"></i></button>
+              <button class="margin-mode-btn" data-${ns}-mode="each" title="Each individually"><i class="fa-solid fa-border-none"></i></button>
+            </div>`;
+  const panes = `
         <div class="margin-pane" data-${ns}-pane="all">
           <div class="bm-grid">${fieldFn(`${ns}-all`, L.all)}</div>
         </div>
@@ -89,6 +87,28 @@ export function marginSectionHtml(
             ${fieldFn(`${ns}-bottom`, L.bottom)}
             ${fieldFn(`${ns}-left`,   L.left)}
           </div>
+        </div>`;
+
+  if (enableKey) {
+    return `
+      <div class="bm-section" data-section="${enableKey}">
+        <div class="bm-section-header">
+          <h4>${title}</h4>
+          <label class="bm-switch"><input type="checkbox" data-enable="${enableKey}" /><span class="bm-switch-track"></span></label>
         </div>
+        <div class="bm-enable-body">
+          ${modebar}
+          ${panes}
+        </div>
+      </div>`;
+  }
+
+  return `
+      <div class="bm-section">
+        <div class="bm-section-header">
+          <h4>${title}</h4>
+          ${modebar}
+        </div>
+        ${panes}
       </div>`;
 }
