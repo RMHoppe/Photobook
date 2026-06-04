@@ -32,21 +32,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .app-title { font-weight: 600; font-size: 15px; color: var(--text); margin-right: 8px; }
 .toolbar-actions { display: flex; gap: 6px; align-items: center; }
 
-.export-progress {
-  width: 80px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-.export-progress-bar {
-  width: 0%;
-  height: 100%;
-  background: var(--accent);
-  border-radius: 3px;
-  transition: width 0.15s ease-out;
-}
+/* Shared progress track/fill pattern (export + wasm loader) */
+.export-progress,
+.wasm-loading-track { background: var(--border); overflow: hidden; }
+.export-progress-bar,
+.wasm-loading-bar   { width: 0%; height: 100%; background: var(--accent); }
+
+.export-progress     { width: 80px; height: 6px; border-radius: 3px; flex-shrink: 0; }
+.export-progress-bar { border-radius: 3px; transition: width 0.15s ease-out; }
 .toolbar-right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .icon-btn { padding: 4px 8px; font-size: 15px; line-height: 1; }
 
@@ -174,7 +167,7 @@ aside {
 .spread-count-label {
   text-align: center;
   font-size: 10px;
-  color: var(--text-muted, #888);
+  color: var(--text-muted);
   margin-top: 1px;
 }
 
@@ -205,7 +198,6 @@ button.active { background: var(--accent); border-color: var(--accent); }
   text-align: center;
   pointer-events: none;
 }
-#sidebar-empty-state.hidden { display: none; }
 #sidebar-empty-state i { font-size: 32px; opacity: 0.35; }
 #sidebar-empty-state p { margin: 0; font-size: 12px; line-height: 1.4; }
 #sidebar-empty-state strong { color: var(--text); font-weight: 600; }
@@ -485,24 +477,27 @@ button.active { background: var(--accent); border-color: var(--accent); }
 }
 .bm-apply-row .bm-field { flex: 1; }
 
-/* Apply-to-children button */
-.bm-apply-btn {
-  flex-shrink: 0;
-  width: 22px;
+/* Shared base for small icon buttons */
+.bm-apply-btn,
+.bm-order-btn,
+.bm-layout-btn {
   height: 22px;
   padding: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 3px;
   color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.bm-apply-btn:hover { border-color: var(--accent); color: var(--accent); }
+.bm-apply-btn:hover,
+.bm-order-btn:hover,
+.bm-layout-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Apply-to-children button */
+.bm-apply-btn { flex-shrink: 0; width: 22px; font-size: 12px; line-height: 1; }
 
 /* Input row wrapper — used when an extra button sits beside the input */
 .bm-input-row {
@@ -650,25 +645,12 @@ button.active { background: var(--accent); border-color: var(--accent); }
   align-items: center;
   gap: 6px;
 }
-.bm-order-btns {
+.bm-order-btns,
+.bm-layout-btns {
   display: flex;
   gap: 3px;
 }
-.bm-order-btn {
-  width: 26px;
-  height: 22px;
-  padding: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text-muted);
-  font-size: 13px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.bm-order-btn:hover { border-color: var(--accent); color: var(--accent); }
+.bm-order-btn { width: 26px; font-size: 13px; }
 .bm-z-label {
   font-size: 11px;
   color: var(--text-muted);
@@ -676,25 +658,7 @@ button.active { background: var(--accent); border-color: var(--accent); }
 
 /* Layout transform buttons (flip / rotate selection) */
 .bm-layout-transform { margin-top: 6px; }
-.bm-layout-btns {
-  display: flex;
-  gap: 3px;
-}
-.bm-layout-btn {
-  flex: 1;
-  height: 22px;
-  padding: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text-muted);
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.bm-layout-btn:hover { border-color: var(--accent); color: var(--accent); }
+.bm-layout-btn { flex: 1; font-size: 14px; }
 
 /* ---- Spread reorder drop indicator ---- */
 .spread-drop-indicator {
@@ -760,30 +724,47 @@ button.active { background: var(--accent); border-color: var(--accent); }
   text-align: center;
 }
 
-/* ---- Project settings modal ---- */
-.ps-modal {
+/* ---- Shared modal chrome ---- */
+.ps-modal,
+.ilm-dialog,
+.confirm-dialog,
+#settings-modal,
+.docs-modal {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0;
-  width: min(400px, 92vw);
-  max-height: min(600px, 88vh);
   box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-  overflow: hidden;
+}
+.ps-modal,
+.ilm-dialog,
+.confirm-dialog,
+.docs-modal {
   position: fixed;
   top: 50%;
   left: 50%;
   translate: -50% -50%;
 }
-.ps-modal[open] {
+.ps-modal[open],
+.ilm-dialog[open] {
   display: flex;
   flex-direction: column;
 }
-.ps-modal::backdrop {
-  background: rgba(0,0,0,0.5);
+.ps-modal::backdrop,
+.ilm-dialog::backdrop,
+.confirm-dialog::backdrop,
+#settings-modal::backdrop,
+.docs-modal::backdrop { background: rgba(0,0,0,0.5); }
+
+/* ---- Project settings modal ---- */
+.ps-modal {
+  padding: 0;
+  width: min(400px, 92vw);
+  max-height: min(600px, 88vh);
+  overflow: hidden;
 }
-.ps-modal-header {
+.ps-modal-header,
+.ilm-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -791,10 +772,10 @@ button.active { background: var(--accent); border-color: var(--accent); }
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.ps-modal-header h2 {
+.ps-modal-header h2,
+.ilm-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text);
   margin: 0;
 }
 .ps-modal-content {
@@ -806,46 +787,22 @@ button.active { background: var(--accent); border-color: var(--accent); }
 
 /* ---- Image-loader modal ---- */
 .ilm-dialog {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 0;
   width: min(480px, 92vw);
   max-height: min(560px, 88vh);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
   overflow: hidden;
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  translate: -50% -50%;
 }
-.ilm-dialog[open] {
-  display: flex;
-  flex-direction: column;
-}
-.ilm-dialog::backdrop { background: rgba(0,0,0,0.55); }
 
 /* ---- Delete-spread confirmation dialog ---- */
 .confirm-dialog {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 20px 20px 16px;
   width: min(300px, 92vw);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  translate: -50% -50%;
 }
 .confirm-dialog p {
   margin: 0 0 16px;
   font-size: 13px;
   line-height: 1.5;
 }
-.confirm-dialog::backdrop { background: rgba(0,0,0,0.5); }
 .confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -873,19 +830,6 @@ button.active { background: var(--accent); border-color: var(--accent); }
 }
 .save-name-row input[type="text"]:focus { outline: none; border-color: var(--accent); }
 .save-name-ext { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
-.ilm-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px 10px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.ilm-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin: 0;
-}
 .ilm-status {
   padding: 10px 16px 6px;
   font-size: 12px;
@@ -948,16 +892,8 @@ button.active { background: var(--accent); border-color: var(--accent); }
 
 /* ---- Settings modal ---- */
 #settings-modal {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 24px;
   min-width: 300px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-}
-#settings-modal::backdrop {
-  background: rgba(0,0,0,0.5);
 }
 #settings-modal h2 {
   font-size: 15px;
@@ -1100,22 +1036,11 @@ button.primary:hover { background: #5a9fe8; }
 
 /* ---- Docs modal ---- */
 .docs-modal {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
   padding: 0;
   width: min(960px, 92vw);
   height: min(680px, 88vh);
   box-shadow: 0 12px 48px rgba(0,0,0,0.7);
   overflow: hidden;
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  translate: -50% -50%;
-}
-.docs-modal::backdrop {
-  background: rgba(0,0,0,0.55);
 }
 .docs-modal-inner {
   display: flex;
@@ -1199,13 +1124,8 @@ button.primary:hover { background: #5a9fe8; }
   width: 100%;
   height: 4px;
   border-radius: 2px;
-  background: var(--border);
-  overflow: hidden;
 }
 .wasm-loading-bar {
-  width: 0%;
-  height: 100%;
-  background: var(--accent);
   border-radius: 2px;
   transition: width 0.1s ease-out;
 }
@@ -1323,17 +1243,22 @@ button.primary:hover { background: #5a9fe8; }
 }
 .docs-close:hover { color: var(--text); background: var(--border); }
 
-/* ---- Missing-images banner ---- */
-.missing-images-banner {
+/* ---- Shared banner base ---- */
+.missing-images-banner,
+.font-toast {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* ---- Missing-images banner ---- */
+.missing-images-banner {
   background: #3a2800;
   border-bottom: 1px solid #7a5000;
   color: #f0c060;
-  font-size: 12px;
-  flex-shrink: 0;
 }
 .missing-images-banner button:not(.banner-dismiss) {
   font-size: 11px;
@@ -1349,15 +1274,9 @@ button.primary:hover { background: #5a9fe8; }
 
 /* ---- Font toast ---- */
 .font-toast {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
   background: #1e2e3a;
   border-bottom: 1px solid #2e5070;
   color: #80c8f0;
-  font-size: 12px;
-  flex-shrink: 0;
 }
 
 /* ---- Shared banner dismiss button ---- */
