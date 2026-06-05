@@ -10,7 +10,7 @@
 import type { BoxModel } from './types.js';
 import { debounce } from './utils.js';
 import { numFieldWithDice, colorField, selectField, bindInputs, setNumField, readNumField } from './ui-fields.js';
-import { MarginModeController, marginSectionHtml, type MarginMode, type Sides, type SideLabels, detectMarginMode } from './margin-mode-controller.js';
+import { MarginModeController, marginSectionHtml, type MarginMode, type Sides, type SideLabels, detectSidesMode } from './margin-mode-controller.js';
 
 export type LayoutTransform = 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw';
 
@@ -363,7 +363,7 @@ export class BoxModelEditor {
   // ---------------------------------------------------------------------------
 
   private _updateSidesUI(ctrl: MarginModeController, ns: string, m: Sides): void {
-    ctrl.setMode(detectMarginMode(m));
+    ctrl.setMode(detectSidesMode(m));
     if (ctrl.mode === 'all') {
       this._setOffset(`${ns}-all`, m.top);
     } else if (ctrl.mode === 'xy') {
