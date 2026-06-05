@@ -283,9 +283,13 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
         spread.margin_top, spread.margin_right,
         spread.margin_bottom, spread.margin_left,
     );
-    let rooms_mm: Vec<_> = rooms_mm_raw.iter().map(|(id, r)| {
+    // Sort by z_index so lower-z frames are painted first.
+    let mut rooms_mm: Vec<_> = rooms_mm_raw.iter().map(|(id, r)| {
         (*id, Rect::new(r.x + layout_offset_x, r.y, r.w, r.h))
     }).collect();
+    rooms_mm.sort_by_key(|(face_id, _)| {
+        spread.layout.faces.get(face_id).map(|f| f.z_index).unwrap_or(0)
+    });
 
     // Pre-pass: compute the minimum decoded resolution needed for each image on
     // this spread so the JPEG scale-factor decode uses the right 1/N.
@@ -309,7 +313,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
     // never evicts an image before it has been rendered.
     type CropKey = (String, u32, u32, u32, u32);
     let mut xobj_cache: HashMap<CropKey, XObjectRef> = HashMap::new();
-    let mut pending: Vec<(Rect, f32, f32, Prepared)> = Vec::new();
+    let mut prepared: HashMap<u32, (Rect, f32, f32, Prepared)> = HashMap::new();
     let mut times = SpreadTimes::default();
 
     for (face_id, spread_rect) in &rooms_mm {
@@ -343,25 +347,28 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
                     let xobj_ref = xobj_cache.entry(key).or_insert_with(|| {
                         layer.add_image(prep.xobj.clone())
                     }).clone();
-                    pending.push((frame_page, node_rotation, border_radius_mm,
-                                  Prepared { xobj_ref: Some(xobj_ref), ..prep }));
+                    prepared.insert(*face_id, (frame_page, node_rotation, border_radius_mm,
+                                   Prepared { xobj_ref: Some(xobj_ref), ..prep }));
                     times.image_count += 1;
                 }
             }
         }
     }
 
-    // Pass 2: paint all frames (image then border).
-    for (frame_page, node_rotation, border_radius_mm, prep) in &pending {
-        if let Some(ref xobj_ref) = prep.xobj_ref {
-            paint_image(&layer, xobj_ref.clone(), prep, frame_page,
-                        *node_rotation, *border_radius_mm, bleed, ph);
-        }
-    }
+    // Pass 2: paint frames in z-order — image then border per frame — so that a
+    // frame's border is never drawn on top of a higher-z-index frame's image.
     for (face_id, spread_rect) in &rooms_mm {
         let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
         let Some(face) = spread.layout.faces.get(face_id) else { continue };
         let frame_page = frame_page_rect(spread_rect, region.x);
+
+        if let Some((_, node_rotation, border_radius_mm, prep)) = prepared.get(face_id) {
+            if let Some(ref xobj_ref) = prep.xobj_ref {
+                paint_image(&layer, xobj_ref.clone(), prep, &frame_page,
+                            *node_rotation, *border_radius_mm, bleed, ph);
+            }
+        }
+
         let border = &face.box_model.border;
         if border.any_nonzero() {
             let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
