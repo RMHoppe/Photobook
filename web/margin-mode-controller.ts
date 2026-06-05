@@ -4,9 +4,8 @@ export type MarginMode = 'all' | 'xy' | 'each';
 
 export type Sides = { top: number | null; right: number | null; bottom: number | null; left: number | null };
 
-export function detectMarginMode(m: Sides): MarginMode {
+export function detectSidesMode(m: Sides): MarginMode {
   const { top: t, right: r, bottom: b, left: l } = m;
-  if (t == null || r == null || b == null || l == null) return 'each';
   if (t === r && r === b && b === l) return 'all';
   if (t === b && l === r) return 'xy';
   return 'each';

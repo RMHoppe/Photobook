@@ -3,7 +3,7 @@
 import type { SpreadSettingsData } from './types.js';
 import { debounce } from './utils.js';
 import { numField, colorField, bindInputs, setNumField, readNumField } from './ui-fields.js';
-import { MarginModeController, marginSectionHtml, type MarginMode, detectMarginMode } from './margin-mode-controller.js';
+import { MarginModeController, marginSectionHtml, type MarginMode, detectSidesMode } from './margin-mode-controller.js';
 
 const SPREAD_MARGIN_DEFAULT_MM = 10;
 export type { SpreadSettingsData };
@@ -51,7 +51,7 @@ export class SpreadSettingsPanel {
 
   private _populate(data: SpreadSettingsData): void {
     this._lastMargins = { top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left };
-    const mode = detectMarginMode({ top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left });
+    const mode = detectSidesMode({ top: data.margin_top, right: data.margin_right, bottom: data.margin_bottom, left: data.margin_left });
     this._marginCtrl.setMode(mode);
     if (mode === 'all') {
       this._setNum('margin-all', data.margin_top);
