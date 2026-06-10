@@ -1,6 +1,5 @@
 target/
 web/pkg/
-web/fontawesome/
 node_modules/@fortawesome/
 Cargo.lock
 

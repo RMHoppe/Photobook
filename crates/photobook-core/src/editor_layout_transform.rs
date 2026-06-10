@@ -97,6 +97,64 @@ impl PhotobookEditor {
         self.mark_structure_dirty();
     }
 
+    /// Redistribute interior horizontal dividers so all rows have equal height.
+    pub fn distribute_selection_v(&mut self) {
+        let Some((_, by, _, bh)) = self.selection_bounding_box() else { return };
+        self.save_debug_snapshot();
+        let sel: HashSet<FaceId> = self.selection.iter().copied().collect();
+        let spread = self.doc.current_spread_mut();
+
+        let mut offsets: Vec<f32> = Vec::new();
+        for edge in spread.layout.edges.values() {
+            if !sel.contains(&edge.face_id) || edge.orientation != Orientation::Horizontal { continue; }
+            let o = edge.offset;
+            if (o - by).abs() < EPS || (o - (by + bh)).abs() < EPS { continue; }
+            if !offsets.iter().any(|&x| (x - o).abs() < EPS) { offsets.push(o); }
+        }
+        offsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let n = offsets.len();
+        if n == 0 { return; }
+        let new_offsets: Vec<f32> = (1..=n).map(|i| by + (i as f32) * bh / (n + 1) as f32).collect();
+
+        for edge in spread.layout.edges.values_mut() {
+            if !sel.contains(&edge.face_id) || edge.orientation != Orientation::Horizontal { continue; }
+            if let Some(idx) = offsets.iter().position(|&o| (o - edge.offset).abs() < EPS) {
+                edge.offset = new_offsets[idx];
+            }
+        }
+        self.mark_structure_dirty();
+    }
+
+    /// Redistribute interior vertical dividers so all columns have equal width.
+    pub fn distribute_selection_h(&mut self) {
+        let Some((bx, _, bw, _)) = self.selection_bounding_box() else { return };
+        self.save_debug_snapshot();
+        let sel: HashSet<FaceId> = self.selection.iter().copied().collect();
+        let spread = self.doc.current_spread_mut();
+
+        let mut offsets: Vec<f32> = Vec::new();
+        for edge in spread.layout.edges.values() {
+            if !sel.contains(&edge.face_id) || edge.orientation != Orientation::Vertical { continue; }
+            let o = edge.offset;
+            if (o - bx).abs() < EPS || (o - (bx + bw)).abs() < EPS { continue; }
+            if !offsets.iter().any(|&x| (x - o).abs() < EPS) { offsets.push(o); }
+        }
+        offsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let n = offsets.len();
+        if n == 0 { return; }
+        let new_offsets: Vec<f32> = (1..=n).map(|i| bx + (i as f32) * bw / (n + 1) as f32).collect();
+
+        for edge in spread.layout.edges.values_mut() {
+            if !sel.contains(&edge.face_id) || edge.orientation != Orientation::Vertical { continue; }
+            if let Some(idx) = offsets.iter().position(|&o| (o - edge.offset).abs() < EPS) {
+                edge.offset = new_offsets[idx];
+            }
+        }
+        self.mark_structure_dirty();
+    }
+
     /// Rotate selected faces 90° counter-clockwise within their bounding box.
     ///
     /// Normalized transform: (nx, ny) → (ny, 1−nx).

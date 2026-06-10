@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 use serde::Serialize;
 use crate::interaction::{DragState, HitTester};
 use crate::layout::{Rect, ResolvedFrame, SplitAxis, TransformHandles};
-use crate::grid_layout::{EdgeId, FaceId, GridLayout, OUTER_FACE};
+use crate::grid_layout::{EdgeId, Facing, FaceId, GridLayout, Orientation, OUTER_FACE};
 use crate::grid_resolver::GridResolver;
 use crate::PhotobookEditor;
 
@@ -342,28 +342,86 @@ impl PhotobookEditor {
     }
 
     // -----------------------------------------------------------------------
-    // Gap on the selected chain
+    // Half-gap on the selected chain (per-side)
     // -----------------------------------------------------------------------
 
-    /// Returns the half_gap (mm) of the selected segment's chain, or 0.
-    pub fn get_chain_gap(&self, edge_id: u32) -> f32 {
+    /// Returns `{a, b, axis}` where `a` = Facing::End side (left/top of the
+    /// visual gap) and `b` = Facing::Start side (right/bottom of the gap).
+    /// Either value is JSON `null` when the segments in the chain disagree.
+    pub fn get_chain_half_gaps(&self, edge_id: u32) -> String {
         let layout = &self.doc.current_spread().layout;
         let chain = layout.chain_for_edge(edge_id);
-        chain.iter()
-            .filter_map(|&eid| layout.get_half_gap(eid))
-            .fold(0.0_f32, f32::max)
-            * 2.0
+        let axis = layout.edges.get(&chain[0])
+            .map(|e| e.orientation.clone())
+            .unwrap_or(Orientation::Vertical);
+
+        let end_gaps: Vec<f32> = chain.iter()
+            .filter_map(|&eid| layout.edges.get(&eid))
+            .filter(|e| !e.is_boundary && e.facing == Facing::End)
+            .map(|e| e.half_gap)
+            .collect();
+        let start_gaps: Vec<f32> = chain.iter()
+            .filter_map(|&eid| layout.edges.get(&eid))
+            .filter(|e| !e.is_boundary && e.facing == Facing::Start)
+            .map(|e| e.half_gap)
+            .collect();
+
+        let uniform = |gaps: &[f32]| -> Option<f32> {
+            if gaps.is_empty() { return Some(0.0); }
+            if gaps.iter().all(|&v| (v - gaps[0]).abs() < 1e-4) { Some(gaps[0]) } else { None }
+        };
+
+        let a = uniform(&end_gaps);
+        let b = uniform(&start_gaps);
+        let axis_str = match axis { Orientation::Horizontal => "h", Orientation::Vertical => "v" };
+        serde_json::json!({ "a": a, "b": b, "axis": axis_str }).to_string()
     }
 
-    /// Set gap (mm) on all edges in the chain containing `edge_id`.
-    pub fn set_chain_gap(&mut self, edge_id: u32, gap_mm: f32) {
-        let half = gap_mm.max(0.0) / 2.0;
+    /// Returns `{a, b, axis}` for a specific edge and its twin only — no chain expansion.
+    /// Used when a single twin pair is selected via its handle.
+    pub fn get_edge_pair_half_gaps(&self, edge_id: u32) -> String {
+        let layout = &self.doc.current_spread().layout;
+        let Some(e) = layout.edges.get(&edge_id) else {
+            return serde_json::json!({"a": 0.0, "b": 0.0, "axis": "v"}).to_string();
+        };
+        let axis_str = match e.orientation { Orientation::Horizontal => "h", Orientation::Vertical => "v" };
+        let (end_gap, start_gap) = if e.facing == Facing::End {
+            let start = layout.twin(edge_id)
+                .and_then(|tid| layout.edges.get(&tid))
+                .map(|t| t.half_gap).unwrap_or(0.0);
+            (e.half_gap, start)
+        } else {
+            let end = layout.twin(edge_id)
+                .and_then(|tid| layout.edges.get(&tid))
+                .map(|t| t.half_gap).unwrap_or(0.0);
+            (end, e.half_gap)
+        };
+        serde_json::json!({ "a": end_gap, "b": start_gap, "axis": axis_str }).to_string()
+    }
+
+    /// Set half_gap on the Facing::End edges of the chain (left/top side of gap).
+    pub fn set_chain_half_gap_a(&mut self, edge_id: u32, v: f32) {
         let layout = &self.doc.current_spread().layout;
         let chain = layout.chain_for_edge(edge_id);
+        let ids: Vec<EdgeId> = chain.iter().copied()
+            .filter(|&eid| layout.edges.get(&eid)
+                .map(|e| !e.is_boundary && e.facing == Facing::End).unwrap_or(false))
+            .collect();
         let layout = &mut self.doc.current_spread_mut().layout;
-        for eid in chain {
-            layout.set_half_gap(eid, half);
-        }
+        for eid in ids { layout.set_half_gap(eid, v); }
+        self.mark_structure_dirty();
+    }
+
+    /// Set half_gap on the Facing::Start edges of the chain (right/bottom side of gap).
+    pub fn set_chain_half_gap_b(&mut self, edge_id: u32, v: f32) {
+        let layout = &self.doc.current_spread().layout;
+        let chain = layout.chain_for_edge(edge_id);
+        let ids: Vec<EdgeId> = chain.iter().copied()
+            .filter(|&eid| layout.edges.get(&eid)
+                .map(|e| !e.is_boundary && e.facing == Facing::Start).unwrap_or(false))
+            .collect();
+        let layout = &mut self.doc.current_spread_mut().layout;
+        for eid in ids { layout.set_half_gap(eid, v); }
         self.mark_structure_dirty();
     }
 }

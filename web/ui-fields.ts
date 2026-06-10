@@ -27,7 +27,7 @@ export function numFieldWithDice(name: string, label: string, opts: NumFieldOpts
   const maxAttr = max !== undefined ? `max="${max}" ` : '';
   return wrapField(
     label,
-    `<div class="bm-input-row"><input type="number" ${minAttr}${maxAttr}step="${step}" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${name}" title="Randomize across selection" hidden><i class="fa-solid fa-dice"></i></button></div>`,
+    `<div class="bm-input-row"><input type="number" ${minAttr}${maxAttr}step="${step}" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${name}" title="Randomize across selection" hidden><i class="ti ti-dice-5"></i></button></div>`,
     fullWidth,
   );
 }

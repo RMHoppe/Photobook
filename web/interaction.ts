@@ -17,8 +17,8 @@ import { NULL_ID } from './constants.js';
 import { computeImageCover, getRenderList, getDividers, getFrameTransform, getSpreadInfo,
          addTextElement, moveTextElement, updateTextElement, getTextElements } from './wasm-bridge.js';
 import type { PhotobookEditor } from './pkg/photobook_core.js';
-import type { SpreadRect, Overlays, TextElement, TwinHandle, XJunction } from './types.js';
-import type { CanvasRenderer } from './canvas.js';
+import type { SpreadRect, Overlays, TextElement, TwinHandle, XJunction, SpreadInfo } from './types.js';
+import type { CanvasRenderer, TextHitInfo } from './canvas.js';
 
 // ---------------------------------------------------------------------------
 // Context types
@@ -114,6 +114,13 @@ let _hoveredEdge: 'top' | 'bottom' | 'left' | 'right' | null = null;
 // When a twin handle is selected: chain rep ID and specific edge ID of the selected twin.
 let _selectedTwinChainId: number | null = null;
 let _selectedTwinEdgeId: number | null = null;
+
+/** The edge ID of the currently selected twin pair handle, or null. */
+export function getSelectedTwinEdgeId(): number | null { return _selectedTwinEdgeId; }
+
+// Whether the canvas-toolbar swap tool is active (toggled by main.ts).
+let _swapToolActive = false;
+export function setSwapToolActive(v: boolean): void { _swapToolActive = v; }
 
 // ---------------------------------------------------------------------------
 // Marquee selection mode
@@ -385,7 +392,7 @@ export const idleMode: InteractionMode = {
       return;
     }
     if (renderer.hoveredDivider !== null)       { idleHandleDividerHit(e, ctx, geo); return; }
-    if (e.altKey && idleHandleImageSwapHit(e, ctx, geo)) return;
+    if ((e.altKey || _swapToolActive) && idleHandleImageSwapHit(e, ctx, geo)) return;
     if (idleHandleTextHit(e, ctx, geo)) return;
     if (e.shiftKey) {
       setMode(marqueeMode, { startX: relX, startY: relY, shiftKey: true } as MarqueeState);
@@ -460,7 +467,7 @@ export const idleMode: InteractionMode = {
     } else {
       const textHit = renderer.hitTestText(cx, cy);
       if (!textHit) {
-        canvasEl.style.cursor = 'default';
+        canvasEl.style.cursor = _swapToolActive ? 'grab' : 'default';
       } else if (renderer.selectedTextIds.has(textHit.id) && textHit.part === 'rotate') {
         canvasEl.style.cursor = 'grab';
       } else if (renderer.selectedTextIds.has(textHit.id) && textHit.part === 'corner') {
@@ -760,7 +767,7 @@ export const imagePanMode: InteractionMode = {
 
     const t = getFrameTransform(editor, state.nodeId);
     if (!t) return;
-    editor.set_image_transform(state.nodeId, newPanX, newPanY, t.scale, t.rotation_deg);
+    editor.set_image_transform(state.nodeId, newPanX, newPanY, t.scale, t.rotation_deg, t.flip_h, t.flip_v);
     canvasEl.style.cursor = 'grabbing';
     redraw();
   },
@@ -810,6 +817,89 @@ export const textPlaceMode: InteractionMode = {
 };
 
 // ---------------------------------------------------------------------------
+// Text snapping helpers
+// ---------------------------------------------------------------------------
+
+const SNAP_THRESHOLD_PX = 8;
+
+function computeTextSnap(
+  rawX_mm: number,
+  rawY_mm: number,
+  draggingId: number,
+  mmToPx: number,
+  spreadInfo: SpreadInfo,
+  textElements: TextElement[],
+  textHits: TextHitInfo[],
+): { x_mm: number; y_mm: number; snapLines: Array<{ axis: 'x' | 'y'; mm: number }> } {
+  const threshold = SNAP_THRESHOLD_PX / mmToPx;
+
+  const draggedHit = textHits.find(h => h.id === draggingId);
+  const elW_mm = draggedHit ? (draggedHit.hw * 2) / mmToPx : 0;
+  const elH_mm = draggedHit ? (draggedHit.hh * 2) / mmToPx : 0;
+
+  const layoutOffsetMm = spreadInfo.endpaper_side === 'left' ? spreadInfo.page_width_mm : 0;
+  const layoutW_mm = spreadInfo.endpaper_side ? spreadInfo.page_width_mm : spreadInfo.width_mm;
+  const layoutH_mm = spreadInfo.height_mm;
+
+  const xCandidates: number[] = [
+    layoutOffsetMm,
+    layoutOffsetMm + layoutW_mm / 2,
+    layoutOffsetMm + layoutW_mm,
+  ];
+  const yCandidates: number[] = [0, layoutH_mm / 2, layoutH_mm];
+
+  for (const t of textElements) {
+    if (t.id === draggingId) continue;
+    const otherHit = textHits.find(h => h.id === t.id);
+    const otherW = otherHit ? (otherHit.hw * 2) / mmToPx : 0;
+    const otherH = otherHit ? (otherHit.hh * 2) / mmToPx : 0;
+    xCandidates.push(t.x_mm, t.x_mm + otherW / 2, t.x_mm + otherW);
+    yCandidates.push(t.y_mm, t.y_mm + otherH / 2, t.y_mm + otherH);
+  }
+
+  let bestXDelta = threshold;
+  let snappedX = rawX_mm;
+  let snapLineX: number | null = null;
+
+  const tryX = (edgeMm: number, candidateMm: number) => {
+    const d = Math.abs(edgeMm - candidateMm);
+    if (d < bestXDelta) {
+      bestXDelta = d;
+      snappedX = rawX_mm + (candidateMm - edgeMm);
+      snapLineX = candidateMm;
+    }
+  };
+  for (const c of xCandidates) {
+    tryX(rawX_mm, c);
+    tryX(rawX_mm + elW_mm / 2, c);
+    tryX(rawX_mm + elW_mm, c);
+  }
+
+  let bestYDelta = threshold;
+  let snappedY = rawY_mm;
+  let snapLineY: number | null = null;
+
+  const tryY = (edgeMm: number, candidateMm: number) => {
+    const d = Math.abs(edgeMm - candidateMm);
+    if (d < bestYDelta) {
+      bestYDelta = d;
+      snappedY = rawY_mm + (candidateMm - edgeMm);
+      snapLineY = candidateMm;
+    }
+  };
+  for (const c of yCandidates) {
+    tryY(rawY_mm, c);
+    tryY(rawY_mm + elH_mm / 2, c);
+    tryY(rawY_mm + elH_mm, c);
+  }
+
+  const snapLines: Array<{ axis: 'x' | 'y'; mm: number }> = [];
+  if (snapLineX !== null) snapLines.push({ axis: 'x', mm: snapLineX });
+  if (snapLineY !== null) snapLines.push({ axis: 'y', mm: snapLineY });
+  return { x_mm: snappedX, y_mm: snappedY, snapLines };
+}
+
+// ---------------------------------------------------------------------------
 // Text drag mode — move a text element
 // ---------------------------------------------------------------------------
 
@@ -817,7 +907,7 @@ export const textDragMode: InteractionMode = {
   onMouseDown(_e, _ctx) {},
 
   onMouseMove(e, ctx) {
-    const { editor, toSpread, redraw, canvasEl, modeState, snapshot } = ctx;
+    const { editor, renderer, toSpread, redraw, canvasEl, modeState, snapshot } = ctx;
     const state = modeState as TextDragState;
     const { relX, relY } = toSpread(e);
 
@@ -830,8 +920,21 @@ export const textDragMode: InteractionMode = {
       state.hasMoved = true;
     }
 
-    const newX = state.startX + dx / state.mmToPx;
-    const newY = state.startY + dy / state.mmToPx;
+    let newX = state.startX + dx / state.mmToPx;
+    let newY = state.startY + dy / state.mmToPx;
+
+    if (!e.altKey) {
+      const snap = computeTextSnap(
+        newX, newY, state.el.id, state.mmToPx,
+        getSpreadInfo(editor), getTextElements(editor), renderer._textHits,
+      );
+      newX = snap.x_mm;
+      newY = snap.y_mm;
+      renderer.activeSnapLines = snap.snapLines;
+    } else {
+      renderer.activeSnapLines = [];
+    }
+
     moveTextElement(editor, state.el.id, newX, newY);
     canvasEl.style.cursor = 'move';
     redraw();
@@ -839,6 +942,7 @@ export const textDragMode: InteractionMode = {
   },
 
   onMouseUp(_e, ctx) {
+    ctx.renderer.activeSnapLines = [];
     ctx.canvasEl.style.cursor = 'default';
     ctx.setMode(idleMode, {});
   },

@@ -7,10 +7,14 @@ import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel
 import type { ProjectSettingsData, SpreadSettingsData } from './sidebar-right.js';
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
-import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode } from './interaction.js';
+import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode, getSelectedTwinEdgeId, setSwapToolActive } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
-import { getSpreadInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getSpreadMargin, getUsedImageIds, splitFaceForMultiDrop, getRenderList } from './wasm-bridge.js';
+import { getSpreadInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getUsedImageIds, splitFaceForMultiDrop, getRenderList, getFrameTransform, getSelectedSegmentHalfGaps, getEdgePairHalfGaps, setSelectionOuterMargins, setSelectionInnerGaps, clearSelectionGaps } from './wasm-bridge.js';
 import type { Overlays, DropZone, Rect } from './types.js';
+import { OuterMarginDialog } from './outer-margin-dialog.js';
+import { InnerGapDialog } from './inner-gap-dialog.js';
+import type { InnerGaps } from './types.js';
+import type { Sides } from './margin-mode-controller.js';
 import { loadLocalFonts, localFontsSupported, tryLoadLocalFonts } from './fonts.js';
 import { UndoManager } from './undo.js';
 import { InlineEditor } from './inline-editor.js';
@@ -319,12 +323,7 @@ function currentProjectSettings(): ProjectSettingsData {
 }
 
 function currentSpreadSettings(): SpreadSettingsData {
-  const margin = getSpreadMargin(editor);
   return {
-    margin_top:    margin.top,
-    margin_right:  margin.right,
-    margin_bottom: margin.bottom,
-    margin_left:   margin.left,
     left_bg:  editor.get_spread_left_bg(),
     right_bg: editor.get_spread_right_bg(),
   };
@@ -350,16 +349,6 @@ function wireRightSidebar() {
       redraw();
     },
     (field) => { randomizeDialog.show(field); },
-    (transform) => {
-      undoManager.snapshot();
-      switch (transform) {
-        case 'flip-h':     editor.flip_selection_h();   break;
-        case 'flip-v':     editor.flip_selection_v();   break;
-        case 'rotate-cw':  editor.rotate_selection_cw();  break;
-        case 'rotate-ccw': editor.rotate_selection_ccw(); break;
-      }
-      redraw();
-    },
     () => {
       // Randomize layering: shuffle the selection, then bring each to front in
       // turn so their relative stacking ends up random.
@@ -378,14 +367,14 @@ function wireRightSidebar() {
 
   const dividerPanel = new DividerPanel(
     panelDivider,
-    (gap) => { undoManager.snapshot(); editor.set_selected_segment_gap(gap); redraw(); },
+    (v) => { undoManager.snapshot(); editor.set_selected_segment_half_gap_a(v); redraw(); },
+    (v) => { undoManager.snapshot(); editor.set_selected_segment_half_gap_b(v); redraw(); },
   );
 
   const spreadPanel = new SpreadSettingsPanel(
     panelProject,
     (data: SpreadSettingsData) => {
       undoManager.snapshot();
-      editor.set_spread_margin(data.margin_top, data.margin_right, data.margin_bottom, data.margin_left);
       editor.set_spread_left_bg(data.left_bg);
       editor.set_spread_right_bg(data.right_bg);
       redraw();
@@ -464,6 +453,12 @@ function refreshBoxModel(): void {
   const hasFaces   = editor.get_selection_count() > 0;
   const hasTexts   = renderer.selectedTextIds.size > 0;
   const hasDivider = editor.get_selected_segment_count() > 0;
+
+  if (_outerMarginActive && !_outerMarginSelectionMatches()) _deactivateOuterMarginTool();
+  if (_innerGapActive && !_innerGapSelectionMatches()) _deactivateInnerGapTool();
+  updateOuterMarginButton(hasFaces);
+  updateInnerGapButton(editor.get_selection_count() >= 2);
+  (document.getElementById('btn-clear-gaps') as HTMLButtonElement).disabled = !hasFaces;
   if (hasFaces || hasTexts || hasDivider) {
     sidebar.clearSelection();
     footerSpreadSelected = false;
@@ -488,15 +483,23 @@ function refreshBoxModel(): void {
   if (hasNothing) parts.push('Spread Settings');
   sidebarRightHeader.textContent = parts.join(' · ');
 
+  let selectionIsRect = false;
+  let singleFrameWithImage = false;
   if (hasFaces) {
     const selectionCount  = editor.get_selection_count();
     const bmJson          = editor.get_face_box_model();
     const sel             = editor.get_selected();
     const zIndex          = (selectionCount === 1 && sel !== NULL_ID)
       ? editor.get_face_z_index(sel) : undefined;
-    const selectionIsRect = selectionCount > 1 && editor.selection_is_rectangular();
-    boxEditor.update(bmJson, zIndex, selectionCount, selectionIsRect);
+    selectionIsRect = selectionCount > 1 && editor.selection_is_rectangular();
+    if (selectionCount === 1 && sel !== NULL_ID) {
+      const frame = getRenderList(editor, renderer.lastLayoutRect.w || 1, renderer.lastLayoutRect.h || 1).find(f => f.id === sel);
+      singleFrameWithImage = !!(frame?.image_id);
+    }
+    boxEditor.update(bmJson, zIndex, selectionCount);
   }
+  updateLayoutTransformButtons(selectionIsRect || singleFrameWithImage);
+  updateDistributeButtons(selectionIsRect);
 
   if (hasTexts) {
     const textElements = getTextElements(editor);
@@ -506,7 +509,13 @@ function refreshBoxModel(): void {
     else renderer.selectedTextIds.clear();
   }
 
-  if (hasDivider) dividerPanel.show(editor.get_selected_segment_gap());
+  if (hasDivider) {
+    const twinEdgeId = renderer.twinSegmentSelected ? getSelectedTwinEdgeId() : null;
+    const halfGaps = twinEdgeId !== null
+      ? getEdgePairHalfGaps(editor, twinEdgeId)
+      : getSelectedSegmentHalfGaps(editor);
+    dividerPanel.show(halfGaps);
+  }
   if (showPhoto)  photoPanel.show(sidebarIds);
   if (hasNothing) spreadPanel.show(currentSpreadSettings());
 
@@ -627,6 +636,7 @@ const undoManager = new UndoManager(
   editor,
   document.getElementById('btn-undo') as HTMLButtonElement,
   document.getElementById('btn-redo') as HTMLButtonElement,
+  () => { refreshBoxModel(); redraw(); },
 );
 
 
@@ -657,6 +667,9 @@ let modeState: ModeState = {};
 function setMode(mode: InteractionMode, state: ModeState): void {
   if (currentMode === cutToolMode && mode !== cutToolMode) {
     updateCutToolButton(false);
+  }
+  if (currentMode === textPlaceMode && mode !== textPlaceMode) {
+    updateTextToolButton(false);
   }
   currentMode = mode;
   modeState = state;
@@ -875,12 +888,163 @@ canvasEl.addEventListener('mouseleave', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Cut tool state helper
+// Canvas tool button state helpers
 // ---------------------------------------------------------------------------
 
 function updateCutToolButton(active: boolean): void {
   document.getElementById('btn-cut-tool')!.classList.toggle('active', active);
 }
+
+function updateTextToolButton(active: boolean): void {
+  document.getElementById('btn-add-text')!.classList.toggle('active', active);
+}
+
+let _swapToolActive = false;
+
+function updateSwapToolButton(active: boolean): void {
+  _swapToolActive = active;
+  setSwapToolActive(active);
+  document.getElementById('btn-swap-tool')!.classList.toggle('active', active);
+}
+
+const _layoutTransformBtnIds = ['btn-flip-h', 'btn-flip-v', 'btn-rotate-cw', 'btn-rotate-ccw'] as const;
+
+function updateLayoutTransformButtons(enabled: boolean): void {
+  for (const id of _layoutTransformBtnIds) {
+    (document.getElementById(id) as HTMLButtonElement).disabled = !enabled;
+  }
+}
+
+const _distributeBtnIds = ['btn-distribute-v', 'btn-distribute-h'] as const;
+
+function updateDistributeButtons(enabled: boolean): void {
+  for (const id of _distributeBtnIds) {
+    (document.getElementById(id) as HTMLButtonElement).disabled = !enabled;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Outer margin tool
+// ---------------------------------------------------------------------------
+
+let _outerMarginActive = false;
+let _outerMarginDefaults: Sides = { top: 5, right: 5, bottom: 5, left: 5 };
+let _outerMarginActiveSelIds: number[] = [];
+
+const _outerMarginDialog = new OuterMarginDialog(
+  document.getElementById('outer-margin-dialog') as HTMLElement,
+  (margins) => {
+    setSelectionOuterMargins(editor, margins);
+    if (margins.top    !== null) _outerMarginDefaults.top    = margins.top;
+    if (margins.right  !== null) _outerMarginDefaults.right  = margins.right;
+    if (margins.bottom !== null) _outerMarginDefaults.bottom = margins.bottom;
+    if (margins.left   !== null) _outerMarginDefaults.left   = margins.left;
+    redraw();
+  },
+);
+
+function _outerMarginSelectionMatches(): boolean {
+  const cur = getAllSelected(editor);
+  if (cur.length !== _outerMarginActiveSelIds.length) return false;
+  const set = new Set(_outerMarginActiveSelIds);
+  return cur.every(id => set.has(id));
+}
+
+function _deactivateOuterMarginTool(): void {
+  _outerMarginActive = false;
+  _outerMarginActiveSelIds = [];
+  _outerMarginDialog.hide();
+  document.getElementById('btn-outer-margin')!.classList.remove('active');
+}
+
+function updateOuterMarginButton(enabled: boolean): void {
+  const btn = document.getElementById('btn-outer-margin') as HTMLButtonElement;
+  btn.disabled = !enabled;
+  if (!enabled && _outerMarginActive) _deactivateOuterMarginTool();
+}
+
+document.getElementById('btn-outer-margin')!.addEventListener('click', () => {
+  if (_outerMarginActive) {
+    _deactivateOuterMarginTool();
+    return;
+  }
+  if (editor.get_selection_count() === 0) return;
+  _deactivateInnerGapTool();
+  _outerMarginActive = true;
+  _outerMarginActiveSelIds = getAllSelected(editor);
+  undoManager.snapshot();
+  setSelectionOuterMargins(editor, _outerMarginDefaults);
+  redraw();
+  _outerMarginDialog.show(_outerMarginDefaults);
+  document.getElementById('btn-outer-margin')!.classList.add('active');
+});
+
+// ---------------------------------------------------------------------------
+// Inner gap tool
+// ---------------------------------------------------------------------------
+
+let _innerGapActive = false;
+let _innerGapDefaults: InnerGaps = { h: 5, v: 5 };
+let _innerGapActiveSelIds: number[] = [];
+
+const _innerGapDialog = new InnerGapDialog(
+  document.getElementById('inner-gap-dialog') as HTMLElement,
+  (gaps) => {
+    setSelectionInnerGaps(editor, gaps);
+    if (gaps.h !== null) _innerGapDefaults.h = gaps.h;
+    if (gaps.v !== null) _innerGapDefaults.v = gaps.v;
+    redraw();
+  },
+);
+
+function _innerGapSelectionMatches(): boolean {
+  const cur = getAllSelected(editor);
+  if (cur.length !== _innerGapActiveSelIds.length) return false;
+  const set = new Set(_innerGapActiveSelIds);
+  return cur.every(id => set.has(id));
+}
+
+function _deactivateInnerGapTool(): void {
+  _innerGapActive = false;
+  _innerGapActiveSelIds = [];
+  _innerGapDialog.hide();
+  document.getElementById('btn-inner-gap')!.classList.remove('active');
+}
+
+function updateInnerGapButton(enabled: boolean): void {
+  const btn = document.getElementById('btn-inner-gap') as HTMLButtonElement;
+  btn.disabled = !enabled;
+  if (!enabled && _innerGapActive) _deactivateInnerGapTool();
+}
+
+document.getElementById('btn-inner-gap')!.addEventListener('click', () => {
+  if (_innerGapActive) {
+    _deactivateInnerGapTool();
+    return;
+  }
+  if (editor.get_selection_count() < 2) return;
+  _deactivateOuterMarginTool();
+  _innerGapActive = true;
+  _innerGapActiveSelIds = getAllSelected(editor);
+  undoManager.snapshot();
+  setSelectionInnerGaps(editor, _innerGapDefaults);
+  redraw();
+  _innerGapDialog.show(_innerGapDefaults);
+  document.getElementById('btn-inner-gap')!.classList.add('active');
+});
+
+// ---------------------------------------------------------------------------
+// Clear gaps tool
+// ---------------------------------------------------------------------------
+
+document.getElementById('btn-clear-gaps')!.addEventListener('click', () => {
+  if (editor.get_selection_count() === 0) return;
+  _deactivateOuterMarginTool();
+  _deactivateInnerGapTool();
+  undoManager.snapshot();
+  clearSelectionGaps(editor);
+  redraw();
+});
 
 // ---------------------------------------------------------------------------
 // Keyboard events
@@ -930,6 +1094,7 @@ document.addEventListener('keydown', (e) => {
         setMode(idleMode, {});
         updateCutToolButton(false);
       } else {
+        if (_swapToolActive) updateSwapToolButton(false);
         setMode(cutToolMode, { numCuts: 1, nodeId: NULL_ID, axis: null, ratio: null });
         canvasEl.style.cursor = 'crosshair';
         updateCutToolButton(true);
@@ -948,9 +1113,11 @@ document.addEventListener('keydown', (e) => {
     case 'T': {
       canvasEl.style.cursor = 'crosshair';
       setMode(textPlaceMode, {});
+      updateTextToolButton(true);
       break;
     }
     case 'Escape': {
+      if (_swapToolActive) { updateSwapToolButton(false); canvasEl.style.cursor = 'default'; redraw(); }
       if (currentMode === cutToolMode || currentMode === splitPreviewMode) {
         overlays.splitPreview = null;
         canvasEl.style.cursor = 'default';
@@ -1137,10 +1304,72 @@ document.getElementById('btn-cut-tool')!.addEventListener('click', () => {
     setMode(idleMode, {});
     updateCutToolButton(false);
   } else {
+    if (_swapToolActive) updateSwapToolButton(false);
     setMode(cutToolMode, { numCuts: 1, nodeId: NULL_ID, axis: null, ratio: null });
     canvasEl.style.cursor = 'crosshair';
     updateCutToolButton(true);
   }
+  redraw();
+});
+
+document.getElementById('btn-swap-tool')!.addEventListener('click', () => {
+  if (_swapToolActive) {
+    updateSwapToolButton(false);
+  } else {
+    if (currentMode === cutToolMode) {
+      overlays.splitPreview = null;
+      canvasEl.style.cursor = 'default';
+      setMode(idleMode, {});
+      updateCutToolButton(false);
+    }
+    updateSwapToolButton(true);
+  }
+  redraw();
+});
+
+function applyLayoutTransform(action: 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw'): void {
+  const sel = editor.get_selected();
+  if (editor.get_selection_count() === 1 && sel !== NULL_ID) {
+    const t = getFrameTransform(editor, sel);
+    if (t) {
+      undoManager.snapshot();
+      if (action === 'flip-h') {
+        editor.set_image_transform(sel, t.pan_x, t.pan_y, t.scale, t.rotation_deg, !t.flip_h, t.flip_v);
+      } else if (action === 'flip-v') {
+        editor.set_image_transform(sel, t.pan_x, t.pan_y, t.scale, t.rotation_deg, t.flip_h, !t.flip_v);
+      } else if (action === 'rotate-cw') {
+        editor.set_image_transform(sel, t.pan_x, t.pan_y, t.scale, t.rotation_deg - 90, t.flip_h, t.flip_v);
+      } else {
+        editor.set_image_transform(sel, t.pan_x, t.pan_y, t.scale, t.rotation_deg + 90, t.flip_h, t.flip_v);
+      }
+      redraw();
+      return;
+    }
+  }
+  undoManager.snapshot();
+  if (action === 'flip-h')     editor.flip_selection_h();
+  else if (action === 'flip-v')     editor.flip_selection_v();
+  else if (action === 'rotate-cw')  editor.rotate_selection_cw();
+  else                              editor.rotate_selection_ccw();
+  redraw();
+}
+
+document.getElementById('btn-flip-h')!.addEventListener('click',     () => applyLayoutTransform('flip-h'));
+document.getElementById('btn-flip-v')!.addEventListener('click',     () => applyLayoutTransform('flip-v'));
+document.getElementById('btn-rotate-cw')!.addEventListener('click',  () => applyLayoutTransform('rotate-cw'));
+document.getElementById('btn-rotate-ccw')!.addEventListener('click', () => applyLayoutTransform('rotate-ccw'));
+
+document.getElementById('btn-distribute-v')!.addEventListener('click', () => {
+  if (!editor.selection_is_rectangular()) return;
+  undoManager.snapshot();
+  editor.distribute_selection_v();
+  redraw();
+});
+
+document.getElementById('btn-distribute-h')!.addEventListener('click', () => {
+  if (!editor.selection_is_rectangular()) return;
+  undoManager.snapshot();
+  editor.distribute_selection_h();
   redraw();
 });
 
@@ -1285,12 +1514,18 @@ document.addEventListener('keydown', (e) => {
     if (!isPanning) canvasEl.style.cursor = 'grab';
     e.preventDefault();
   }
+  if (e.code === 'AltLeft' || e.code === 'AltRight') {
+    document.getElementById('btn-swap-tool')!.classList.add('active');
+  }
 }, true);
 
 document.addEventListener('keyup', (e) => {
   if (e.code === 'Space') {
     spaceDown = false;
     if (!isPanning) canvasEl.style.cursor = '';
+  }
+  if (e.code === 'AltLeft' || e.code === 'AltRight') {
+    document.getElementById('btn-swap-tool')!.classList.toggle('active', _swapToolActive);
   }
 });
 
@@ -1316,17 +1551,17 @@ canvasEl.addEventListener('wheel', (e) => {
 
   e.preventDefault();
 
-  const t = JSON.parse(editor.get_frame_transform(hitId)) as { pan_x: number; pan_y: number; scale: number; rotation_deg: number };
+  const t = JSON.parse(editor.get_frame_transform(hitId)) as { pan_x: number; pan_y: number; scale: number; rotation_deg: number; flip_h: boolean; flip_v: boolean };
   if (!t) return;
 
   if (e.shiftKey) {
     const delta = e.deltaY > 0 ? 0.5 : -0.5;
     undoManager.snapshot();
-    editor.set_image_transform(hitId, t.pan_x, t.pan_y, t.scale, t.rotation_deg + delta);
+    editor.set_image_transform(hitId, t.pan_x, t.pan_y, t.scale, t.rotation_deg + delta, t.flip_h, t.flip_v);
   } else {
     const factor = e.deltaY < 0 ? 1.01 : 1 / 1.01;
     undoManager.snapshot();
-    editor.set_image_transform(hitId, t.pan_x, t.pan_y, Math.max(1.0, t.scale * factor), t.rotation_deg);
+    editor.set_image_transform(hitId, t.pan_x, t.pan_y, Math.max(1.0, t.scale * factor), t.rotation_deg, t.flip_h, t.flip_v);
   }
   redraw();
 }, { passive: false });

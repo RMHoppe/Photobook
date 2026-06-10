@@ -66,6 +66,8 @@ export interface RenderFrame {
   pan_y: number;
   scale: number;
   rotation_deg: number;
+  flip_h: boolean;
+  flip_v: boolean;
   is_selected: boolean;
   object_fit: ObjectFit;
   border_width_top: number;
@@ -159,9 +161,14 @@ export interface MarginInsets {
   left:   number | null;
 }
 
+/** Inner-gap values for a frame selection. null = no inner edges of that axis, or mixed. */
+export interface InnerGaps {
+  h: number | null;  // half_gap on vertical dividers (gap between side-by-side frames)
+  v: number | null;  // half_gap on horizontal dividers (gap between stacked frames)
+}
+
 /** Full box model for a face or the merged multi-selection. */
 export interface BoxModel {
-  margin: MarginInsets;
   border: Border;
   /** Face-level rotation in degrees counter-clockwise. Absent/null = mixed (multi-selection). */
   face_rotation_deg?: number | null;
@@ -177,6 +184,8 @@ export interface FrameTransform {
   pan_y: number;
   scale: number;
   rotation_deg: number;
+  flip_h: boolean;
+  flip_v: boolean;
 }
 
 /** Transform handle pair for the selected node (margin-drag UI). */
@@ -297,10 +306,16 @@ export interface ProjectSettingsData {
 
 /** Data exchanged between main.ts and SpreadSettingsPanel. */
 export interface SpreadSettingsData {
-  margin_top: number;
-  margin_right: number;
-  margin_bottom: number;
-  margin_left: number;
   left_bg: string;
   right_bg: string;
+}
+
+/** Half-gap values for a selected divider chain, returned by get_selected_segment_half_gaps. */
+export interface ChainHalfGaps {
+  /** Facing::End side — left for vertical dividers, top for horizontal. null = mixed across segments. */
+  a: number | null;
+  /** Facing::Start side — right for vertical dividers, bottom for horizontal. null = mixed across segments. */
+  b: number | null;
+  /** 'h' = horizontal divider (splits top/bottom), 'v' = vertical (splits left/right). */
+  axis: 'h' | 'v';
 }

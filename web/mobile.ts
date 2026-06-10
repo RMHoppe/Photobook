@@ -25,7 +25,7 @@ async function runTests(): Promise<void> {
   const failuresEl = document.getElementById('test-failures') as HTMLElement;
 
   btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> Loading…';
+  btn.innerHTML = '<i class="ti ti-loader-2 ti-spin" aria-hidden="true"></i> Loading…';
   resultsEl.hidden = false;
   summaryEl.className = 'test-summary test-running';
   summaryEl.textContent = 'Initialising test WASM…';
@@ -40,7 +40,7 @@ async function runTests(): Promise<void> {
     summaryEl.className = 'test-summary test-error';
     summaryEl.textContent = `Failed to load test WASM: ${err instanceof Error ? err.message : String(err)}`;
     btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-flask" aria-hidden="true"></i> Run Unit Tests';
+    btn.innerHTML = '<i class="ti ti-flask" aria-hidden="true"></i> Run Unit Tests';
     return;
   }
 
@@ -90,7 +90,7 @@ async function runTests(): Promise<void> {
   }
 
   btn.disabled = false;
-  btn.innerHTML = '<i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Run Again';
+  btn.innerHTML = '<i class="ti ti-rotate-clockwise" aria-hidden="true"></i> Run Again';
 }
 
 document.getElementById('btn-run-tests')?.addEventListener('click', () => { void runTests(); });

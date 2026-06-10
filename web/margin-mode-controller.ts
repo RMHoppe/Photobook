@@ -65,9 +65,9 @@ export function marginSectionHtml(
   };
   const modebar = `
             <div class="margin-mode-bar">
-              <button class="margin-mode-btn" data-${ns}-mode="all"  title="All equal"><i class="fa-regular fa-square"></i></button>
-              <button class="margin-mode-btn" data-${ns}-mode="xy"   title="Paired"><i class="fa-solid fa-border-top-left"></i></button>
-              <button class="margin-mode-btn" data-${ns}-mode="each" title="Each individually"><i class="fa-solid fa-border-none"></i></button>
+              <button class="margin-mode-btn" data-${ns}-mode="all"  title="All equal"><i class="ti ti-square"></i></button>
+              <button class="margin-mode-btn" data-${ns}-mode="xy"   title="Paired"><i class="ti ti-border-style"></i></button>
+              <button class="margin-mode-btn" data-${ns}-mode="each" title="Each individually"><i class="ti ti-border-corners"></i></button>
             </div>`;
   const panes = `
         <div class="margin-pane" data-${ns}-pane="all">

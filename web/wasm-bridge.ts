@@ -11,7 +11,9 @@ import type {
   RenderFrame, Divider, LowDpiFrame,
   BoxModel, FrameTransform,
   ImageCoverResult, TextElement,
-  ResolvedSpread, SpreadDelta, XJunction,
+  ResolvedSpread, SpreadDelta, XJunction, ChainHalfGaps,
+  MarginInsets,
+  InnerGaps,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -30,9 +32,6 @@ export function getPageSizeMm(editor: PhotobookEditor): PageSize {
   return JSON.parse(editor.get_page_size_mm()) as PageSize;
 }
 
-export function getSpreadMargin(editor: PhotobookEditor): { top: number; right: number; bottom: number; left: number } {
-  return JSON.parse(editor.get_spread_margin()) as { top: number; right: number; bottom: number; left: number };
-}
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -51,15 +50,15 @@ export function getLowDpiFrames(editor: PhotobookEditor, w: number, h: number): 
 }
 
 // ---------------------------------------------------------------------------
-// Gap (per-chain half_gap)
+// Chain half-gaps (per-side)
 // ---------------------------------------------------------------------------
 
-export function getChainGap(editor: PhotobookEditor, edgeId: number): number {
-  return editor.get_chain_gap(edgeId);
+export function getSelectedSegmentHalfGaps(editor: PhotobookEditor): ChainHalfGaps {
+  return JSON.parse(editor.get_selected_segment_half_gaps()) as ChainHalfGaps;
 }
 
-export function setChainGap(editor: PhotobookEditor, edgeId: number, gapMm: number): void {
-  editor.set_chain_gap(edgeId, gapMm);
+export function getEdgePairHalfGaps(editor: PhotobookEditor, edgeId: number): ChainHalfGaps {
+  return JSON.parse(editor.get_edge_pair_half_gaps(edgeId)) as ChainHalfGaps;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +79,30 @@ export function getFrameTransform(editor: PhotobookEditor, faceId: number): Fram
 
 export function getAllSelected(editor: PhotobookEditor): number[] {
   return JSON.parse(editor.get_all_selected()) as number[];
+}
+
+// ---------------------------------------------------------------------------
+// Outer margin (selection-group perimeter)
+// ---------------------------------------------------------------------------
+
+export function getSelectionOuterMargins(editor: PhotobookEditor): MarginInsets {
+  return JSON.parse(editor.get_selection_outer_margins()) as MarginInsets;
+}
+
+export function setSelectionOuterMargins(editor: PhotobookEditor, margins: MarginInsets): void {
+  editor.set_selection_outer_margins(JSON.stringify(margins));
+}
+
+export function getSelectionInnerGaps(editor: PhotobookEditor): InnerGaps {
+  return JSON.parse(editor.get_selection_inner_gaps()) as InnerGaps;
+}
+
+export function setSelectionInnerGaps(editor: PhotobookEditor, gaps: InnerGaps): void {
+  editor.set_selection_inner_gaps(JSON.stringify(gaps));
+}
+
+export function clearSelectionGaps(editor: PhotobookEditor): void {
+  editor.clear_selection_gaps();
 }
 
 // ---------------------------------------------------------------------------

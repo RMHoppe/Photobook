@@ -12,12 +12,9 @@ import { debounce } from './utils.js';
 import { numFieldWithDice, colorField, selectField, bindInputs, setNumField, readNumField } from './ui-fields.js';
 import { MarginModeController, marginSectionHtml, type MarginMode, type Sides, type SideLabels, detectSidesMode } from './margin-mode-controller.js';
 
-export type LayoutTransform = 'flip-h' | 'flip-v' | 'rotate-cw' | 'rotate-ccw';
-
 // Defaults applied when a toggleable section is first enabled, so the effect is
 // immediately visible instead of a no-op zero.
-const MARGIN_DEFAULT_MM = 10;
-const BORDER_DEFAULT_MM = 5;
+const BORDER_DEFAULT_MM = 3;
 const RADIUS_DEFAULT_MM = 10;
 
 export class BoxModelEditor {
@@ -26,14 +23,11 @@ export class BoxModelEditor {
   private onZOrder: (direction: 'up' | 'down') => void;
   private onDiceClick: (field: string) => void;
   private _multiSel = false;
-  private onLayoutTransform: (t: LayoutTransform) => void;
   private onLayerRandomize: () => void;
   private _built = false;
-  private _marginCtrl!: MarginModeController;
   private _borderWidthCtrl!: MarginModeController;
   private _radiusCtrl!: MarginModeController;
   private readonly _groups = [
-    { group: 'margin', ctrl: () => this._marginCtrl,      ns: 'margin', def: MARGIN_DEFAULT_MM },
     { group: 'border', ctrl: () => this._borderWidthCtrl, ns: 'bw',     def: BORDER_DEFAULT_MM },
     { group: 'radius', ctrl: () => this._radiusCtrl,      ns: 'radius', def: RADIUS_DEFAULT_MM },
   ];
@@ -43,14 +37,12 @@ export class BoxModelEditor {
     onChange: (json: string) => void,
     onZOrder: (direction: 'up' | 'down') => void,
     onDiceClick: (field: string) => void,
-    onLayoutTransform: (t: LayoutTransform) => void,
     onLayerRandomize: () => void,
   ) {
     this.containerEl = containerEl;
     this.onChange = onChange;
     this.onZOrder = onZOrder;
     this.onDiceClick = onDiceClick;
-    this.onLayoutTransform = onLayoutTransform;
     this.onLayerRandomize = onLayerRandomize;
   }
 
@@ -59,7 +51,7 @@ export class BoxModelEditor {
     this._built = false;
   }
 
-  update(boxModelJson: string, zIndex?: number, selectionCount = 1, selectionIsRect = false): void {
+  update(boxModelJson: string, zIndex?: number, selectionCount = 1): void {
     const bm = JSON.parse(boxModelJson) as BoxModel;
 
     if (!this._built || this.containerEl.dataset.panel !== 'boxmodel') this._build();
@@ -71,15 +63,6 @@ export class BoxModelEditor {
         btn.hidden = true;
       });
     }
-
-    // Show layout-transform buttons when multiple frames form a complete rectangle.
-    const showTransform = this._multiSel && selectionIsRect;
-    const transformRow = this.containerEl.querySelector<HTMLElement>('.bm-layout-transform');
-    if (transformRow) transformRow.hidden = !showTransform;
-
-    // Margin (null = mixed sentinel; allows negative values)
-    const margin: Sides = bm.margin ?? { top: null, right: null, bottom: null, left: null };
-    this._updateSidesUI(this._marginCtrl, 'margin', margin);
 
     // Border widths (per-side, null = mixed)
     const border = bm.border ?? {};
@@ -218,7 +201,6 @@ export class BoxModelEditor {
     this._built = true;
     this.containerEl.dataset.panel = 'boxmodel';
     this.containerEl.innerHTML = `
-      ${marginSectionHtml('Margin (mm)', (name, label) => numFieldWithDice(name, label, { min: null }), 'margin', undefined, 'margin')}
       <div class="bm-section" data-section="border">
         <div class="bm-section-header">
           <h4>Border</h4>
@@ -228,13 +210,11 @@ export class BoxModelEditor {
           ${marginSectionHtml('Width (mm)', (name, label) => numFieldWithDice(name, label), 'bw')}
           <div class="bm-grid" style="margin-top:4px">
             ${colorField('border-color', 'Color')}
-          </div>
-          <div class="bm-grid" style="margin-top:4px">
             ${selectField('border-position', 'Position', [
               ['inner',    'Inner'],
               ['centered', 'Centered'],
               ['outer',    'Outer'],
-            ], true)}
+            ])}
           </div>
         </div>
       </div>
@@ -255,26 +235,18 @@ export class BoxModelEditor {
         <div class="bm-grid">
           ${numFieldWithDice('node-rotation', 'Rotation (°)', { min: null, max: undefined })}
         </div>
-        <div class="bm-layout-transform" hidden>
-          <div class="bm-layout-btns">
-            <button class="bm-layout-btn" data-layout="flip-h"     title="Mirror left / right"><i class="fa-solid fa-left-right"></i></button>
-            <button class="bm-layout-btn" data-layout="flip-v"     title="Mirror top / bottom"><i class="fa-solid fa-up-down"></i></button>
-            <button class="bm-layout-btn" data-layout="rotate-cw"  title="Rotate 90° clockwise"><i class="fa-solid fa-rotate-right"></i></button>
-            <button class="bm-layout-btn" data-layout="rotate-ccw" title="Rotate 90° counter-clockwise"><i class="fa-solid fa-rotate-left"></i></button>
-          </div>
-        </div>
       </div>
       <div class="bm-section">
         <h4>Layer</h4>
         <div class="bm-order-row">
           <div class="bm-order-btns">
-            <button class="bm-order-btn" data-zorder="back"  title="Send to back"><i class="fa-solid fa-angles-down"></i></button>
-            <button class="bm-order-btn" data-zorder="down"  title="Move down (render below)"><i class="fa-solid fa-arrow-down"></i></button>
-            <button class="bm-order-btn" data-zorder="up"    title="Move up (render above)"><i class="fa-solid fa-arrow-up"></i></button>
-            <button class="bm-order-btn" data-zorder="front" title="Bring to front"><i class="fa-solid fa-angles-up"></i></button>
+            <button class="bm-order-btn" data-zorder="back"  title="Send to back"><i class="ti ti-chevrons-down"></i></button>
+            <button class="bm-order-btn" data-zorder="down"  title="Move down (render below)"><i class="ti ti-arrow-down"></i></button>
+            <button class="bm-order-btn" data-zorder="up"    title="Move up (render above)"><i class="ti ti-arrow-up"></i></button>
+            <button class="bm-order-btn" data-zorder="front" title="Bring to front"><i class="ti ti-chevrons-up"></i></button>
           </div>
           <span class="bm-z-label">—</span>
-          <button class="bm-order-btn bm-layer-randomize" data-layer-randomize title="Randomize layering of selected frames" hidden><i class="fa-solid fa-dice"></i></button>
+          <button class="bm-order-btn bm-layer-randomize" data-layer-randomize title="Randomize layering of selected frames" hidden><i class="ti ti-dice-5"></i></button>
         </div>
       </div>
     `;
@@ -314,15 +286,6 @@ export class BoxModelEditor {
       const btn = input.parentElement?.querySelector<HTMLButtonElement>('.bm-dice-btn');
       if (btn) setTimeout(() => { btn.hidden = true; }, 150);
     });
-
-    this.containerEl.querySelectorAll<HTMLButtonElement>('[data-layout]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this.onLayoutTransform(btn.dataset.layout as LayoutTransform);
-      });
-    });
-
-    this._marginCtrl = new MarginModeController(this.containerEl);
-    this._marginCtrl.bindButtons(mode => this._setSidesMode(this._marginCtrl, 'margin', mode));
 
     this._borderWidthCtrl = new MarginModeController(this.containerEl, 'bw');
     this._borderWidthCtrl.bindButtons(mode => this._setSidesMode(this._borderWidthCtrl, 'bw', mode));
@@ -427,7 +390,6 @@ export class BoxModelEditor {
     const bw  = this._readCurrentSides(this._borderWidthCtrl, 'bw');
     const rad = this._readCurrentSides(this._radiusCtrl, 'radius');
     const bm = {
-      margin: this._readCurrentSides(this._marginCtrl, 'margin'),
       border: {
         width_top:    bw.top,
         width_right:  bw.right,

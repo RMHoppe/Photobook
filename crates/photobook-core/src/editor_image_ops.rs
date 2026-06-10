@@ -42,12 +42,16 @@ impl PhotobookEditor {
         pan_y: f32,
         scale: f32,
         rotation_deg: f32,
+        flip_h: bool,
+        flip_v: bool,
     ) {
         if let Some(face) = self.doc.current_spread_mut().layout.faces.get_mut(&node_id) {
             face.image.pan_x        = pan_x.clamp(0.0, 1.0);
             face.image.pan_y        = pan_y.clamp(0.0, 1.0);
             face.image.scale        = scale.max(1.0);
             face.image.rotation_deg = rotation_deg;
+            face.image.flip_h       = flip_h;
+            face.image.flip_v       = flip_v;
         }
         self.mark_leaf_dirty(node_id);
     }
@@ -59,8 +63,10 @@ impl PhotobookEditor {
                 pan_y:        f.image.pan_y,
                 scale:        f.image.scale,
                 rotation_deg: f.image.rotation_deg,
+                flip_h:       f.image.flip_h,
+                flip_v:       f.image.flip_v,
             })
-            .unwrap_or(FrameTransform { pan_x: 0.5, pan_y: 0.5, scale: 1.0, rotation_deg: 0.0 });
+            .unwrap_or(FrameTransform { pan_x: 0.5, pan_y: 0.5, scale: 1.0, rotation_deg: 0.0, flip_h: false, flip_v: false });
         serde_json::to_string(&t).unwrap_or_default()
     }
 
@@ -72,31 +78,44 @@ impl PhotobookEditor {
     }
 
     pub fn set_face_box_model_field(&mut self, face_id: u32, field: &str, value: f32) {
-        let Some(face) = self.doc.current_spread_mut().layout.faces.get_mut(&face_id) else { return };
+        // Margin fields write to edges; collect edge IDs first (immutable borrow).
+        let layout = &self.doc.current_spread().layout;
+        let edge_ids = layout.faces.get(&face_id).map(|f| {
+            (f.top_edge_id, f.right_edge_id, f.bottom_edge_id, f.left_edge_id)
+        });
+        let Some((top_e, right_e, bot_e, left_e)) = edge_ids else { return };
+
+        let layout = &mut self.doc.current_spread_mut().layout;
         match field {
-            "margin-all"    => { let m = &mut face.box_model.margin; m.top = Some(value); m.right = Some(value); m.bottom = Some(value); m.left = Some(value); }
-            "margin-v"      => { face.box_model.margin.top    = Some(value); face.box_model.margin.bottom = Some(value); }
-            "margin-h"      => { face.box_model.margin.right  = Some(value); face.box_model.margin.left   = Some(value); }
-            "margin-top"    => { face.box_model.margin.top    = Some(value); }
-            "margin-right"  => { face.box_model.margin.right  = Some(value); }
-            "margin-bottom" => { face.box_model.margin.bottom = Some(value); }
-            "margin-left"   => { face.box_model.margin.left   = Some(value); }
-            "bw-all"        => { let b = &mut face.box_model.border; b.width_top = Some(value); b.width_right = Some(value); b.width_bottom = Some(value); b.width_left = Some(value); }
-            "bw-v"          => { face.box_model.border.width_top    = Some(value); face.box_model.border.width_bottom = Some(value); }
-            "bw-h"          => { face.box_model.border.width_right  = Some(value); face.box_model.border.width_left   = Some(value); }
-            "bw-top"        => { face.box_model.border.width_top    = Some(value); }
-            "bw-right"      => { face.box_model.border.width_right  = Some(value); }
-            "bw-bottom"     => { face.box_model.border.width_bottom = Some(value); }
-            "bw-left"       => { face.box_model.border.width_left   = Some(value); }
-            "border-radius" => { face.box_model.border.radius = value.max(0.0); }
-            "radius-all"    => { let v = value.max(0.0); let b = &mut face.box_model.border; b.radius_tl = Some(v); b.radius_tr = Some(v); b.radius_br = Some(v); b.radius_bl = Some(v); }
-            "radius-v"      => { let v = value.max(0.0); face.box_model.border.radius_tl = Some(v); face.box_model.border.radius_br = Some(v); }
-            "radius-h"      => { let v = value.max(0.0); face.box_model.border.radius_tr = Some(v); face.box_model.border.radius_bl = Some(v); }
-            "radius-top"    => { face.box_model.border.radius_tl = Some(value.max(0.0)); }
-            "radius-right"  => { face.box_model.border.radius_tr = Some(value.max(0.0)); }
-            "radius-bottom" => { face.box_model.border.radius_br = Some(value.max(0.0)); }
-            "radius-left"   => { face.box_model.border.radius_bl = Some(value.max(0.0)); }
-            _ => {}
+            "margin-all"    => { layout.set_half_gap(top_e, value); layout.set_half_gap(right_e, value); layout.set_half_gap(bot_e, value); layout.set_half_gap(left_e, value); }
+            "margin-v"      => { layout.set_half_gap(top_e, value); layout.set_half_gap(bot_e, value); }
+            "margin-h"      => { layout.set_half_gap(right_e, value); layout.set_half_gap(left_e, value); }
+            "margin-top"    => { layout.set_half_gap(top_e, value); }
+            "margin-right"  => { layout.set_half_gap(right_e, value); }
+            "margin-bottom" => { layout.set_half_gap(bot_e, value); }
+            "margin-left"   => { layout.set_half_gap(left_e, value); }
+            _ => {
+                // Non-margin fields write to the face's box_model.
+                let Some(face) = layout.faces.get_mut(&face_id) else { return };
+                match field {
+                    "bw-all"        => { let b = &mut face.box_model.border; b.width_top = Some(value); b.width_right = Some(value); b.width_bottom = Some(value); b.width_left = Some(value); }
+                    "bw-v"          => { face.box_model.border.width_top    = Some(value); face.box_model.border.width_bottom = Some(value); }
+                    "bw-h"          => { face.box_model.border.width_right  = Some(value); face.box_model.border.width_left   = Some(value); }
+                    "bw-top"        => { face.box_model.border.width_top    = Some(value); }
+                    "bw-right"      => { face.box_model.border.width_right  = Some(value); }
+                    "bw-bottom"     => { face.box_model.border.width_bottom = Some(value); }
+                    "bw-left"       => { face.box_model.border.width_left   = Some(value); }
+                    "border-radius" => { face.box_model.border.radius = value.max(0.0); }
+                    "radius-all"    => { let v = value.max(0.0); let b = &mut face.box_model.border; b.radius_tl = Some(v); b.radius_tr = Some(v); b.radius_br = Some(v); b.radius_bl = Some(v); }
+                    "radius-v"      => { let v = value.max(0.0); face.box_model.border.radius_tl = Some(v); face.box_model.border.radius_br = Some(v); }
+                    "radius-h"      => { let v = value.max(0.0); face.box_model.border.radius_tr = Some(v); face.box_model.border.radius_bl = Some(v); }
+                    "radius-top"    => { face.box_model.border.radius_tl = Some(value.max(0.0)); }
+                    "radius-right"  => { face.box_model.border.radius_tr = Some(value.max(0.0)); }
+                    "radius-bottom" => { face.box_model.border.radius_br = Some(value.max(0.0)); }
+                    "radius-left"   => { face.box_model.border.radius_bl = Some(value.max(0.0)); }
+                    _ => {}
+                }
+            }
         }
         self.mark_structure_dirty();
     }

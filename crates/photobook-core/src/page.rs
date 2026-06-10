@@ -83,15 +83,6 @@ pub struct Spread {
     /// Background fill colour for the right page (front cover for cover spreads). Empty = transparent.
     #[serde(default)]
     pub right_bg: String,
-    /// Outer layout margin for this spread in mm (shrinks the root layout rect).
-    #[serde(default)]
-    pub margin_top: f32,
-    #[serde(default)]
-    pub margin_right: f32,
-    #[serde(default)]
-    pub margin_bottom: f32,
-    #[serde(default)]
-    pub margin_left: f32,
 }
 
 impl Spread {
@@ -113,10 +104,6 @@ impl Spread {
             pinwheel_centers: Vec::new(),
             left_bg: String::new(),
             right_bg: String::new(),
-            margin_top: 0.0,
-            margin_right: 0.0,
-            margin_bottom: 0.0,
-            margin_left: 0.0,
         }
     }
 }
@@ -153,15 +140,6 @@ pub struct PhotobookDocument {
     /// Target print resolution in pixels per inch (used when exporting PDF).
     #[serde(default = "default_print_dpi")]
     pub print_dpi: f32,
-    /// Default margin applied to the root node of each newly created spread (mm).
-    #[serde(default)]
-    pub default_margin_top: f32,
-    #[serde(default)]
-    pub default_margin_right: f32,
-    #[serde(default)]
-    pub default_margin_bottom: f32,
-    #[serde(default)]
-    pub default_margin_left: f32,
     next_spread_id: u32,
     /// Counter used to assign globally unique IDs to text elements.
     #[serde(default = "default_next_text_id")]
@@ -192,10 +170,6 @@ impl PhotobookDocument {
             spine_min_mm: 5.0,
             margin_step_mm: 0.0,
             print_dpi: 300.0,
-            default_margin_top: 0.0,
-            default_margin_right: 0.0,
-            default_margin_bottom: 0.0,
-            default_margin_left: 0.0,
             next_spread_id: 2,
             next_text_id: 500_000_000,
             endpapers: false,

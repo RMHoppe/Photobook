@@ -10,11 +10,18 @@ export class UndoManager {
   private btnUndo: HTMLButtonElement;
   private btnRedo: HTMLButtonElement;
   private editor: PhotobookEditor;
+  private afterChange: () => void;
 
-  constructor(editor: PhotobookEditor, btnUndo: HTMLButtonElement, btnRedo: HTMLButtonElement) {
-    this.editor  = editor;
-    this.btnUndo = btnUndo;
-    this.btnRedo = btnRedo;
+  constructor(
+    editor: PhotobookEditor,
+    btnUndo: HTMLButtonElement,
+    btnRedo: HTMLButtonElement,
+    afterChange: () => void = () => {},
+  ) {
+    this.editor      = editor;
+    this.btnUndo     = btnUndo;
+    this.btnRedo     = btnRedo;
+    this.afterChange = afterChange;
     this._updateButtons();
 
     btnUndo.addEventListener('click', () => this.undo());
@@ -28,13 +35,13 @@ export class UndoManager {
 
   undo(): boolean {
     const ok = this.editor.undo();
-    if (ok) this._updateButtons();
+    if (ok) { this._updateButtons(); this.afterChange(); }
     return ok;
   }
 
   redo(): boolean {
     const ok = this.editor.redo();
-    if (ok) this._updateButtons();
+    if (ok) { this._updateButtons(); this.afterChange(); }
     return ok;
   }
 

@@ -383,7 +383,7 @@ export class ImageSidebar {
     // Used-badge (hidden until updateUsedBadges marks it).
     const badge = document.createElement('div');
     badge.className = 'image-used-badge';
-    badge.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i>';
+    badge.innerHTML = '<i class="ti ti-check" aria-hidden="true"></i>';
     badge.hidden = true;
     div.appendChild(badge);
 

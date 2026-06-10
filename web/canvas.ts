@@ -6,7 +6,7 @@ import { LruCache, rasterBytes } from './lru.js';
 import {
   getSpreadInfo, getLowDpiFrames,
   computeImageCover, getTextElements,
-  getResolvedSpreadDelta, getXJunctions, getSpreadMargin,
+  getResolvedSpreadDelta, getXJunctions,
 } from './wasm-bridge.js';
 import { drawRulers } from './canvas-draw-rulers.js';
 import type { PhotobookEditor } from './pkg/photobook_core.js';
@@ -122,14 +122,14 @@ export class CanvasRenderer {
   _xJunctions: XJunction[] = [];
   /** Bleed in CSS px as of the last draw — needed for junction hit-testing. */
   _bleedPx = 0;
-  /** Spread margin in CSS px as of the last draw — needed for junction hit-testing. */
-  _spreadMarginPx: { top: number; right: number; bottom: number; left: number } = { top: 0, right: 0, bottom: 0, left: 0 };
   /** Currently hovered X-junction handle, or null. */
   hoveredXJunction: XJunction | null = null;
   /** ID of the currently selected text element (null = none). */
   selectedTextIds: Set<number> = new Set();
   /** ID of the text element currently being edited inline (null = none). */
   editingTextId: number | null = null;
+  /** Active snap guide lines to draw during text drag (mm coordinates). */
+  activeSnapLines: Array<{ axis: 'x' | 'y'; mm: number }> = [];
   /** Layout rect for the current spread (printable half only for endpaper spreads). */
   lastLayoutRect: SpreadRect = { x: 0, y: 0, w: 0, h: 0 };
   /** Canvas X of the full spread's left edge (differs from lastLayoutRect.x on left-endpaper spreads). */
@@ -273,14 +273,7 @@ export class CanvasRenderer {
 
       this._drawSafeZone(ctx, spreadRect, spreadInfo, metrics);
       this._drawSplitOverlays(ctx, layoutRect, overlays, renderList);
-      const spreadMargin = getSpreadMargin(editor);
-      const marginPx = {
-        top:    spreadMargin.top    * mmToPx,
-        right:  spreadMargin.right  * mmToPx,
-        bottom: spreadMargin.bottom * mmToPx,
-        left:   spreadMargin.left   * mmToPx,
-      };
-      this._drawDividerLayer(ctx, layoutRect, editor, renderList, selectedSegmentId, bleedPx, marginPx);
+      this._drawDividerLayer(ctx, layoutRect, editor, renderList, selectedSegmentId, bleedPx);
 
       if (marqueeRect) {
         const { x, y, w, h } = marqueeRect;
@@ -307,6 +300,28 @@ export class CanvasRenderer {
     this._textHits = [];
     for (const el of textElements) {
       this._drawTextElement(ctx, el, spreadRect, metrics.mmToPx, this.selectedTextIds.has(el.id));
+    }
+
+    if (this.activeSnapLines.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 0, 128, 0.85)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 3]);
+      for (const line of this.activeSnapLines) {
+        ctx.beginPath();
+        if (line.axis === 'x') {
+          const px = spreadRect.x + line.mm * mmToPx;
+          ctx.moveTo(px, layoutRect.y);
+          ctx.lineTo(px, layoutRect.y + layoutRect.h);
+        } else {
+          const py = spreadRect.y + line.mm * mmToPx;
+          ctx.moveTo(layoutRect.x, py);
+          ctx.lineTo(layoutRect.x + layoutRect.w, py);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
     }
 
     if (!this.previewMode) {
@@ -568,7 +583,6 @@ export class CanvasRenderer {
     renderList: RenderFrame[],
     selectedSegmentId: number,
     bleedPx: number,
-    marginPx: { top: number; right: number; bottom: number; left: number },
   ): void {
     const twinHandles = this._geoCache.twinHandles;
     const selectedTwin = this.twinSegmentSelected && selectedSegmentId !== NULL_ID
@@ -653,12 +667,11 @@ export class CanvasRenderer {
 
     // X-junction handles — only visible while hovering a divider (or the handle itself).
     this._bleedPx = bleedPx;
-    this._spreadMarginPx = marginPx;
     this._xJunctions = getXJunctions(editor);
     if (this.hoveredDivider !== null || this.hoveredXJunction !== null) {
       for (const jx of this._xJunctions) {
-        const cx = spreadRect.x + (-bleedPx + marginPx.left + jx.nx * (spreadRect.w + 2 * bleedPx - marginPx.left - marginPx.right));
-        const cy = spreadRect.y + (-bleedPx + marginPx.top  + jx.ny * (spreadRect.h + 2 * bleedPx - marginPx.top  - marginPx.bottom));
+        const cx = spreadRect.x + (-bleedPx + jx.nx * (spreadRect.w + 2 * bleedPx));
+        const cy = spreadRect.y + (-bleedPx + jx.ny * (spreadRect.h + 2 * bleedPx));
         const isHovered = this.hoveredXJunction !== null
           && this.hoveredXJunction.tl_id === jx.tl_id;
         this._drawXJunctionHandle(ctx, cx, cy, isHovered);
@@ -700,7 +713,7 @@ export class CanvasRenderer {
 
     if (frame.image_id && this.imageCache.has(frame.image_id)) {
       const img = this.imageCache.get(frame.image_id)!;
-      this._drawImageCover(ctx, img, rx, ry, rw, rh, frame.pan_x, frame.pan_y, frame.object_fit, frame.scale, frame.rotation_deg);
+      this._drawImageCover(ctx, img, rx, ry, rw, rh, frame.pan_x, frame.pan_y, frame.object_fit, frame.scale, frame.rotation_deg, frame.flip_h, frame.flip_v);
     } else {
       this._drawEmptyFramePlaceholder(ctx, rx, ry, rw, rh);
     }
@@ -837,6 +850,8 @@ export class CanvasRenderer {
     objectFit: ObjectFit,
     userScale: number | undefined,
     rotationDeg: number | undefined,
+    flipH = false,
+    flipV = false,
   ): void {
     if (objectFit === 'fill') {
       ctx.save();
@@ -886,6 +901,7 @@ export class CanvasRenderer {
     ctx.save();
     ctx.beginPath(); ctx.rect(rx, ry, rw, rh); ctx.clip();
     ctx.translate(cx, cy);
+    if (flipH || flipV) ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
     ctx.rotate(-rad);
     ctx.drawImage(img as CanvasImageSource,
       -rw / 2 - panOffX,
@@ -1293,10 +1309,9 @@ export class CanvasRenderer {
   xJunctionAt(canvasX: number, canvasY: number, spreadRect: SpreadRect): XJunction | null {
     const HIT_R = 11;
     const bp = this._bleedPx;
-    const mp = this._spreadMarginPx;
     for (const jx of this._xJunctions) {
-      const cx = spreadRect.x + (-bp + mp.left + jx.nx * (spreadRect.w + 2 * bp - mp.left - mp.right));
-      const cy = spreadRect.y + (-bp + mp.top  + jx.ny * (spreadRect.h + 2 * bp - mp.top  - mp.bottom));
+      const cx = spreadRect.x + (-bp + jx.nx * (spreadRect.w + 2 * bp));
+      const cy = spreadRect.y + (-bp + jx.ny * (spreadRect.h + 2 * bp));
       const dx = canvasX - cx;
       const dy = canvasY - cy;
       if (dx * dx + dy * dy <= HIT_R * HIT_R) return jx;
@@ -1305,16 +1320,15 @@ export class CanvasRenderer {
   }
 
   /**
-   * Convert a canvas-space point to normalized grid coords, accounting for
-   * bleed and spread margins. Mirrors `root_rect_with_bleed` in Rust.
+   * Convert a canvas-space point to normalized grid coords, accounting for bleed.
+   * Mirrors `root_rect_with_bleed` in Rust.
    */
   canvasToNorm(cx: number, cy: number, sr: SpreadRect): { nx: number; ny: number } {
     const bp = this._bleedPx;
-    const mp = this._spreadMarginPx;
-    const rootX = sr.x - bp + mp.left;
-    const rootY = sr.y - bp + mp.top;
-    const rootW = sr.w + 2 * bp - mp.left - mp.right;
-    const rootH = sr.h + 2 * bp - mp.top  - mp.bottom;
+    const rootX = sr.x - bp;
+    const rootY = sr.y - bp;
+    const rootW = sr.w + 2 * bp;
+    const rootH = sr.h + 2 * bp;
     return {
       nx: (cx - rootX) / rootW,
       ny: (cy - rootY) / rootH,

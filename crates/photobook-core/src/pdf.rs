@@ -280,8 +280,6 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
     // Resolve frames against the printable page width, then shift into spread-mm space.
     let rooms_mm_raw = resolve_frames_mm(
         &spread.layout, layout_w, ph, bleed,
-        spread.margin_top, spread.margin_right,
-        spread.margin_bottom, spread.margin_left,
     );
     // Sort by z_index so lower-z frames are painted first.
     let mut rooms_mm: Vec<_> = rooms_mm_raw.iter().map(|(id, r)| {
@@ -336,6 +334,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
                     decoded_img, &frame_page, bleed, ph,
                     face.image.pan_x, face.image.pan_y,
                     face.image.scale, face.image.rotation_deg,
+                    face.image.flip_h, face.image.flip_v,
                     state.print_dpi,
                     &mut times,
                 ) {
@@ -627,6 +626,8 @@ fn prepare_image(
     pan_y: f32,
     user_scale: f32,
     rotation_deg: f32,
+    flip_h: bool,
+    flip_v: bool,
     print_dpi: f32,
     times: &mut SpreadTimes,
 ) -> Option<Prepared> {
@@ -693,6 +694,13 @@ fn prepare_image(
         cropped
     };
     times.resample_ms += now_ms() - t;
+
+    let final_img = match (flip_h, flip_v) {
+        (true,  true)  => final_img.fliph().flipv(),
+        (true,  false) => final_img.fliph(),
+        (false, true)  => final_img.flipv(),
+        (false, false) => final_img,
+    };
 
     // 8. Build ImageXObject (JPEG or FlateDecode depending on source format).
     let t = now_ms();

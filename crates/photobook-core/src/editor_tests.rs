@@ -124,7 +124,9 @@ pub(crate) mod test_impls {
         ed.split_face_at(f, "h", 0.5);
         let eid = any_interior_edge(&ed).unwrap();
         ed.select_segment(eid);
-        assert!((ed.get_selected_segment_gap() - 0.0).abs() < 1e-4);
+        let gaps: serde_json::Value = serde_json::from_str(&ed.get_selected_segment_half_gaps()).unwrap();
+        assert!((gaps["a"].as_f64().unwrap() - 0.0).abs() < 1e-4);
+        assert!((gaps["b"].as_f64().unwrap() - 0.0).abs() < 1e-4);
     }
 
     pub fn set_and_get_divider_gap() {
@@ -133,23 +135,29 @@ pub(crate) mod test_impls {
         ed.split_face_at(f, "h", 0.5);
         let eid = any_interior_edge(&ed).unwrap();
         ed.select_segment(eid);
-        ed.set_selected_segment_gap(5.0);
-        assert!((ed.get_selected_segment_gap() - 5.0).abs() < 1e-4);
+        ed.set_selected_segment_half_gap_a(3.0);
+        ed.set_selected_segment_half_gap_b(2.0);
+        let gaps: serde_json::Value = serde_json::from_str(&ed.get_selected_segment_half_gaps()).unwrap();
+        assert!((gaps["a"].as_f64().unwrap() - 3.0).abs() < 1e-4);
+        assert!((gaps["b"].as_f64().unwrap() - 2.0).abs() < 1e-4);
     }
 
-    pub fn divider_gap_clamped_to_nonnegative() {
+    pub fn divider_gap_allows_negative() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.split_face_at(f, "h", 0.5);
         let eid = any_interior_edge(&ed).unwrap();
         ed.select_segment(eid);
-        ed.set_selected_segment_gap(-3.0);
-        assert!((ed.get_selected_segment_gap() - 0.0).abs() < 1e-4);
+        ed.set_selected_segment_half_gap_a(-3.0);
+        let gaps: serde_json::Value = serde_json::from_str(&ed.get_selected_segment_half_gaps()).unwrap();
+        assert!((gaps["a"].as_f64().unwrap() - (-3.0)).abs() < 1e-4);
     }
 
     pub fn get_selected_segment_gap_without_selection_returns_zero() {
         let ed = ed();
-        assert!((ed.get_selected_segment_gap() - 0.0).abs() < 1e-4);
+        let gaps: serde_json::Value = serde_json::from_str(&ed.get_selected_segment_half_gaps()).unwrap();
+        assert!((gaps["a"].as_f64().unwrap() - 0.0).abs() < 1e-4);
+        assert!((gaps["b"].as_f64().unwrap() - 0.0).abs() < 1e-4);
     }
 
     pub fn divider_gap_reflected_in_half_gap() {
@@ -158,7 +166,8 @@ pub(crate) mod test_impls {
         ed.split_face_at(f, "h", 0.5);
         let eid = any_interior_edge(&ed).unwrap();
         ed.select_segment(eid);
-        ed.set_selected_segment_gap(4.0);
+        ed.set_selected_segment_half_gap_a(4.0);
+        ed.set_selected_segment_half_gap_b(4.0);
 
         // The resolved divider should expose a positive half_gap.
         let dividers: Vec<serde_json::Value> =
@@ -172,27 +181,12 @@ pub(crate) mod test_impls {
     // Frame properties
     // -----------------------------------------------------------------------
 
-    pub fn set_margin_stored_in_box_model() {
-        let mut ed = ed();
-        let f = first_face(&ed);
-        ed.select_face(f);
-
-        let json = r##"{"margin":{"top":8.0,"right":4.0,"bottom":2.0,"left":1.0},"border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":0.0}"##;
-        ed.set_face_box_model(json);
-
-        let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();
-        assert!((bm["margin"]["top"].as_f64().unwrap() - 8.0).abs() < 1e-3);
-        assert!((bm["margin"]["right"].as_f64().unwrap() - 4.0).abs() < 1e-3);
-        assert!((bm["margin"]["bottom"].as_f64().unwrap() - 2.0).abs() < 1e-3);
-        assert!((bm["margin"]["left"].as_f64().unwrap() - 1.0).abs() < 1e-3);
-    }
-
     pub fn set_border_width_stored_in_box_model() {
         let mut ed = ed();
         let f = first_face(&ed);
         ed.select_face(f);
 
-        let json = r##"{"margin":{"top":0.0,"right":0.0,"bottom":0.0,"left":0.0},"border":{"width":2.5,"color":"#0000ff","position":"inner"},"face_rotation_deg":0.0}"##;
+        let json = r##"{"border":{"width":2.5,"color":"#0000ff","position":"inner"},"face_rotation_deg":0.0}"##;
         ed.set_face_box_model(json);
 
         let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();
@@ -207,7 +201,7 @@ pub(crate) mod test_impls {
         let f = first_face(&ed);
         ed.select_face(f);
 
-        let json = r##"{"margin":{"top":0.0,"right":0.0,"bottom":0.0,"left":0.0},"border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":45.0}"##;
+        let json = r##"{"border":{"width":0.0,"color":"#000000","position":"centered"},"face_rotation_deg":45.0}"##;
         ed.set_face_box_model(json);
 
         let bm: serde_json::Value = serde_json::from_str(&ed.get_face_box_model()).unwrap();
@@ -433,10 +427,9 @@ mod tests {
     #[test] fn delete_with_no_selection_does_nothing() { t::delete_with_no_selection_does_nothing(); }
     #[test] fn divider_gap_defaults_to_zero() { t::divider_gap_defaults_to_zero(); }
     #[test] fn set_and_get_divider_gap() { t::set_and_get_divider_gap(); }
-    #[test] fn divider_gap_clamped_to_nonnegative() { t::divider_gap_clamped_to_nonnegative(); }
+    #[test] fn divider_gap_allows_negative() { t::divider_gap_allows_negative(); }
     #[test] fn get_selected_segment_gap_without_selection_returns_zero() { t::get_selected_segment_gap_without_selection_returns_zero(); }
     #[test] fn divider_gap_reflected_in_half_gap() { t::divider_gap_reflected_in_half_gap(); }
-    #[test] fn set_margin_stored_in_box_model() { t::set_margin_stored_in_box_model(); }
     #[test] fn set_border_width_stored_in_box_model() { t::set_border_width_stored_in_box_model(); }
     #[test] fn set_rotation_stored_in_box_model() { t::set_rotation_stored_in_box_model(); }
     #[test] fn z_index_of_single_frame_is_zero() { t::z_index_of_single_frame_is_zero(); }

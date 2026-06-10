@@ -4,7 +4,7 @@ use crate::layout::{
     EdgeInsets, Rect, ResolvedDivider, ResolvedFrame,
     ResolvedSpread, ResolvedTwinHandle, SplitAxis,
 };
-use crate::grid_layout::{EdgeId, FaceId, GridFace, GridLayout, Orientation};
+use crate::grid_layout::{EdgeId, Facing, FaceId, GridFace, GridLayout, Orientation};
 
 // ---------------------------------------------------------------------------
 // GridResolver
@@ -77,11 +77,9 @@ impl<'a> GridResolver<'a> {
         let layout   = self.layout;
         let mm_to_px = self.mm_to_px;
         let (fx, fy, fw, fh) = layout.face_rect(face.id)?;
-        let raw       = norm_to_px(fx, fy, fw, fh, root_rect);
-        let gi        = self.gap_inset_px(face.id);
-        let gapped    = raw.inset(&gi);
-        let margin_px = face.box_model.margin.resolve().scale(mm_to_px);
-        let inner     = gapped.inset(&margin_px);
+        let raw   = norm_to_px(fx, fy, fw, fh, root_rect);
+        let gi    = self.gap_inset_px(face.id);
+        let inner = raw.inset(&gi);
         let (bwt, bwr, bwb, bwl) = face.box_model.border.side_widths();
         let (crtl, crtr, crbr, crbl) = face.box_model.border.corner_radii();
         Some(ResolvedFrame {
@@ -94,6 +92,8 @@ impl<'a> GridResolver<'a> {
             pan_y:            face.image.pan_y,
             scale:            face.image.scale,
             rotation_deg:     face.image.rotation_deg,
+            flip_h:           face.image.flip_h,
+            flip_v:           face.image.flip_v,
             is_selected:      self.selection.contains(&face.id),
             border_width_top:    bwt * mm_to_px,
             border_width_right:  bwr * mm_to_px,
@@ -195,6 +195,72 @@ impl<'a> GridResolver<'a> {
     }
 
     // -----------------------------------------------------------------------
+    // Dividers for hit-testing — one entry per interior twin pair so each
+    // segment uses its own half_gap rather than the chain-wide maximum.
+    // `segment_id` on every entry still points to the chain representative.
+    // -----------------------------------------------------------------------
+
+    pub fn resolve_divider_hits(&self, root_rect: Rect) -> Vec<ResolvedDivider> {
+        let layout = self.layout;
+        let (sw, sh) = (root_rect.w, root_rect.h);
+        let (ox, oy) = (root_rect.x, root_rect.y);
+        let mut hits = Vec::new();
+
+        self.for_each_chain(|is_h, chain| {
+            if !chain.iter().any(|&eid| !layout.is_boundary_edge(eid)) { return; }
+
+            // Chain rep: same rule as resolve_dividers (edge with max half_gap).
+            let mut max_gap = 0.0_f32;
+            let mut rep = chain[0];
+            for &eid in chain {
+                if let Some(e) = layout.edges.get(&eid) {
+                    if !e.is_boundary && e.half_gap > max_gap {
+                        max_gap = e.half_gap;
+                        rep = eid;
+                    }
+                }
+            }
+
+            // One hit zone per interior twin pair (process only Facing::End to
+            // visit each pair exactly once; use max of both sides for the radius).
+            for &e_id in chain {
+                let e = match layout.edges.get(&e_id) {
+                    Some(e) if !e.is_boundary && e.facing == Facing::End => e,
+                    _ => continue,
+                };
+                let Some((lo, hi)) = layout.edge_extent(e_id) else { continue };
+                let twin_gap = layout.twin(e_id)
+                    .and_then(|tid| layout.edges.get(&tid))
+                    .map(|t| t.half_gap)
+                    .unwrap_or(0.0);
+                let seg_gap_px = e.half_gap.max(twin_gap) * self.mm_to_px;
+
+                if is_h {
+                    hits.push(ResolvedDivider {
+                        segment_id: rep,
+                        x:        ox + lo      * sw,
+                        y:        oy + e.offset * sh,
+                        length:   (hi - lo)    * sw,
+                        axis:     SplitAxis::Horizontal,
+                        half_gap: seg_gap_px,
+                    });
+                } else {
+                    hits.push(ResolvedDivider {
+                        segment_id: rep,
+                        x:        ox + e.offset * sw,
+                        y:        oy + lo       * sh,
+                        length:   (hi - lo)     * sh,
+                        axis:     SplitAxis::Vertical,
+                        half_gap: seg_gap_px,
+                    });
+                }
+            }
+        });
+
+        hits
+    }
+
+    // -----------------------------------------------------------------------
     // Twin handles — emitted for chains with > 1 twin pair (for multi-segment
     // chains the TS can show a handle to select / delete individual segments)
     // -----------------------------------------------------------------------
@@ -248,24 +314,12 @@ impl<'a> GridResolver<'a> {
         let mm_px  = self.mm_to_px;
         let face   = match layout.faces.get(&face_id) { Some(f) => f, None => return EdgeInsets::default() };
 
-        let top_half = layout.edges.get(&face.top_edge_id)
-            .filter(|e| !e.is_boundary)
-            .map(|e| e.half_gap * mm_px)
-            .unwrap_or(0.0);
-        let bot_half = layout.edges.get(&face.bottom_edge_id)
-            .filter(|e| !e.is_boundary)
-            .map(|e| e.half_gap * mm_px)
-            .unwrap_or(0.0);
-        let left_half = layout.edges.get(&face.left_edge_id)
-            .filter(|e| !e.is_boundary)
-            .map(|e| e.half_gap * mm_px)
-            .unwrap_or(0.0);
-        let right_half = layout.edges.get(&face.right_edge_id)
-            .filter(|e| !e.is_boundary)
-            .map(|e| e.half_gap * mm_px)
-            .unwrap_or(0.0);
+        let top    = layout.edges.get(&face.top_edge_id)   .map(|e| e.half_gap * mm_px).unwrap_or(0.0);
+        let bottom = layout.edges.get(&face.bottom_edge_id).map(|e| e.half_gap * mm_px).unwrap_or(0.0);
+        let left   = layout.edges.get(&face.left_edge_id)  .map(|e| e.half_gap * mm_px).unwrap_or(0.0);
+        let right  = layout.edges.get(&face.right_edge_id) .map(|e| e.half_gap * mm_px).unwrap_or(0.0);
 
-        EdgeInsets { top: top_half, bottom: bot_half, left: left_half, right: right_half }
+        EdgeInsets { top, bottom, left, right }
     }
 }
 
@@ -286,16 +340,12 @@ pub fn resolve_frames_mm(
     spread_w_mm: f32,
     spread_h_mm: f32,
     bleed_mm: f32,
-    margin_top: f32,
-    margin_right: f32,
-    margin_bottom: f32,
-    margin_left: f32,
 ) -> Vec<(FaceId, Rect)> {
     let root = Rect::new(
-        -bleed_mm + margin_left,
-        -bleed_mm + margin_top,
-        spread_w_mm + 2.0 * bleed_mm - margin_left - margin_right,
-        spread_h_mm + 2.0 * bleed_mm - margin_top - margin_bottom,
+        -bleed_mm,
+        -bleed_mm,
+        spread_w_mm + 2.0 * bleed_mm,
+        spread_h_mm + 2.0 * bleed_mm,
     );
     GridResolver::new(layout, &[], 1.0)
         .resolve_frames(root)

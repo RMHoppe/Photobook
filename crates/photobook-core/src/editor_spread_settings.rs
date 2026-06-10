@@ -11,20 +11,6 @@ impl PhotobookEditor {
     pub fn add_page(&mut self) {
         self.doc.add_spread(); // inserts a settings-cloned spread after the current one
         let new_idx = (self.doc.current_spread + 1).min(self.doc.spreads.len().saturating_sub(1));
-        let (t, r, b, l) = (
-            self.doc.default_margin_top,
-            self.doc.default_margin_right,
-            self.doc.default_margin_bottom,
-            self.doc.default_margin_left,
-        );
-        if let Some(spread) = self.doc.spreads.get_mut(new_idx) {
-            for face in spread.layout.faces.values_mut() {
-                face.box_model.margin.top    = Some(t);
-                face.box_model.margin.right  = Some(r);
-                face.box_model.margin.bottom = Some(b);
-                face.box_model.margin.left   = Some(l);
-            }
-        }
         // Navigate to the freshly inserted spread.
         self.doc.current_spread = new_idx;
         let n = self.doc.spreads.len();
@@ -148,25 +134,6 @@ impl PhotobookEditor {
 
     pub fn set_spread_right_bg(&mut self, color: &str) {
         self.doc.current_spread_mut().right_bg = color.to_string();
-        self.mark_structure_dirty();
-    }
-
-    pub fn get_spread_margin(&self) -> String {
-        let s = self.doc.current_spread();
-        serde_json::json!({
-            "top":    s.margin_top,
-            "right":  s.margin_right,
-            "bottom": s.margin_bottom,
-            "left":   s.margin_left,
-        }).to_string()
-    }
-
-    pub fn set_spread_margin(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
-        let s = self.doc.current_spread_mut();
-        s.margin_top    = top.max(0.0);
-        s.margin_right  = right.max(0.0);
-        s.margin_bottom = bottom.max(0.0);
-        s.margin_left   = left.max(0.0);
         self.mark_structure_dirty();
     }
 
@@ -305,28 +272,6 @@ impl PhotobookEditor {
     pub fn get_spine_min_mm(&self) -> f32 { self.doc.spine_min_mm }
     pub fn get_margin_step_mm(&self) -> f32 { self.doc.margin_step_mm }
     pub fn get_print_dpi(&self) -> f32 { self.doc.print_dpi }
-
-    pub fn get_default_spread_margin_mm(&self) -> String {
-        serde_json::json!({
-            "top":    self.doc.default_margin_top,
-            "right":  self.doc.default_margin_right,
-            "bottom": self.doc.default_margin_bottom,
-            "left":   self.doc.default_margin_left,
-        }).to_string()
-    }
-
-    pub fn set_default_spread_margin(&mut self, top: f32, right: f32, bottom: f32, left: f32) {
-        self.doc.default_margin_top    = top.max(0.0);
-        self.doc.default_margin_right  = right.max(0.0);
-        self.doc.default_margin_bottom = bottom.max(0.0);
-        self.doc.default_margin_left   = left.max(0.0);
-        for face in self.doc.current_spread_mut().layout.faces.values_mut() {
-            face.box_model.margin.top    = Some(top.max(0.0));
-            face.box_model.margin.right  = Some(right.max(0.0));
-            face.box_model.margin.bottom = Some(bottom.max(0.0));
-            face.box_model.margin.left   = Some(left.max(0.0));
-        }
-    }
 
     pub fn set_page_settings(
         &mut self,

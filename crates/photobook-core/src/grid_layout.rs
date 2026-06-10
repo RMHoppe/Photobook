@@ -36,6 +36,10 @@ pub struct ImageContent {
     pub scale: f32,
     /// Rotation in degrees counter-clockwise.
     pub rotation_deg: f32,
+    #[serde(default)]
+    pub flip_h: bool,
+    #[serde(default)]
+    pub flip_v: bool,
 }
 
 impl Default for ImageContent {
@@ -47,6 +51,8 @@ impl Default for ImageContent {
             pan_y: 0.5,
             scale: 1.0,
             rotation_deg: 0.0,
+            flip_h: false,
+            flip_v: false,
         }
     }
 }

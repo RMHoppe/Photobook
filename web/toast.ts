@@ -35,7 +35,7 @@ export function showToast(message: string, kind: ToastKind = 'info', durationMs?
   const dismiss = document.createElement('button');
   dismiss.className = 'banner-dismiss';
   dismiss.title = 'Dismiss';
-  dismiss.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+  dismiss.innerHTML = '<i class="ti ti-x"></i>';
 
   let removed = false;
   const remove = () => {
