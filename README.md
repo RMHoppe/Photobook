@@ -71,4 +71,4 @@ See [CLAUDE.md](CLAUDE.md) for a full directory layout and architecture notes.
 
 ## License
 
-MIT
+GNU General Public License v3.0
