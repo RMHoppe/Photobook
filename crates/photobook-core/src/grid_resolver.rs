@@ -407,7 +407,7 @@ pub fn resolve_frames_mm(
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(any(test, feature = "wasm-test"))]
+#[cfg(any(test, all(target_arch = "wasm32", feature = "wasm-test")))]
 pub(crate) mod test_impls {
     use super::*;
     use crate::grid_layout::GridLayout;

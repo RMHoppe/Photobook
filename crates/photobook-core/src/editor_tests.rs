@@ -1,6 +1,6 @@
 /// Integration-level tests for the photobook editor API.
 
-#[cfg(any(test, feature = "wasm-test"))]
+#[cfg(any(test, all(target_arch = "wasm32", feature = "wasm-test")))]
 pub(crate) mod test_impls {
     use crate::PhotobookEditor;
     use crate::grid_layout::OUTER_FACE;

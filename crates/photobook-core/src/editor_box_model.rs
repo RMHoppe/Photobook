@@ -792,7 +792,7 @@ impl PhotobookEditor {
 // ---------------------------------------------------------------------------
 
 impl PhotobookEditor {
-    pub(crate) fn apply_box_model_to_node(&mut self, id: FaceId, bm: &BoxModelJson) {
+    fn apply_box_model_to_node(&mut self, id: FaceId, bm: &BoxModelJson) {
         let layout = &mut self.doc.current_spread_mut().layout;
         let Some(face) = layout.faces.get_mut(&id) else { return };
         let r = &mut face.box_model;
@@ -811,7 +811,7 @@ impl PhotobookEditor {
 
     /// Merge per-face DTOs into the selection aggregate: each field stays
     /// concrete when every face agrees and becomes `null` ("mixed") otherwise.
-    pub(crate) fn merge_box_models_json(bms: &[BoxModelJson]) -> String {
+    fn merge_box_models_json(bms: &[BoxModelJson]) -> String {
         fn agree<T: PartialEq + Clone>(
             bms: &[BoxModelJson],
             get: impl Fn(&BoxModelJson) -> Option<T>,

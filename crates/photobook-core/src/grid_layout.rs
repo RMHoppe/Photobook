@@ -1310,7 +1310,7 @@ impl Default for GridLayout {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[cfg(any(test, feature = "wasm-test"))]
+#[cfg(any(test, all(target_arch = "wasm32", feature = "wasm-test")))]
 pub(crate) mod test_impls {
     use super::*;
 

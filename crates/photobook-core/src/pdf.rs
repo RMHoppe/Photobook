@@ -1311,46 +1311,6 @@ fn draw_text_elements(
     }
 }
 
-/// Returns (sw, sh, x_mm, y_mm, total_scale) — the fully-resolved placement
-/// geometry for an image in a frame. Used by tests to inspect crop inputs.
-#[cfg(test)]
-fn placement_params(
-    frame_rect: &Rect,
-    img_w: u32,
-    img_h: u32,
-    pan_x: f32,
-    pan_y: f32,
-    user_scale: f32,
-    rotation_deg: f32,
-    bleed: f32,
-    page_h_mm: f32,
-) -> (f32, f32, f32, f32, f32) {
-    let dpi = 300.0_f32;
-    let nat_w_mm = img_w as f32 / dpi * 25.4;
-    let nat_h_mm = img_h as f32 / dpi * 25.4;
-    let cover_scale = (frame_rect.w / nat_w_mm).max(frame_rect.h / nat_h_mm);
-    let rad = rotation_deg.to_radians();
-    let cos_a = rad.cos().abs();
-    let sin_a = rad.sin().abs();
-    let sw0 = nat_w_mm * cover_scale;
-    let sh0 = nat_h_mm * cover_scale;
-    let rot_factor = if sw0 > 0.0 && sh0 > 0.0 {
-        ((frame_rect.w * cos_a + frame_rect.h * sin_a) / sw0)
-            .max((frame_rect.w * sin_a + frame_rect.h * cos_a) / sh0)
-            .max(1.0)
-    } else { 1.0 };
-    let total_scale = cover_scale * rot_factor * user_scale.max(1.0);
-    let sw = nat_w_mm * total_scale;
-    let sh = nat_h_mm * total_scale;
-    let overflow_x = sw - frame_rect.w;
-    let overflow_y = sh - frame_rect.h;
-    let x_mm = frame_rect.x + bleed - overflow_x * pan_x;
-    let frame_cy_pdf = page_h_mm + bleed - frame_rect.y - frame_rect.h / 2.0;
-    let y_img_center = frame_cy_pdf + (pan_y - 0.5) * overflow_y;
-    let y_mm = y_img_center - sh / 2.0;
-    (sw, sh, x_mm, y_mm, total_scale)
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1791,4 +1751,3 @@ mod tests {
             "enabling crop marks should add content ({} vs {} bytes)", with.len(), without.len());
     }
 }
-
