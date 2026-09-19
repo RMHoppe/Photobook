@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!-- pod/mock-checkout.html — Fake hosted checkout page for the simulated
+     print-on-demand provider. Same origin as the app, so writing the payment
+     outcome to localStorage lets MockProvider.getOrderStatus() see it. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checkout — Simulated Print Shop</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #f4f1ec; color: #333;
+           display: flex; justify-content: center; padding-top: 8vh; margin: 0; }
+    .card { background: #fff; border-radius: 10px; box-shadow: 0 6px 30px rgba(0,0,0,0.12);
+            padding: 32px 36px; width: min(420px, 90vw); }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .sim { font-size: 11px; color: #b00; text-transform: uppercase; letter-spacing: 0.06em; }
+    .row { display: flex; justify-content: space-between; margin: 18px 0 6px; font-size: 14px; }
+    .total { font-size: 22px; font-weight: 700; }
+    .ref { font-size: 11px; color: #888; word-break: break-all; margin-bottom: 20px; }
+    button { padding: 10px 18px; border-radius: 6px; border: none; font-size: 14px; cursor: pointer; }
+    #btn-pay { background: #2e7d32; color: #fff; margin-right: 10px; }
+    #btn-cancel { background: #eee; color: #333; }
+    #done { display: none; margin-top: 18px; font-size: 15px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p class="sim">Simulated checkout — no real order, no payment</p>
+    <h1>Your photo book</h1>
+    <div class="row"><span>Order total</span><span class="total" id="total"></span></div>
+    <p class="ref" id="ref"></p>
+    <div id="actions">
+      <button id="btn-pay">Pay now</button>
+      <button id="btn-cancel">Cancel order</button>
+    </div>
+    <p id="done"></p>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const order = params.get('order') || 'unknown';
+    const total = params.get('total') || '0.00';
+    const currency = params.get('currency') || 'EUR';
+    document.getElementById('total').textContent = total + ' ' + currency;
+    document.getElementById('ref').textContent = 'Order reference: ' + order;
+
+    function finish(status, message) {
+      try {
+        const key = 'photobook-mock-orders';
+        const map = JSON.parse(localStorage.getItem(key) || '{}');
+        map[order] = status;
+        localStorage.setItem(key, JSON.stringify(map));
+      } catch (e) { /* ignore */ }
+      document.getElementById('actions').style.display = 'none';
+      const done = document.getElementById('done');
+      done.textContent = message;
+      done.style.display = 'block';
+    }
+
+    document.getElementById('btn-pay').addEventListener('click', () =>
+      finish('paid', '✓ Payment received — your book is on its way (simulated).'));
+    document.getElementById('btn-cancel').addEventListener('click', () =>
+      finish('cancelled', 'Order cancelled.'));
+  </script>
+</body>
+</html>

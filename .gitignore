@@ -2,7 +2,7 @@ target/
 web/pkg/
 node_modules/@fortawesome/
 Cargo.lock
-pod/
+/pod/
 
 # TypeScript compilation output
 **.js
