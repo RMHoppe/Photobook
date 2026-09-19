@@ -68,24 +68,41 @@ export class InlineEditor {
 
     const sr = this.cb.spreadRect();
     const spreadInfo = getSpreadInfo(this.editor);
-    const mmToPx = sr.w / spreadInfo.width_mm;
+    // spreadRect() returns a half-wide, origin-shifted rect for endpaper spreads,
+    // but text x_mm values are in full-spread coordinates. Recover the full spread
+    // scale and canvas origin so the overlay lands exactly on the canvas text.
+    const mmToPx = spreadInfo.endpaper_side
+      ? (sr.w * 2) / spreadInfo.width_mm
+      : sr.w / spreadInfo.width_mm;
+    const fullOriginX = spreadInfo.endpaper_side === 'left' ? sr.x - sr.w : sr.x;
 
     // Position of the text element's top-left in canvas-area CSS coordinates.
     const areaEl   = this.textarea.parentElement!;
     const areaRect = areaEl.getBoundingClientRect();
     const canvasEl = areaEl.querySelector('canvas')!;
     const canvasRect = canvasEl.getBoundingClientRect();
-    const ox = (canvasRect.left - areaRect.left) + sr.x + el.x_mm * mmToPx;
+    const ox = (canvasRect.left - areaRect.left) + fullOriginX + el.x_mm * mmToPx;
     const oy = (canvasRect.top  - areaRect.top)  + sr.y + el.y_mm * mmToPx;
 
     // Font metrics — must match canvas rendering (1 pt = 25.4/72 mm).
     const fontPx = el.font_size_pt * (25.4 / 72) * mmToPx;
     const lineH  = fontPx * 1.2;
 
-    // Half-dimensions from the last rendered hit box.
-    const hit = this.renderer._textHits.find(h => h.id === textId);
-    const hw  = hit ? hit.hw : fontPx;
-    const hh  = hit ? hit.hh : lineH / 2;
+    // Measure text width with the DOM ruler so the anchor is always consistent
+    // with the current mmToPx — avoids a jump when the canvas was resized
+    // (e.g. sidebar panel switch) after the last draw populated _textHits.
+    this.ruler.style.fontSize   = `${fontPx}px`;
+    this.ruler.style.fontFamily = `"${el.font_family}", sans-serif`;
+    this.ruler.style.fontWeight = el.bold   ? 'bold'   : 'normal';
+    this.ruler.style.fontStyle  = el.italic ? 'italic' : 'normal';
+    const initLines = (el.content ?? '').split('\n');
+    let maxLineW = fontPx;
+    for (const line of initLines) {
+      this.ruler.textContent = line || ' ';
+      maxLineW = Math.max(maxLineW, this.ruler.offsetWidth);
+    }
+    const hw = Math.max(maxLineW + 4, fontPx) / 2;
+    const hh = initLines.length * lineH / 2;
 
     // Store anchors for resize() and x_mm correction.
     this._ox   = ox;
@@ -189,7 +206,8 @@ export class InlineEditor {
 
       // Adjust x_mm so the canvas renders at the same anchor as the overlay.
       const sr = this.cb.spreadRect();
-      const mmToPx = sr.w / getSpreadInfo(this.editor).width_mm;
+      const si = getSpreadInfo(this.editor);
+      const mmToPx = si.endpaper_side ? (sr.w * 2) / si.width_mm : sr.w / si.width_mm;
       const align = el.align ?? 'left';
       let x_mm_new = this._xMm;
       if (align === 'center') {

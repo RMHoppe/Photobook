@@ -3,11 +3,12 @@
 import type { ProjectSettingsData } from './types.js';
 import { debounce } from './utils.js';
 import { numField, wrapField, bindInputs } from './ui-fields.js';
+import { PRINT_SHOP_SPECS, getPrintShopSpec } from './print-shop-specs.js';
 export type { ProjectSettingsData };
 
-type PageFormat = { value: string; label: string; w: number; h: number };
+export type PageFormat = { value: string; label: string; w: number; h: number };
 
-const PAGE_FORMAT_GROUPS: { label: string; formats: PageFormat[] }[] = [
+export const PAGE_FORMAT_GROUPS: { label: string; formats: PageFormat[] }[] = [
   { label: 'Square', formats: [
     { value: 'sq200', label: '20 × 20 cm (200 × 200 mm)', w: 200, h: 200 },
     { value: 'sq250', label: '25 × 25 cm (250 × 250 mm)', w: 250, h: 250 },
@@ -90,55 +91,85 @@ export class ProjectSettingsPanel {
   private _build(): void {
     this._built = true;
     this.containerEl.dataset.panel = 'project';
+    const specOptions = '<option value="">Custom settings</option>' +
+      PRINT_SHOP_SPECS.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
     this.containerEl.innerHTML = `
-      <div class="bm-section">
-        <h4>Page size</h4>
-        <div class="bm-grid">
-          ${wrapField('Format', `<select id="ps-format">${pageFormatOptionsHtml()}</select>`, true)}
+      <div class="ps-two-col">
+        <div class="ps-col">
+          <div class="bm-section">
+            <h4>Print shop preset</h4>
+            <div class="bm-grid">
+              ${wrapField('Preset', `<select id="ps-print-spec">${specOptions}</select>`, true)}
+            </div>
+          </div>
+          <div class="bm-section">
+            <h4>Page size</h4>
+            <div class="bm-grid">
+              ${wrapField('Format', `<select id="ps-format">${pageFormatOptionsHtml()}</select>`, true)}
+            </div>
+            <div id="ps-custom-size" class="bm-grid" hidden>
+              ${numField('page-w', 'Width (mm)',  { min: 1, max: 600, step: 1 })}
+              ${numField('page-h', 'Height (mm)', { min: 1, max: 600, step: 1 })}
+            </div>
+          </div>
+          <div class="bm-section">
+            <h4>Print</h4>
+            <div class="bm-grid">
+              ${numField('bleed',     'Bleed (mm)',     { min: 0, max: 20,   step: 0.5 })}
+              ${numField('safe',      'Safe zone (mm)', { min: 0, max: 30,   step: 0.5 })}
+              ${numField('print-dpi', 'DPI',            { min: 72, max: 1200, step: 1  })}
+            </div>
+          </div>
+          <div class="bm-section">
+            <h4>Spine</h4>
+            <div class="bm-grid">
+              ${numField('spine-per-page', 'Per page (mm)', { min: 0, max: 2,  step: 0.01 })}
+              ${numField('spine-min',      'Minimum (mm)',  { min: 0, max: 50, step: 0.5  })}
+            </div>
+          </div>
         </div>
-        <div id="ps-custom-size" class="bm-grid" hidden>
-          ${numField('page-w', 'Width (mm)',  { min: 1, max: 600, step: 1 })}
-          ${numField('page-h', 'Height (mm)', { min: 1, max: 600, step: 1 })}
+        <div class="ps-col">
+          <div class="bm-section">
+            <h4>Binding</h4>
+            <label class="ps-toggle-row">
+              <input type="checkbox" id="ps-endpapers" />
+              Endpapers (non-printable inner pages)
+            </label>
+          </div>
+          <div class="bm-section">
+            <h4>Export</h4>
+            <label class="ps-toggle-row">
+              <input type="checkbox" id="ps-split-cover" />
+              Separate cover PDF
+            </label>
+            <label class="ps-toggle-row">
+              <input type="checkbox" id="ps-body-pages" />
+              Interior as single pages
+            </label>
+            <label class="ps-toggle-row">
+              <input type="checkbox" id="ps-cover-pages" />
+              Cover as front &amp; back pages
+            </label>
+            <label class="ps-toggle-row">
+              <input type="checkbox" id="ps-crop-marks" />
+              Crop marks
+            </label>
+            <div class="bm-grid">
+              ${numField('cover-wrap', 'Cover wrap (mm)', { min: 0, max: 30, step: 0.5 })}
+            </div>
+          </div>
+          <div class="bm-section">
+            <h4>View</h4>
+            <label class="ps-toggle-row">
+              <input type="checkbox" id="ps-show-bleed" checked />
+              Show bleed area
+            </label>
+            <label class="ps-toggle-row">
+              <input type="checkbox" id="ps-show-safe-zone" checked />
+              Show safe zone
+            </label>
+          </div>
         </div>
-      </div>
-      <div class="bm-section">
-        <h4>Print</h4>
-        <div class="bm-grid">
-          ${numField('bleed',     'Bleed (mm)',     { min: 0, max: 20,   step: 0.5 })}
-          ${numField('safe',      'Safe zone (mm)', { min: 0, max: 30,   step: 0.5 })}
-          ${numField('print-dpi', 'DPI',            { min: 72, max: 1200, step: 1  })}
-        </div>
-      </div>
-      <div class="bm-section">
-        <h4>Spine</h4>
-        <div class="bm-grid">
-          ${numField('spine-per-page', 'Per page (mm)', { min: 0, max: 2,  step: 0.01 })}
-          ${numField('spine-min',      'Minimum (mm)',  { min: 0, max: 50, step: 0.5  })}
-        </div>
-      </div>
-      <div class="bm-section">
-        <h4>Editing</h4>
-        <div class="bm-grid">
-          ${numField('margin-step', 'Margin step (mm)', { min: 0, max: 20, step: 0.5 })}
-        </div>
-      </div>
-      <div class="bm-section">
-        <h4>Binding</h4>
-        <label class="ps-toggle-row">
-          <input type="checkbox" id="ps-endpapers" />
-          Endpapers (non-printable inner pages)
-        </label>
-      </div>
-      <div class="bm-section">
-        <h4>View</h4>
-        <label class="ps-toggle-row">
-          <input type="checkbox" id="ps-show-bleed" checked />
-          Show bleed area
-        </label>
-        <label class="ps-toggle-row">
-          <input type="checkbox" id="ps-show-safe-zone" checked />
-          Show safe zone
-        </label>
       </div>
     `;
 
@@ -172,6 +203,70 @@ export class ProjectSettingsPanel {
     endpapersChk.addEventListener('change', () => {
       this.onToggleEndpapers?.(endpapersChk.checked);
     });
+
+    // Export option checkboxes go through the regular settings change path.
+    for (const id of ['ps-split-cover', 'ps-body-pages', 'ps-cover-pages', 'ps-crop-marks']) {
+      this.containerEl.querySelector<HTMLInputElement>(`#${id}`)!
+        .addEventListener('change', () => this._emit());
+    }
+
+    // Selecting a print-shop preset asks for confirmation, then prefills settings.
+    const specSel = this.containerEl.querySelector<HTMLSelectElement>('#ps-print-spec')!;
+    let _prevSpecValue = specSel.value;
+    specSel.addEventListener('change', () => {
+      const spec = getPrintShopSpec(specSel.value);
+      if (!spec) {
+        // Switching to "Custom settings" — no confirmation needed.
+        _prevSpecValue = specSel.value;
+        this._emit();
+        return;
+      }
+      if (!confirm(`Apply preset "${spec.name}"?\n\nThis will overwrite your current page size, bleed, DPI, and export settings.`)) {
+        specSel.value = _prevSpecValue;
+        return;
+      }
+      _prevSpecValue = specSel.value;
+      this._applySpecSettings(spec.settings);
+      this._emit();
+    });
+  }
+
+  private _applySpecSettings(s: Partial<ProjectSettingsData>): void {
+    const num: [keyof ProjectSettingsData, string][] = [
+      ['page_width_mm', 'page-w'], ['page_height_mm', 'page-h'],
+      ['bleed_mm', 'bleed'], ['safe_zone_mm', 'safe'],
+      ['spine_mm_per_page', 'spine-per-page'], ['spine_min_mm', 'spine-min'],
+      ['print_dpi', 'print-dpi'], ['cover_wrap_mm', 'cover-wrap'],
+    ];
+    for (const [key, field] of num) {
+      const v = s[key];
+      if (typeof v === 'number') this._set(field, v);
+    }
+    if (typeof s.export_split_cover === 'boolean') this._setChecked('ps-split-cover', s.export_split_cover);
+    if (typeof s.export_body_pages  === 'boolean') this._setChecked('ps-body-pages',  s.export_body_pages);
+    if (typeof s.export_cover_pages === 'boolean') this._setChecked('ps-cover-pages', s.export_cover_pages);
+    if (typeof s.export_crop_marks  === 'boolean') this._setChecked('ps-crop-marks',  s.export_crop_marks);
+
+    // Page-size selector: reflect the spec's size (or switch to Custom).
+    if (typeof s.page_width_mm === 'number' && typeof s.page_height_mm === 'number') {
+      const fmt = PAGE_FORMATS.find(f => f.w === s.page_width_mm && f.h === s.page_height_mm);
+      const formatSel  = this.containerEl.querySelector<HTMLSelectElement>('#ps-format');
+      const customSize = this.containerEl.querySelector<HTMLElement>('#ps-custom-size');
+      if (formatSel && customSize) {
+        formatSel.value   = fmt ? fmt.value : 'custom';
+        customSize.hidden = fmt !== undefined;
+      }
+    }
+
+    // Endpapers have document side effects, so they go through their
+    // dedicated toggle handler rather than the settings change path.
+    if (typeof s.endpapers === 'boolean') {
+      const chk = this.containerEl.querySelector<HTMLInputElement>('#ps-endpapers');
+      if (chk && chk.checked !== s.endpapers) {
+        chk.checked = s.endpapers;
+        this.onToggleEndpapers?.(s.endpapers);
+      }
+    }
   }
 
   private _populate(data: ProjectSettingsData): void {
@@ -192,8 +287,21 @@ export class ProjectSettingsPanel {
     this._set('safe',            data.safe_zone_mm);
     this._set('spine-per-page',  data.spine_mm_per_page);
     this._set('spine-min',       data.spine_min_mm);
-    this._set('margin-step',     data.margin_step_mm);
     this._set('print-dpi',       data.print_dpi);
+    this._set('cover-wrap',      data.cover_wrap_mm);
+    this._setChecked('ps-endpapers',   data.endpapers);
+    this._setChecked('ps-split-cover', data.export_split_cover);
+    this._setChecked('ps-body-pages',  data.export_body_pages);
+    this._setChecked('ps-cover-pages', data.export_cover_pages);
+    this._setChecked('ps-crop-marks',  data.export_crop_marks);
+
+    const specSel = this.containerEl.querySelector<HTMLSelectElement>('#ps-print-spec');
+    if (specSel) specSel.value = getPrintShopSpec(data.print_spec_id) ? data.print_spec_id : '';
+  }
+
+  private _setChecked(id: string, checked: boolean): void {
+    const el = this.containerEl.querySelector<HTMLInputElement>(`#${id}`);
+    if (el) el.checked = checked;
   }
 
   private _set(name: string, value: number): void {
@@ -209,6 +317,8 @@ export class ProjectSettingsPanel {
       const v = parseFloat(el.value);
       return isNaN(v) ? 0 : v;
     };
+    const checked = (id: string): boolean =>
+      this.containerEl.querySelector<HTMLInputElement>(`#${id}`)?.checked ?? false;
     this.onChange({
       page_width_mm:     g('page-w'),
       page_height_mm:    g('page-h'),
@@ -216,9 +326,14 @@ export class ProjectSettingsPanel {
       safe_zone_mm:      g('safe'),
       spine_mm_per_page: g('spine-per-page'),
       spine_min_mm:      g('spine-min'),
-      margin_step_mm:    g('margin-step'),
       print_dpi:         g('print-dpi'),
-      endpapers:         this.containerEl.querySelector<HTMLInputElement>('#ps-endpapers')?.checked ?? false,
+      endpapers:         checked('ps-endpapers'),
+      export_crop_marks:  checked('ps-crop-marks'),
+      export_split_cover: checked('ps-split-cover'),
+      export_body_pages:  checked('ps-body-pages'),
+      export_cover_pages: checked('ps-cover-pages'),
+      cover_wrap_mm:      g('cover-wrap'),
+      print_spec_id:      this.containerEl.querySelector<HTMLSelectElement>('#ps-print-spec')?.value ?? '',
     });
   }, 150);
 }

@@ -551,6 +551,79 @@ impl GridLayout {
         self.connected_component(&same, edge_id)
     }
 
+    /// Like `chain_for_edge` but restricted to the contiguous sub-chain where at
+    /// least one face at each cross-section belongs to `selection`.
+    ///
+    /// The chain is re-slotted at X-junctions — points where consecutive edge
+    /// extents merely *touch* (`lo ≥ cur_end − EPS`) rather than overlap. Each
+    /// slot (cross-section between two perpendicular dividers) is considered
+    /// selected if any of its edges belongs to a selected face, which naturally
+    /// keeps twin pairs intact: if the selected-side edge is in the slot, the
+    /// non-selected-side twin is included too.
+    ///
+    /// `click_perp` is the normalised coordinate of the mouse click along the
+    /// chain's perpendicular axis (Y for a vertical chain, X for a horizontal
+    /// one). It is used to identify the slot the user actually clicked, because
+    /// the `edge_id` passed to `begin_divider_drag` is a chain-wide
+    /// representative that may belong to a different slot than the pointer.
+    /// An empty vec is returned when the clicked slot is not part of the
+    /// selection; the caller should abort the drag in that case.
+    pub fn chain_for_edge_in_selection(
+        &self,
+        edge_id: EdgeId,
+        selection: &std::collections::HashSet<FaceId>,
+        click_perp: f32,
+    ) -> Vec<EdgeId> {
+        let full_chain = self.chain_for_edge(edge_id);
+        if full_chain.is_empty() { return full_chain; }
+
+        // Split the chain into slots at X-junctions.
+        let mut slots: Vec<Vec<EdgeId>> = Vec::new();
+        let mut cur_slot: Vec<EdgeId> = Vec::new();
+        let mut cur_end = f32::NEG_INFINITY;
+        for &eid in &full_chain {
+            let (lo, hi) = self.edge_extent(eid).unwrap_or((0.0, 0.0));
+            if !cur_slot.is_empty() && lo >= cur_end - EPS {
+                slots.push(std::mem::take(&mut cur_slot));
+                cur_end = f32::NEG_INFINITY;
+            }
+            cur_slot.push(eid);
+            cur_end = cur_end.max(hi);
+        }
+        if !cur_slot.is_empty() { slots.push(cur_slot); }
+
+        let slot_selected = |slot: &[EdgeId]| -> bool {
+            slot.iter().any(|&eid| {
+                self.edges.get(&eid)
+                    .map(|e| selection.contains(&e.face_id))
+                    .unwrap_or(false)
+            })
+        };
+
+        // Prefer finding the clicked slot by the pointer's perpendicular coordinate
+        // so that the chain representative's slot does not bias the result.
+        let slot_extent = |slot: &[EdgeId]| -> (f32, f32) {
+            slot.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &eid| {
+                let (elo, ehi) = self.edge_extent(eid).unwrap_or((0.0, 0.0));
+                (lo.min(elo), hi.max(ehi))
+            })
+        };
+        let clicked = slots.iter().position(|s| {
+            let (lo, hi) = slot_extent(s);
+            click_perp >= lo - EPS && click_perp < hi + EPS
+        }).or_else(|| slots.iter().position(|s| s.contains(&edge_id)))
+          .unwrap_or(0);
+
+        if !slot_selected(&slots[clicked]) { return vec![]; }
+
+        let mut lo = clicked;
+        let mut hi = clicked;
+        while lo > 0 && slot_selected(&slots[lo - 1]) { lo -= 1; }
+        while hi + 1 < slots.len() && slot_selected(&slots[hi + 1]) { hi += 1; }
+
+        slots[lo..=hi].iter().flatten().copied().collect()
+    }
+
     fn connected_component(&self, sorted: &[&Edge], target: EdgeId) -> Vec<EdgeId> {
         let mut cur: Vec<EdgeId> = Vec::new();
         let mut cur_end = f32::NEG_INFINITY;
@@ -601,7 +674,18 @@ impl GridLayout {
     }
 
     /// Return the (lo, hi) movement bounds for a chain.
-    pub fn chain_drag_bounds(&self, chain: &[EdgeId]) -> Option<(f32, f32)> {
+    ///
+    /// `total_w_mm` and `total_h_mm` are the full spread dimensions including
+    /// bleed (the mm extent that maps to the [0, 1] normalized offset range).
+    /// They are used to convert each edge's `half_gap` (stored in mm) into
+    /// normalized units so that the content area of every affected face cannot
+    /// collapse below `MIN_FRAC`, even when large margins are present.
+    pub fn chain_drag_bounds(
+        &self,
+        chain: &[EdgeId],
+        total_w_mm: f32,
+        total_h_mm: f32,
+    ) -> Option<(f32, f32)> {
         if chain.is_empty() { return None; }
         let mut lo = 0.0_f32;
         let mut hi = 1.0_f32;
@@ -611,16 +695,28 @@ impl GridLayout {
             let face = self.faces.get(&e.face_id)?;
             match (&e.orientation, &e.facing) {
                 (Orientation::Horizontal, Facing::Start) => {
-                    hi = hi.min(self.edges.get(&face.bottom_edge_id)?.offset - MIN_FRAC);
+                    let bot     = self.edges.get(&face.bottom_edge_id)?;
+                    let e_gap   = if total_h_mm > 0.0 { e.half_gap   / total_h_mm } else { 0.0 };
+                    let bot_gap = if total_h_mm > 0.0 { bot.half_gap / total_h_mm } else { 0.0 };
+                    hi = hi.min(bot.offset - e_gap - bot_gap - MIN_FRAC);
                 }
                 (Orientation::Horizontal, Facing::End) => {
-                    lo = lo.max(self.edges.get(&face.top_edge_id)?.offset + MIN_FRAC);
+                    let top     = self.edges.get(&face.top_edge_id)?;
+                    let e_gap   = if total_h_mm > 0.0 { e.half_gap   / total_h_mm } else { 0.0 };
+                    let top_gap = if total_h_mm > 0.0 { top.half_gap / total_h_mm } else { 0.0 };
+                    lo = lo.max(top.offset + e_gap + top_gap + MIN_FRAC);
                 }
                 (Orientation::Vertical, Facing::Start) => {
-                    hi = hi.min(self.edges.get(&face.right_edge_id)?.offset - MIN_FRAC);
+                    let right     = self.edges.get(&face.right_edge_id)?;
+                    let e_gap     = if total_w_mm > 0.0 { e.half_gap     / total_w_mm } else { 0.0 };
+                    let right_gap = if total_w_mm > 0.0 { right.half_gap / total_w_mm } else { 0.0 };
+                    hi = hi.min(right.offset - e_gap - right_gap - MIN_FRAC);
                 }
                 (Orientation::Vertical, Facing::End) => {
-                    lo = lo.max(self.edges.get(&face.left_edge_id)?.offset + MIN_FRAC);
+                    let left     = self.edges.get(&face.left_edge_id)?;
+                    let e_gap    = if total_w_mm > 0.0 { e.half_gap    / total_w_mm } else { 0.0 };
+                    let left_gap = if total_w_mm > 0.0 { left.half_gap / total_w_mm } else { 0.0 };
+                    lo = lo.max(left.offset + e_gap + left_gap + MIN_FRAC);
                 }
             }
         }
@@ -821,6 +917,135 @@ impl GridLayout {
     pub fn set_half_gap(&mut self, id: EdgeId, v: f32) {
         if let Some(e) = self.edges.get_mut(&id) { e.half_gap = v; }
     }
+
+    /// Build proportional drag state for a shift-drag.
+    ///
+    /// Gathers all non-boundary, non-chain edges with the same orientation as
+    /// the dragged chain, whose offsets fall strictly between the bounding-box
+    /// extents of `selection` along the drag axis (or [0, 1] when ≤ 1 face is
+    /// selected). Returns `None` when no edges can be proportionally scaled
+    /// (i.e. there are none beside the drag chain).
+    pub fn build_prop_drag(
+        &self,
+        chain: &[EdgeId],
+        selection: &[FaceId],
+        axis: SplitAxis,
+    ) -> Option<PropDragState> {
+        let pivot = self.edges.get(chain.first()?)?.offset;
+        let target_orient = match axis {
+            SplitAxis::Vertical   => Orientation::Vertical,
+            SplitAxis::Horizontal => Orientation::Horizontal,
+        };
+
+        // Bounding box of the selection along the drag axis.
+        let (lo_bound, hi_bound) = if selection.len() <= 1 {
+            (0.0_f32, 1.0_f32)
+        } else {
+            let mut lo = 1.0_f32;
+            let mut hi = 0.0_f32;
+            for &fid in selection {
+                if let Some((fx, fy, fw, fh)) = self.face_rect(fid) {
+                    let (flo, fhi) = match axis {
+                        SplitAxis::Vertical   => (fx, fx + fw),
+                        SplitAxis::Horizontal => (fy, fy + fh),
+                    };
+                    lo = lo.min(flo);
+                    hi = hi.max(fhi);
+                }
+            }
+            if lo >= hi { return None; }
+            (lo, hi)
+        };
+
+        // When a multi-frame selection is active, restrict to edges whose face
+        // belongs to that selection. An empty set means "no restriction".
+        let selection_set: std::collections::HashSet<FaceId> =
+            if selection.len() > 1 { selection.iter().copied().collect() }
+            else { std::collections::HashSet::new() };
+
+        // Collect all parallel edges in-scope, excluding the drag chain.
+        let chain_set: std::collections::HashSet<EdgeId> = chain.iter().copied().collect();
+        let mut offset_map: Vec<(f32, Vec<EdgeId>)> = Vec::new();
+        for (&eid, edge) in &self.edges {
+            if chain_set.contains(&eid) { continue; }
+            if edge.is_boundary { continue; }
+            if edge.orientation != target_orient { continue; }
+            if !selection_set.is_empty() && !selection_set.contains(&edge.face_id) { continue; }
+            let off = edge.offset;
+            if off <= lo_bound + EPS { continue; }
+            if off >= hi_bound - EPS { continue; }
+            if (off - pivot).abs() < EPS { continue; }
+            if let Some(g) = offset_map.iter_mut().find(|(o, _)| (o - off).abs() < EPS) {
+                g.1.push(eid);
+            } else {
+                offset_map.push((off, vec![eid]));
+            }
+        }
+
+        let mut lo_groups: Vec<PropDragGroup> = Vec::new();
+        let mut hi_groups: Vec<PropDragGroup> = Vec::new();
+        for (off, ids) in offset_map {
+            if off < pivot - EPS {
+                let rel = if pivot - lo_bound > EPS {
+                    (off - lo_bound) / (pivot - lo_bound)
+                } else { 0.5 };
+                lo_groups.push(PropDragGroup { ids, rel });
+            } else if off > pivot + EPS {
+                let rel = if hi_bound - pivot > EPS {
+                    (off - pivot) / (hi_bound - pivot)
+                } else { 0.5 };
+                hi_groups.push(PropDragGroup { ids, rel });
+            }
+        }
+
+        Some(PropDragState { lo_bound, hi_bound, pivot, lo_groups, hi_groups })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proportional drag
+// ---------------------------------------------------------------------------
+
+/// A group of edges (all at the same initial offset) that move together during
+/// a proportional shift-drag.
+#[derive(Clone, Debug)]
+pub struct PropDragGroup {
+    /// All edges at this offset that should be moved as a unit.
+    pub ids: Vec<EdgeId>,
+    /// Relative position within the zone: 0.0 = at the bounding-box boundary,
+    /// 1.0 = at the dragged divider's initial position.
+    pub rel: f32,
+}
+
+/// State captured at the start of a shift-drag, enabling proportional scaling
+/// of all parallel edges within the selection's bounding box.
+#[derive(Clone, Debug)]
+pub struct PropDragState {
+    pub lo_bound: f32,
+    pub hi_bound: f32,
+    pub pivot: f32,
+    /// Edges on the lo side (offset < pivot).
+    pub lo_groups: Vec<PropDragGroup>,
+    /// Edges on the hi side (offset > pivot).
+    pub hi_groups: Vec<PropDragGroup>,
+}
+
+impl PropDragState {
+    /// Apply proportional offsets for a dragged pivot at `pos`.
+    pub fn apply(&self, layout: &mut GridLayout, pos: f32) {
+        for group in &self.lo_groups {
+            let new_off = if pos > self.lo_bound + EPS {
+                self.lo_bound + group.rel * (pos - self.lo_bound)
+            } else { self.lo_bound + EPS };
+            layout.move_chain(&group.ids, new_off);
+        }
+        for group in &self.hi_groups {
+            let new_off = if self.hi_bound > pos + EPS {
+                pos + group.rel * (self.hi_bound - pos)
+            } else { self.hi_bound - EPS };
+            layout.move_chain(&group.ids, new_off);
+        }
+    }
 }
 
 impl Default for GridLayout {
@@ -845,7 +1070,7 @@ pub(crate) mod test_impls {
             .map(|e| e.id)
             .unwrap();
         let chain = layout.chain_for_edge(interior);
-        let (lo, hi) = layout.chain_drag_bounds(&chain).expect("bounds should exist");
+        let (lo, hi) = layout.chain_drag_bounds(&chain, 300.0, 200.0).expect("bounds should exist");
         assert!(lo < hi, "lo={lo} must be < hi={hi}");
         assert!(lo >= MIN_FRAC, "lo must respect top boundary");
         assert!(hi <= 1.0 - MIN_FRAC, "hi must respect bottom boundary");
@@ -861,7 +1086,7 @@ pub(crate) mod test_impls {
             .map(|e| e.id)
             .unwrap();
         let chain = layout.chain_for_edge(interior);
-        let (lo, hi) = layout.chain_drag_bounds(&chain).expect("bounds should exist");
+        let (lo, hi) = layout.chain_drag_bounds(&chain, 300.0, 200.0).expect("bounds should exist");
         assert!(lo < hi, "lo={lo} must be < hi={hi}");
     }
 }

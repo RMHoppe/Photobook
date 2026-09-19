@@ -17,7 +17,6 @@ const DEFAULTS: Record<string, { title: string; min: string; max: string; step: 
   'bw-right':      { title: 'Randomize Right Border',     min: '0',   max: '3',   step: '0.5' },
   'bw-bottom':     { title: 'Randomize Bottom Border',    min: '0',   max: '3',   step: '0.5' },
   'bw-left':       { title: 'Randomize Left Border',      min: '0',   max: '3',   step: '0.5' },
-  'border-radius': { title: 'Randomize Corner Radius',    min: '0',   max: '10',  step: '0.5' },
   'radius-all':    { title: 'Randomize Corner Radius',    min: '0',   max: '15',  step: '0.5' },
   'radius-v':      { title: 'Randomize TL+BR Radius',     min: '0',   max: '15',  step: '0.5' },
   'radius-h':      { title: 'Randomize TR+BL Radius',     min: '0',   max: '15',  step: '0.5' },

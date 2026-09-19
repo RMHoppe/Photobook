@@ -235,6 +235,21 @@ impl PdfDocumentReference {
         self
     }
 
+    /// Sets the destination ICC profile embedded as `/DestOutputProfile` in the
+    /// `/OutputIntents` dictionary (used when the conformance requires one).
+    #[inline]
+    pub fn with_target_icc_profile(self, profile: crate::IccProfile) -> Self {
+        self.document.borrow_mut().metadata.target_icc_profile = Some(profile);
+        self
+    }
+
+    /// Sets the human-readable printing-condition strings written to `/OutputIntents`.
+    #[inline]
+    pub fn with_output_intent(self, output_intent: crate::OutputIntentDescription) -> Self {
+        self.document.borrow_mut().metadata.output_intent = output_intent;
+        self
+    }
+
     /// Sets the creation date on the document.
     ///
     /// Per default, the creation date is set to the current time.
@@ -461,6 +476,17 @@ impl PdfDocumentReference {
             /* First and Last will be filled in once they are created from the pages */
         ]);
 
+        // PDF/X-4 (ISO 15930-7:2010) is based on PDF 1.6; lift the header version
+        // from the 1.3 default when targeting it.
+        if doc
+            .metadata
+            .conformance
+            .get_identifier_string()
+            .starts_with("PDF/X-4")
+        {
+            doc.inner_doc.version = "1.6".into();
+        }
+
         // extra pdf infos
         let (xmp_metadata, document_info, icc_profile) = doc.metadata.clone().into_obj();
 
@@ -472,26 +498,24 @@ impl PdfDocumentReference {
         let document_info_id = doc.inner_doc.add_object(document_info);
 
         // add catalog
-        let icc_profile_descr = "Commercial and special offset print acccording to ISO \
-                                 12647-2:2004 / Amd 1, paper type 1 or 2 (matte or gloss-coated \
-                                 offset paper, 115 g/m2), screen ruling 60/cm";
-        let icc_profile_str = "Coated FOGRA39 (ISO 12647-2:2004)";
-        let icc_profile_short = "FOGRA39";
+        let oi = doc.metadata.output_intent.clone();
 
         let mut output_intents = LoDictionary::from_iter(vec![
             ("S", Name("GTS_PDFX".into())),
-            ("OutputCondition", String(icc_profile_descr.into(), Literal)),
+            (
+                "OutputCondition",
+                String(oi.output_condition.into(), Literal),
+            ),
             ("Type", Name("OutputIntent".into())),
             (
                 "OutputConditionIdentifier",
-                String(icc_profile_short.into(), Literal),
+                String(oi.output_condition_identifier.into(), Literal),
             ),
-            (
-                "RegistryName",
-                String("http://www.color.org".into(), Literal),
-            ),
-            ("Info", String(icc_profile_str.into(), Literal)),
+            ("Info", String(oi.info.into(), Literal)),
         ]);
+        if let Some(registry_name) = oi.registry_name {
+            output_intents.set("RegistryName", String(registry_name.into(), Literal));
+        }
 
         let mut catalog = LoDictionary::from_iter(vec![
             ("Type", "Catalog".into()),
@@ -512,7 +536,9 @@ impl PdfDocumentReference {
         if let Some(profile) = icc_profile {
             let icc_profile: lopdf::Stream = profile.into();
             let icc_profile_id = doc.inner_doc.add_object(Stream(icc_profile));
-            output_intents.set("DestinationOutputProfile", Reference(icc_profile_id));
+            // "DestOutputProfile" is the key defined by the PDF spec (ISO 32000,
+            // table 401); preflight tools reject the misspelled long form.
+            output_intents.set("DestOutputProfile", Reference(icc_profile_id));
             catalog.set("OutputIntents", Array(vec![Dictionary(output_intents)]));
         }
 
@@ -601,6 +627,9 @@ impl PdfDocumentReference {
                 (
                     "D",
                     Dictionary(LoDictionary::from_iter(vec![
+                        // PDF/X-4 requires every optional-content configuration
+                        // dictionary to carry a /Name entry.
+                        ("Name", String("Default".into(), Literal)),
                         ("Order", Array(flattened_ocg_list.clone())),
                         // "radio button groups"
                         ("RBGroups", Array(vec![])),

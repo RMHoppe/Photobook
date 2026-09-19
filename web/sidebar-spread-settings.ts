@@ -8,26 +8,32 @@ export type { SpreadSettingsData };
 export class SpreadSettingsPanel {
   private containerEl: HTMLElement;
   private onChange: (data: SpreadSettingsData) => void;
-  private _built = false;
+  /** Layout currently built: 'two' (left/right pages), 'one' (single page), or null. */
+  private _builtMode: 'one' | 'two' | null = null;
 
   constructor(containerEl: HTMLElement, onChange: (data: SpreadSettingsData) => void) {
     this.containerEl = containerEl;
     this.onChange = onChange;
   }
 
-  show(data: SpreadSettingsData): void {
-    if (!this._built) this._build();
+  /** `singlePage` — standalone front/back cover page (one background field). */
+  show(data: SpreadSettingsData, singlePage = false): void {
+    const mode = singlePage ? 'one' : 'two';
+    if (this._builtMode !== mode) this._build(mode);
     this._populate(data);
   }
 
-  private _build(): void {
-    this._built = true;
+  private _build(mode: 'one' | 'two'): void {
+    this._builtMode = mode;
+    const fields = mode === 'one'
+      ? colorField('left-bg', 'Page')
+      : `${colorField('left-bg',  'Left page')}
+         ${colorField('right-bg', 'Right page')}`;
     this.containerEl.innerHTML = `
       <div class="bm-section">
-        <h4>Page backgrounds</h4>
+        <h4>${mode === 'one' ? 'Page background' : 'Page backgrounds'}</h4>
         <div class="bm-grid">
-          ${colorField('left-bg',  'Left page')}
-          ${colorField('right-bg', 'Right page')}
+          ${fields}
         </div>
       </div>
     `;
@@ -45,13 +51,15 @@ export class SpreadSettingsPanel {
   }
 
   private _emit(): void {
-    const gc = (name: string): string => {
+    const gc = (name: string): string | null => {
       const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-      return el ? el.value : '#ffffff';
+      return el ? el.value : null;
     };
+    const left = gc('left-bg') ?? '#ffffff';
+    // Single-page spreads keep left_bg == right_bg (one page, one colour).
     this.onChange({
-      left_bg:  gc('left-bg'),
-      right_bg: gc('right-bg'),
+      left_bg:  left,
+      right_bg: gc('right-bg') ?? left,
     });
   }
 }

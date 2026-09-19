@@ -55,6 +55,10 @@ export class ImageSidebar {
    *  in main.ts to also evict from the canvas cache and call bitmap.close(). */
   onBitmapEvicted: ((id: string, bitmap: ImageBitmap) => void) | null = null;
 
+  /** Called whenever a root folder is opened via a directory handle —
+   *  main.ts uses it to remember recent folders for one-click re-linking. */
+  onFolderOpened: ((handle: FileSystemDirectoryHandle) => void) | null = null;
+
   private _proxies  = new LruCache<ImageBitmap>(
     PROXY_CACHE_BUDGET_BYTES,
     rasterBytes,
@@ -157,6 +161,7 @@ export class ImageSidebar {
     this._fallbackFiles.clear();
     // _buffers kept intentionally: buffer-loaded entries stay for export.
     this._breadcrumb = [{ name: dirHandle.name, handle: dirHandle }];
+    this.onFolderOpened?.(dirHandle);
     await this._loadCurrentDir();
   }
 

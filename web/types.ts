@@ -20,9 +20,18 @@ export type SpreadRect = Rect;
 // Spread / page
 // ---------------------------------------------------------------------------
 
+/** Spread kind. 'cover-front' / 'cover-back' are the standalone single-page
+ *  covers used when "Cover as front & back pages" is active. */
+export type SpreadKind = 'cover' | 'cover-front' | 'cover-back' | 'content';
+
+/** True for single-page spreads (standalone front/back cover). */
+export function isSinglePageKind(kind: SpreadKind): boolean {
+  return kind === 'cover-front' || kind === 'cover-back';
+}
+
 /** Layout info for the currently displayed spread. */
 export interface SpreadInfo {
-  kind: 'cover' | 'content';
+  kind: SpreadKind;
   width_mm: number;
   height_mm: number;
   spine_mm: number;
@@ -37,7 +46,9 @@ export interface SpreadInfo {
 export interface SpreadSummary {
   id: number;
   label: string;
-  kind: 'cover' | 'content';
+  kind: SpreadKind;
+  width_mm: number;
+  height_mm: number;
   endpaper_side: 'left' | 'right' | null;
 }
 
@@ -52,7 +63,7 @@ export interface PageSize {
 // ---------------------------------------------------------------------------
 
 export type ObjectFit = 'cover' | 'contain' | 'fill';
-export type BorderPosition = 'inner' | 'centered' | 'outer' | 'mixed' | '';
+export type BorderPosition = 'inner' | 'centered' | 'outer';
 
 /** A single rendered frame from get_render_list(). */
 export interface RenderFrame {
@@ -91,6 +102,13 @@ export interface Divider {
   x: number;
   y: number;
   length: number;
+  /** True for the four outer spread edges — selectable for gap editing but not draggable. */
+  is_boundary?: boolean;
+}
+
+export interface BoundaryGap {
+  gap: number;
+  side: 'top' | 'bottom' | 'left' | 'right';
 }
 
 /** All resolved geometry for one spread. */
@@ -133,20 +151,18 @@ export interface EdgeInsets {
   left: number;
 }
 
-/** Border styling. */
+/** Border DTO for the box-model editor. Uniform sentinel on every field:
+ *  reading, `null` = the multi-selection disagrees ("mixed"); writing,
+ *  `null`/absent = leave the stored value unchanged. */
 export interface Border {
-  /** Legacy uniform width — only present in old saves; new code always uses per-side fields. */
-  width?: number;
-  /** Per-side widths in mm. null = mixed (multi-selection sentinel). */
+  /** Per-side widths in mm. */
   width_top?: number | null;
   width_right?: number | null;
   width_bottom?: number | null;
   width_left?: number | null;
-  color: string;
-  position: BorderPosition;
-  /** Corner radius in mm. 0 = sharp corners. -1 = mixed (multi-selection sentinel). */
-  radius: number;
-  /** Per-corner radii in mm (TL/TR/BR/BL). null = mixed sentinel; absent = use uniform `radius`. */
+  color?: string | null;
+  position?: BorderPosition | null;
+  /** Per-corner radii in mm (TL/TR/BR/BL). */
   radius_tl?: number | null;
   radius_tr?: number | null;
   radius_br?: number | null;
@@ -257,14 +273,7 @@ export interface Overlays {
   marqueeRect: Rect | null;
   splitPreview: SplitPreview | null;
   swapOverlay: SwapOverlay | null;
-  edgeDragPreview: EdgeDragPreview | null;
   imageDropPreview: ImageDropPreview | null;
-}
-
-export interface EdgeDragPreview {
-  axis: 'h' | 'v';
-  ratio: number;
-  newIsFirst: boolean;
 }
 
 export interface SplitPreview {
@@ -299,9 +308,56 @@ export interface ProjectSettingsData {
   safe_zone_mm: number;
   spine_mm_per_page: number;
   spine_min_mm: number;
-  margin_step_mm: number;
   print_dpi: number;
   endpapers: boolean;
+  export_crop_marks: boolean;
+  export_split_cover: boolean;
+  export_body_pages: boolean;
+  export_cover_pages: boolean;
+  cover_wrap_mm: number;
+  /** Selected print-shop preset id ('' = custom). */
+  print_spec_id: string;
+}
+
+/** Export-related document settings, returned by get_export_settings(). */
+export interface ExportSettings {
+  crop_marks: boolean;
+  split_cover: boolean;
+  body_pages: boolean;
+  cover_pages: boolean;
+  cover_wrap_mm: number;
+}
+
+/** Rules passed to get_preflight_report(). 0 disables a check. */
+export interface PreflightRules {
+  min_effective_dpi: number;
+  min_interior_pages: number;
+  max_interior_pages: number;
+  page_count_multiple_of: number;
+  /** Check the safe zone along the content gutter (false for layflat books). */
+  check_gutter: boolean;
+}
+
+/** One issue from get_preflight_report(). */
+export interface PreflightIssue {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  spread_idx: number | null;
+  face_id: number | null;
+}
+
+/** A print shop's product requirements: settings prefilled into the project
+ *  plus the preflight rules checked before export. */
+export interface PrintShopSpec {
+  id: string;
+  name: string;
+  /** Settings applied when the preset is selected (only the listed keys). */
+  settings: Partial<Omit<ProjectSettingsData, 'print_spec_id'>>;
+  rules: PreflightRules;
+  /** Optional print-on-demand ordering hookup (see web/pod/registry.ts).
+   *  Absent = the spec is download-only. */
+  order?: { providerId: string; productId: string };
 }
 
 /** Data exchanged between main.ts and SpreadSettingsPanel. */
@@ -310,7 +366,7 @@ export interface SpreadSettingsData {
   right_bg: string;
 }
 
-/** Half-gap values for a selected divider chain, returned by get_selected_segment_half_gaps. */
+/** Half-gap values for a single divider chain (get_edge_pair_half_gaps / get_chain_half_gaps). */
 export interface ChainHalfGaps {
   /** Facing::End side — left for vertical dividers, top for horizontal. null = mixed across segments. */
   a: number | null;
@@ -319,3 +375,8 @@ export interface ChainHalfGaps {
   /** 'h' = horizontal divider (splits top/bottom), 'v' = vertical (splits left/right). */
   axis: 'h' | 'v';
 }
+
+/** Per-axis gaps for each selected axis; null = no dividers of that axis selected. */
+export interface AxisGaps { a: number | null; b: number | null; }
+/** Returned by get_selected_segment_half_gaps for multi-segment selection. */
+export interface MultiDividerGaps { h: AxisGaps | null; v: AxisGaps | null; }

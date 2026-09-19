@@ -11,9 +11,12 @@ use crate::grid_layout::{EdgeId, Facing, FaceId, GridFace, GridLayout, Orientati
 // ---------------------------------------------------------------------------
 
 pub struct GridResolver<'a> {
-    layout:    &'a GridLayout,
-    selection: std::collections::HashSet<FaceId>,
-    mm_to_px:  f32,
+    layout:           &'a GridLayout,
+    selection:        std::collections::HashSet<FaceId>,
+    mm_to_px:         f32,
+    /// Bleed extent in canvas px that is currently visible (0 when hidden).
+    /// Controls where boundary-edge dividers are positioned for hit-testing and drawing.
+    visible_bleed_px: f32,
 }
 
 impl<'a> GridResolver<'a> {
@@ -22,7 +25,14 @@ impl<'a> GridResolver<'a> {
             layout,
             selection: selection.iter().copied().collect(),
             mm_to_px,
+            visible_bleed_px: 0.0,
         }
+    }
+
+    /// Set visible bleed extent in canvas px (bleed_mm * mm_to_px when bleed display is on).
+    pub fn with_visible_bleed(mut self, px: f32) -> Self {
+        self.visible_bleed_px = px;
+        self
     }
 
     // -----------------------------------------------------------------------
@@ -105,7 +115,7 @@ impl<'a> GridResolver<'a> {
             border_radius_tr: crtr * mm_to_px,
             border_radius_br: crbr * mm_to_px,
             border_radius_bl: crbl * mm_to_px,
-            face_rotation_deg: face.box_model.face_rotation_deg.unwrap_or(0.0),
+            face_rotation_deg: face.box_model.face_rotation_deg,
         })
     }
 
@@ -139,6 +149,36 @@ impl<'a> GridResolver<'a> {
     // Dividers — one per chain
     // -----------------------------------------------------------------------
 
+    /// For an all-boundary chain, build the divider at the bleed edge when
+    /// bleed is visible, otherwise at the printable (visible) edge. Returns
+    /// None for chains with interior edges — the caller handles those.
+    fn boundary_chain_divider(&self, is_h: bool, chain: &[EdgeId], root_rect: &Rect) -> Option<ResolvedDivider> {
+        let layout = self.layout;
+        if chain.iter().any(|&e| !layout.is_boundary_edge(e)) { return None; }
+        let e = chain.first().and_then(|&eid| layout.edges.get(&eid))?;
+        // Printable dimensions in layout space (0 = visible printable edge).
+        let pw = root_rect.w + 2.0 * root_rect.x;
+        let ph = root_rect.h + 2.0 * root_rect.y;
+        let bp = self.visible_bleed_px;
+        let gap_px = chain.iter()
+            .filter_map(|&eid| layout.edges.get(&eid))
+            .map(|e| e.half_gap)
+            .fold(0.0_f32, f32::max) * self.mm_to_px;
+        Some(if is_h {
+            let y = if e.offset < 0.5 { -bp } else { ph + bp };
+            ResolvedDivider {
+                segment_id: chain[0], x: -bp, y, length: pw + 2.0 * bp,
+                axis: SplitAxis::Horizontal, half_gap: gap_px, is_boundary: true,
+            }
+        } else {
+            let x = if e.offset < 0.5 { -bp } else { pw + bp };
+            ResolvedDivider {
+                segment_id: chain[0], x, y: -bp, length: ph + 2.0 * bp,
+                axis: SplitAxis::Vertical, half_gap: gap_px, is_boundary: true,
+            }
+        })
+    }
+
     pub fn resolve_dividers(&self, root_rect: Rect) -> Vec<ResolvedDivider> {
         let layout = self.layout;
         let (sw, sh) = (root_rect.w, root_rect.h);
@@ -146,8 +186,10 @@ impl<'a> GridResolver<'a> {
         let mut dividers = Vec::new();
 
         self.for_each_chain(|is_h, chain| {
-            let has_interior = chain.iter().any(|&e| !layout.is_boundary_edge(e));
-            if !has_interior { return; }
+            if let Some(d) = self.boundary_chain_divider(is_h, chain, &root_rect) {
+                dividers.push(d);
+                return;
+            }
 
             let mut span_lo = f32::INFINITY;
             let mut span_hi = f32::NEG_INFINITY;
@@ -178,6 +220,7 @@ impl<'a> GridResolver<'a> {
                     length:   (span_hi - span_lo) * sw,
                     axis:     SplitAxis::Horizontal,
                     half_gap: gap_px,
+                    is_boundary: false,
                 });
             } else {
                 dividers.push(ResolvedDivider {
@@ -187,6 +230,7 @@ impl<'a> GridResolver<'a> {
                     length:   (span_hi - span_lo) * sh,
                     axis:     SplitAxis::Vertical,
                     half_gap: gap_px,
+                    is_boundary: false,
                 });
             }
         });
@@ -207,7 +251,10 @@ impl<'a> GridResolver<'a> {
         let mut hits = Vec::new();
 
         self.for_each_chain(|is_h, chain| {
-            if !chain.iter().any(|&eid| !layout.is_boundary_edge(eid)) { return; }
+            if let Some(d) = self.boundary_chain_divider(is_h, chain, &root_rect) {
+                hits.push(d);
+                return;
+            }
 
             // Chain rep: same rule as resolve_dividers (edge with max half_gap).
             let mut max_gap = 0.0_f32;
@@ -243,6 +290,7 @@ impl<'a> GridResolver<'a> {
                         length:   (hi - lo)    * sw,
                         axis:     SplitAxis::Horizontal,
                         half_gap: seg_gap_px,
+                        is_boundary: false,
                     });
                 } else {
                     hits.push(ResolvedDivider {
@@ -252,6 +300,7 @@ impl<'a> GridResolver<'a> {
                         length:   (hi - lo)     * sh,
                         axis:     SplitAxis::Vertical,
                         half_gap: seg_gap_px,
+                        is_boundary: false,
                     });
                 }
             }
@@ -384,9 +433,10 @@ pub(crate) mod test_impls {
         let r = GridResolver::new(&layout, &[], 1.0);
         let frames   = r.resolve_frames(root());
         let dividers = r.resolve_dividers(root());
-        assert_eq!(frames.len(),   2, "expected 2 frames");
-        assert_eq!(dividers.len(), 1, "expected 1 divider");
-        let d = &dividers[0];
+        assert_eq!(frames.len(), 2, "expected 2 frames");
+        let interior: Vec<_> = dividers.iter().filter(|d| !d.is_boundary).collect();
+        assert_eq!(interior.len(), 1, "expected 1 interior divider");
+        let d = &interior[0];
         assert!((d.y - 250.0).abs() < 1.0, "H-divider y should be 250 px, got {}", d.y);
         assert_eq!(d.axis, SplitAxis::Horizontal);
     }

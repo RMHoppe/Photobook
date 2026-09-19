@@ -22,51 +22,42 @@ pub enum SplitAxis {
 // Box model types
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum BorderPosition {
     #[default]
     Centered,
     Inner,
     Outer,
-    /// Sentinel for multi-selection where nodes disagree on border position.
-    /// `#[serde(other)]` also catches any unrecognised string (including "")
-    /// so the JS can emit `""` or `"mixed"` to signal "skip this field".
-    #[serde(other)]
-    Mixed,
 }
 
+/// Stored border styling — always concrete per-side / per-corner values.
+/// Multi-selection "mixed" states live only in the box-model editor DTO
+/// (`editor_box_model.rs`), never in the document.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Border {
-    /// Legacy single-width field — used as fallback when per-side fields are absent (old saves).
+    /// Per-side widths in mm (0 = no border on that side).
     #[serde(default)]
-    pub width: f32,
-    /// Per-side widths in mm. None = mixed (multi-selection sentinel).
-    /// When any per-side field is Some, all rendering uses these instead of `width`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width_top: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width_right: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width_bottom: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width_left: Option<f32>,
+    pub width_top: f32,
+    #[serde(default)]
+    pub width_right: f32,
+    #[serde(default)]
+    pub width_bottom: f32,
+    #[serde(default)]
+    pub width_left: f32,
     #[serde(default = "default_border_color")]
     pub color: String,
     #[serde(default)]
     pub position: BorderPosition,
-    /// Corner radius in mm. 0 = sharp corners. Uniform fallback when no per-corner values.
+    /// Per-corner radii in mm (0 = sharp corner).
     #[serde(default)]
-    pub radius: f32,
-    /// Per-corner radii in mm (TL, TR, BR, BL). None = use uniform `radius`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub radius_tl: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub radius_tr: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub radius_br: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub radius_bl: Option<f32>,
+    pub radius_tl: f32,
+    #[serde(default)]
+    pub radius_tr: f32,
+    #[serde(default)]
+    pub radius_br: f32,
+    #[serde(default)]
+    pub radius_bl: f32,
 }
 
 fn default_border_color() -> String { "#000000".to_string() }
@@ -74,73 +65,38 @@ fn default_border_color() -> String { "#000000".to_string() }
 impl Default for Border {
     fn default() -> Self {
         Border {
-            width: 0.0,
-            width_top: None, width_right: None, width_bottom: None, width_left: None,
+            width_top: 0.0, width_right: 0.0, width_bottom: 0.0, width_left: 0.0,
             color: default_border_color(),
             position: BorderPosition::Centered,
-            radius: 0.0,
-            radius_tl: None, radius_tr: None, radius_br: None, radius_bl: None,
+            radius_tl: 0.0, radius_tr: 0.0, radius_br: 0.0, radius_bl: 0.0,
         }
     }
 }
 
 impl Border {
     /// Returns (top, right, bottom, left) widths in mm.
-    /// Uses per-side fields when any are present; falls back to uniform `width`.
     pub fn side_widths(&self) -> (f32, f32, f32, f32) {
-        if self.width_top.is_some() || self.width_right.is_some()
-            || self.width_bottom.is_some() || self.width_left.is_some()
-        {
-            (
-                self.width_top.unwrap_or(0.0),
-                self.width_right.unwrap_or(0.0),
-                self.width_bottom.unwrap_or(0.0),
-                self.width_left.unwrap_or(0.0),
-            )
-        } else {
-            (self.width, self.width, self.width, self.width)
-        }
+        (self.width_top, self.width_right, self.width_bottom, self.width_left)
     }
 
     pub fn any_nonzero(&self) -> bool {
-        let (t, r, b, l) = self.side_widths();
-        t > 0.0 || r > 0.0 || b > 0.0 || l > 0.0
+        self.width_top > 0.0 || self.width_right > 0.0
+            || self.width_bottom > 0.0 || self.width_left > 0.0
     }
 
     /// Returns (TL, TR, BR, BL) corner radii in mm.
-    /// Uses per-corner fields when any are present; falls back to uniform `radius`.
     pub fn corner_radii(&self) -> (f32, f32, f32, f32) {
-        if self.radius_tl.is_some() || self.radius_tr.is_some()
-            || self.radius_br.is_some() || self.radius_bl.is_some()
-        {
-            (
-                self.radius_tl.unwrap_or(0.0),
-                self.radius_tr.unwrap_or(0.0),
-                self.radius_br.unwrap_or(0.0),
-                self.radius_bl.unwrap_or(0.0),
-            )
-        } else {
-            (self.radius, self.radius, self.radius, self.radius)
-        }
+        (self.radius_tl, self.radius_tr, self.radius_br, self.radius_bl)
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct BoxModel {
     #[serde(default)]
     pub border: Border,
-    /// Visual rotation of this face in degrees counter-clockwise. None = mixed (multi-selection sentinel).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub face_rotation_deg: Option<f32>,
-}
-
-impl Default for BoxModel {
-    fn default() -> Self {
-        BoxModel {
-            border: Border::default(),
-            face_rotation_deg: Some(0.0),
-        }
-    }
+    /// Visual rotation of this face in degrees counter-clockwise.
+    #[serde(default)]
+    pub face_rotation_deg: f32,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -241,6 +197,8 @@ pub struct ResolvedDivider {
     pub axis: SplitAxis,
     /// Half the gap in canvas px — used to widen the hit zone to cover the full gap.
     pub half_gap: f32,
+    /// True for the four outer spread edges (not draggable, gap-only).
+    pub is_boundary: bool,
 }
 
 /// All resolved geometry for one spread.

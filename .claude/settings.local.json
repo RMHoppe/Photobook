@@ -32,7 +32,19 @@
       "Bash(PATH=__TRACKED_VAR__/.cargo/bin:__TRACKED_VAR__ wasm-pack build crates/photobook-core --target web --out-dir web/pkg --release)",
       "Bash(git stash *)",
       "Bash(git ls-files *)",
-      "Bash(PATH=__TRACKED_VAR__/.cargo/bin:__TRACKED_VAR__ wasm-pack build crates/photobook-core --target web --out-dir __CMDSUB_OUTPUT__/web/pkg --release)"
+      "Bash(PATH=__TRACKED_VAR__/.cargo/bin:__TRACKED_VAR__ wasm-pack build crates/photobook-core --target web --out-dir __CMDSUB_OUTPUT__/web/pkg --release)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\" && wasm-pack build *)",
+      "Bash(wasm-pack build *)",
+      "Bash(grep *)",
+      "Bash(strings *)",
+      "Bash(sed -n *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(node *)",
+      "Bash(cat > /tmp/*)",
+      "Bash(cat >> /tmp/*)",
+      "Write(//tmp/**)",
+      "Bash(cd /Users/hoppe/Documents/ClaudeCodeProjects/Photobook/crates/photobook-core)"
     ]
   }
 }

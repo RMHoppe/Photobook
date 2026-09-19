@@ -167,7 +167,11 @@ export class TextElementEditor {
       fresh.disabled = true;
       fresh.textContent = '…';
       await this.onLoadFonts!();
-      // Label updates are handled by setFontFamilies() after families are loaded.
+      // setFontFamilies() updates the label on success; reset on error/not-supported.
+      if (fresh.textContent === '…') {
+        fresh.textContent = 'Load System Fonts';
+        fresh.disabled = false;
+      }
     });
   }
 

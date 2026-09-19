@@ -1,15 +1,22 @@
 use printpdf::{
-    BuiltinFont, Color, Image, ImageFilter, ImageRotation, ImageXObject, IndirectFontRef,
-    Line, Mm, Px, PdfDocument, PdfDocumentReference, PdfLayerReference, Point, Rgb,
+    BuiltinFont, Color, IccProfile, IccProfileType, Image, ImageFilter, ImageRotation,
+    ImageXObject, IndirectFontRef, Line, Mm, OutputIntentDescription, PdfConformance,
+    Px, PdfDocument, PdfDocumentReference, PdfLayerReference, Point, Rgb,
     ColorBits, ColorSpace, CurTransMat, Pt, XObjectRef,
     path,
 };
 use crate::layout::{Border, BorderPosition, Rect};
-use crate::page::{PhotobookDocument, TextElement};
+use crate::page::{PhotobookDocument, SpreadKind, TextElement};
 use crate::grid_resolver::resolve_frames_mm;
 use crate::utils::image_cover_factors;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Compact sRGB v2 ICC profile (CC0, see assets/README.txt), embedded as the
+/// PDF/X-4 output intent so DeviceRGB content is interpreted as sRGB by the
+/// print RIP. Tagged sRGB hand-off is the accepted standard for digital photo
+/// printing; no client-side CMYK conversion is attempted.
+const SRGB_ICC: &[u8] = include_bytes!("../assets/sRGB-v2-magic.icc");
 
 // ---------------------------------------------------------------------------
 // Wall-clock helper — js_sys::Date::now() in WASM, SystemTime otherwise
@@ -67,6 +74,81 @@ pub(crate) struct DecodedImage {
 }
 
 // ---------------------------------------------------------------------------
+// Export targets and page jobs
+// ---------------------------------------------------------------------------
+
+/// Which part of the document an export pass covers. Cover/Body allow the
+/// frontend to produce the separate cover and interior PDFs print shops expect.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ExportTarget {
+    /// Every spread in one PDF (cover first).
+    All,
+    /// Cover spread only (with the wrap allowance applied).
+    Cover,
+    /// Interior spreads only.
+    Body,
+}
+
+/// One output PDF page: a full spread, or one half of a spread when the
+/// interior is exported as single pages (perfect binding).
+pub(crate) struct PageJob {
+    pub spread_idx: usize,
+    /// Spread-space x of this page's trim-left edge (page width for the right
+    /// half of a split spread, 0 otherwise).
+    pub origin_x_mm: f32,
+    /// Trim width of the output page.
+    pub trim_w_mm: f32,
+    /// Extra media allowance beyond the bleed on every side (hardcover wrap).
+    pub wrap_mm: f32,
+}
+
+fn build_jobs(doc: &PhotobookDocument, target: ExportTarget) -> Vec<PageJob> {
+    let page_w = doc.page_size.width_mm;
+    let mut jobs = Vec::new();
+    // Legacy path: a wraparound cover with cover-as-pages still set (documents
+    // not yet normalized into CoverFront/CoverBack spreads). The back cover
+    // becomes the LAST page of the file — held back until the end. Normalized
+    // documents already store the back cover as the last spread.
+    let mut back_cover: Option<PageJob> = None;
+
+    for (i, spread) in doc.spreads.iter().enumerate() {
+        let is_cover = spread.kind.is_cover();
+        match target {
+            ExportTarget::Cover if !is_cover => continue,
+            ExportTarget::Body if is_cover => continue,
+            _ => {}
+        }
+        let spread_w = doc.spread_width_mm(spread);
+        if spread.kind == SpreadKind::Cover && doc.export_cover_pages {
+            let wrap = doc.cover_wrap_mm.max(0.0);
+            // Front cover is the right half of the cover spread (beyond the
+            // spine, which shops in this mode generate themselves).
+            jobs.push(PageJob { spread_idx: i, origin_x_mm: spread_w - page_w, trim_w_mm: page_w, wrap_mm: wrap });
+            back_cover = Some(PageJob { spread_idx: i, origin_x_mm: 0.0, trim_w_mm: page_w, wrap_mm: wrap });
+        } else if !is_cover && doc.export_body_pages {
+            // Endpaper halves are non-printable and not part of the file —
+            // shops that need blanks insert them in their own imposition.
+            let endpaper_side = doc.endpaper_side(i);
+            if endpaper_side != Some("left") {
+                jobs.push(PageJob { spread_idx: i, origin_x_mm: 0.0,    trim_w_mm: page_w, wrap_mm: 0.0 });
+            }
+            if endpaper_side != Some("right") {
+                jobs.push(PageJob { spread_idx: i, origin_x_mm: page_w, trim_w_mm: page_w, wrap_mm: 0.0 });
+            }
+        } else {
+            jobs.push(PageJob {
+                spread_idx: i,
+                origin_x_mm: 0.0,
+                trim_w_mm: spread_w,
+                wrap_mm: if is_cover { doc.cover_wrap_mm.max(0.0) } else { 0.0 },
+            });
+        }
+    }
+    if let Some(back) = back_cover { jobs.push(back); }
+    jobs
+}
+
+// ---------------------------------------------------------------------------
 // Staged export state
 // ---------------------------------------------------------------------------
 
@@ -78,7 +160,7 @@ pub(crate) struct PdfExportState {
     pub pdf_doc:       PdfDocumentReference,
     pub layers:        Vec<PdfLayerReference>,
     /// Raw encoded image bytes, decoded on demand (keyed by image id).
-    image_src:         HashMap<String, Vec<u8>>,
+    pub(crate) image_src: HashMap<String, Vec<u8>>,
     /// LRU cache of decoded images, bounded by `DECODED_IMAGE_BUDGET_BYTES`.
     decoded:           HashMap<String, DecodedImage>,
     decoded_order:     std::collections::VecDeque<String>,
@@ -88,8 +170,9 @@ pub(crate) struct PdfExportState {
     pub bleed:         f32,
     pub ph:            f32,
     pub print_dpi:     f32,
-    pub next_spread:   usize,
-    pub total:         usize,
+    /// One entry per output PDF page (pre-allocated in the same order as `layers`).
+    pub(crate) jobs:   Vec<PageJob>,
+    pub next_job:      usize,
 }
 
 /// Budget for decoded (uncompressed) images held in memory during export.
@@ -146,39 +229,60 @@ impl PdfExportState {
     }
 }
 
-/// Phase 1 — allocate one PDF page per spread using pre-decoded byte maps.
+/// Phase 1 — allocate one PDF page per page job using pre-decoded byte maps.
 /// The fast path: callers have already decoded base64 or provided raw bytes.
-/// Returns `None` only if the document has no spreads.
+/// Returns `None` only if the target selects no spreads (empty document).
 pub(crate) fn pdf_export_begin_with_bytes(
     doc: &PhotobookDocument,
     image_src: HashMap<String, Vec<u8>>,
     font_bytes_map: HashMap<String, Vec<u8>>,
+    target: ExportTarget,
 ) -> Option<PdfExportState> {
-    let total = doc.spreads.len();
-    if total == 0 { return None; }
+    let jobs = build_jobs(doc, target);
+    if jobs.is_empty() { return None; }
 
     let bleed     = doc.bleed_mm;
     let ph        = doc.page_size.height_mm;
     let print_dpi = doc.print_dpi;
 
-    let first_spread_w = doc.spread_width_mm(&doc.spreads[0]);
-    let (pdf_doc, first_pi, first_li) = PdfDocument::new(
-        "Photobook",
-        Mm(first_spread_w + 2.0 * bleed),
-        Mm(ph + 2.0 * bleed),
-        "Layer 1",
-    );
-    pdf_doc.get_page(first_pi).extend_with(page_box_extension(first_spread_w, ph, bleed));
+    let title = match target {
+        ExportTarget::All   => "Photobook",
+        ExportTarget::Cover => "Photobook Cover",
+        ExportTarget::Body  => "Photobook Body",
+    };
+    let page_dims = |job: &PageJob| {
+        let b = bleed + job.wrap_mm;
+        (Mm(job.trim_w_mm + 2.0 * b), Mm(ph + 2.0 * b))
+    };
+
+    let (first_w, first_h) = page_dims(&jobs[0]);
+    let (pdf_doc, first_pi, first_li) = PdfDocument::new(title, first_w, first_h, "Layer 1");
+    // PDF/X-4 with an sRGB output intent: all content stays DeviceRGB and the
+    // embedded intent tells the press RIP to interpret it as sRGB.
+    let pdf_doc = pdf_doc
+        .with_conformance(PdfConformance::X4_2010_PDF_1_4)
+        .with_creator("Photobook Editor")
+        .with_producer("Photobook Editor")
+        .with_target_icc_profile(
+            IccProfile::new(SRGB_ICC.to_vec(), IccProfileType::Rgb)
+                .with_alternate_profile(false)
+                .with_range(false),
+        )
+        .with_output_intent(OutputIntentDescription {
+            output_condition_identifier: "Custom".into(),
+            output_condition: "sRGB digital printing".into(),
+            registry_name: None,
+            info: "sRGB IEC61966-2.1".into(),
+        });
+    pdf_doc.get_page(first_pi)
+        .extend_with(page_box_extension(jobs[0].trim_w_mm, ph, bleed, jobs[0].wrap_mm));
     let mut layers = vec![pdf_doc.get_page(first_pi).get_layer(first_li)];
 
-    for spread in doc.spreads.iter().skip(1) {
-        let spread_w = doc.spread_width_mm(spread);
-        let (pi, li) = pdf_doc.add_page(
-            Mm(spread_w + 2.0 * bleed),
-            Mm(ph + 2.0 * bleed),
-            "Layer 1",
-        );
-        pdf_doc.get_page(pi).extend_with(page_box_extension(spread_w, ph, bleed));
+    for job in jobs.iter().skip(1) {
+        let (w, h) = page_dims(job);
+        let (pi, li) = pdf_doc.add_page(w, h, "Layer 1");
+        pdf_doc.get_page(pi)
+            .extend_with(page_box_extension(job.trim_w_mm, ph, bleed, job.wrap_mm));
         layers.push(pdf_doc.get_page(pi).get_layer(li));
     }
 
@@ -194,8 +298,8 @@ pub(crate) fn pdf_export_begin_with_bytes(
         bleed,
         ph,
         print_dpi,
-        next_spread: 0,
-        total,
+        jobs,
+        next_job: 0,
     })
 }
 
@@ -227,55 +331,71 @@ pub(crate) fn pdf_export_begin(
         }
     }
 
-    pdf_export_begin_with_bytes(doc, image_src, font_bytes_map)
+    pdf_export_begin_with_bytes(doc, image_src, font_bytes_map, ExportTarget::All)
 }
 
-/// Phase 2 — render the next pending spread into the PDF.
-/// Call this `total` times (once per spread). Returns per-phase timing data.
+/// Phase 2 — render the next pending page job into the PDF.
+/// Call this `jobs.len()` times (once per output page). Returns per-phase timing data.
 pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookDocument) -> SpreadTimes {
-    let i = state.next_spread;
-    if i >= state.total { return SpreadTimes::default(); }
+    let i = state.next_job;
+    if i >= state.jobs.len() { return SpreadTimes::default(); }
+    let job = &state.jobs[i];
+    let (spread_idx, origin_x, trim_w, wrap) =
+        (job.spread_idx, job.origin_x_mm, job.trim_w_mm, job.wrap_mm);
 
-    let spread   = &doc.spreads[i];
+    let spread   = &doc.spreads[spread_idx];
     let spread_w = doc.spread_width_mm(spread);
-    let bleed    = state.bleed;
+    // Media margin around the trim: bleed, plus the cover wrap allowance.
+    let bleed    = state.bleed + wrap;
     let ph       = state.ph;
-    let total_w  = spread_w + 2.0 * bleed;
+    let total_w  = trim_w + 2.0 * bleed;
     let total_h  = ph + 2.0 * bleed;
     let page_w   = doc.page_size.width_mm;
 
     let layer = state.layers[i].clone();
 
+    // Spread-space x → page-media x for this job's page.
+    let to_page_x = |spread_x: f32| spread_x - origin_x + bleed;
+
     // Determine the printable layout region for endpaper spreads.
     // layout_w: width passed to the resolver (one page for endpapers, full spread otherwise).
     // layout_offset_x: x offset to shift resolved frames into the printable half.
-    let endpaper_side = doc.endpaper_side(i);
+    let endpaper_side = doc.endpaper_side(spread_idx);
     let (layout_w, layout_offset_x) = match endpaper_side {
         Some("left")  => (page_w, page_w), // right half is printable
         Some("right") => (page_w, 0.0),    // left half is printable
         _             => (spread_w, 0.0),
     };
-    let region = Rect::new(layout_offset_x, 0.0, layout_w, ph);
+    // Visible region in spread space: the printable layout area clipped to this
+    // page's media window. Frames outside it are skipped entirely — for split
+    // spreads the other half's images are never decoded or encoded.
+    let printable = Rect::new(layout_offset_x, 0.0, layout_w, ph);
+    let window = Rect::new(origin_x - bleed, -bleed, trim_w + 2.0 * bleed, ph + 2.0 * bleed);
+    let region = intersect_rect(&printable, &window)
+        .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
 
     // White base background.
     layer.set_fill_color(Color::Rgb(Rgb::new(1.0, 1.0, 1.0, None)));
     fill_rect(&layer, 0.0, 0.0, total_w, total_h);
 
     // Per-page background colors — skip the non-printable side for endpaper spreads.
+    // Off-page fills are clipped away by the page's MediaBox.
     let draw_left_bg  = endpaper_side != Some("left");
     let draw_right_bg = endpaper_side != Some("right");
     if draw_left_bg && !spread.left_bg.is_empty() {
         let (r, g, b) = parse_hex_color(&spread.left_bg);
         layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
-        fill_rect(&layer, 0.0, 0.0, page_w + bleed, total_h);
+        fill_rect(&layer, to_page_x(-bleed), 0.0, page_w + bleed, total_h);
     }
     if draw_right_bg && !spread.right_bg.is_empty() {
         let (r, g, b) = parse_hex_color(&spread.right_bg);
         layer.set_fill_color(Color::Rgb(Rgb::new(r, g, b, None)));
-        fill_rect(&layer, total_w - page_w - bleed, 0.0, page_w + bleed, total_h);
+        fill_rect(&layer, to_page_x(spread_w - page_w), 0.0, page_w + bleed, total_h);
     }
 
-    draw_crop_marks(&layer, bleed, spread_w, ph);
+    if doc.export_crop_marks {
+        draw_crop_marks(&layer, bleed, trim_w, ph);
+    }
 
     // Resolve frames against the printable page width, then shift into spread-mm space.
     let rooms_mm_raw = resolve_frames_mm(
@@ -297,7 +417,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
         let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
         let Some(face) = spread.layout.faces.get(face_id) else { continue };
         if let Some(ref img_id) = face.image.image_id {
-            let fp = frame_page_rect(spread_rect, region.x);
+            let fp = frame_page_rect(spread_rect, origin_x);
             let need_w = ((fp.w / 25.4 * state.print_dpi) * 1.5).ceil() as u32;
             let need_h = ((fp.h / 25.4 * state.print_dpi) * 1.5).ceil() as u32;
             let e = image_need.entry(img_id.as_str()).or_insert((0, 0));
@@ -318,10 +438,10 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
         let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
         let Some(face) = spread.layout.faces.get(face_id) else { continue };
 
-        let node_rotation    = face.box_model.face_rotation_deg.unwrap_or(0.0);
+        let node_rotation    = face.box_model.face_rotation_deg;
         let (crtl, crtr, crbr, crbl) = face.box_model.border.corner_radii();
         let border_radius_mm = crtl.max(crtr).max(crbr).max(crbl).max(0.0);
-        let frame_page       = frame_page_rect(spread_rect, region.x);
+        let frame_page       = frame_page_rect(spread_rect, origin_x);
 
         if let Some(ref img_id) = face.image.image_id {
             let (need_w, need_h) = image_need.get(img_id.as_str()).copied().unwrap_or((0, 0));
@@ -359,7 +479,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
     for (face_id, spread_rect) in &rooms_mm {
         let Some(_clipped) = intersect_rect(spread_rect, &region) else { continue };
         let Some(face) = spread.layout.faces.get(face_id) else { continue };
-        let frame_page = frame_page_rect(spread_rect, region.x);
+        let frame_page = frame_page_rect(spread_rect, origin_x);
 
         if let Some((_, node_rotation, border_radius_mm, prep)) = prepared.get(face_id) {
             if let Some(ref xobj_ref) = prep.xobj_ref {
@@ -370,7 +490,7 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
 
         let border = &face.box_model.border;
         if border.any_nonzero() {
-            let node_rotation = face.box_model.face_rotation_deg.unwrap_or(0.0);
+            let node_rotation = face.box_model.face_rotation_deg;
             layer.save_graphics_state();
             apply_node_ctm(&layer, node_rotation, &frame_page, bleed, ph);
             draw_border_rect(&layer, &frame_page, bleed, ph, border);
@@ -389,12 +509,12 @@ pub(crate) fn pdf_export_spread_one(state: &mut PdfExportState, doc: &PhotobookD
     if !printable_texts.is_empty() {
         draw_text_elements(
             &layer, &printable_texts,
-            region.x, bleed, ph,
+            origin_x, bleed, ph,
             &state.pdf_doc, &mut state.font_cache, &state.font_bytes_map,
         );
     }
 
-    state.next_spread += 1;
+    state.next_job += 1;
     times
 }
 
@@ -413,7 +533,7 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
     let Some(mut state) = pdf_export_begin(doc, images_json, fonts_json) else {
         return Vec::new();
     };
-    while state.next_spread < state.total {
+    while state.next_job < state.jobs.len() {
         let _ = pdf_export_spread_one(&mut state, doc);
     }
     pdf_export_finish(state)
@@ -908,19 +1028,22 @@ fn fill_rect(layer: &PdfLayerReference, x: f32, y: f32, w: f32, h: f32) {
 /// The printpdf serializer writes TrimBox = MediaBox by default, which incorrectly
 /// includes the bleed area. We replace it with the actual trim (content) rectangle and
 /// add the BleedBox that preflighting tools use to identify the bleed extent.
+/// When a cover wrap allowance is present the media extends `wrap` beyond the
+/// BleedBox on every side (MediaBox ⊇ BleedBox ⊇ TrimBox).
 ///
 /// All coordinates are in PDF user-space points (1 pt = 1/72 inch).
 ///   MediaBox / BleedBox: [0, 0, total_w_pt, total_h_pt]
 ///   TrimBox:             [bleed_pt, bleed_pt, total_w_pt − bleed_pt, total_h_pt − bleed_pt]
-fn page_box_extension(spread_w: f32, ph: f32, bleed: f32) -> printpdf::lopdf::Dictionary {
+fn page_box_extension(trim_w: f32, ph: f32, bleed: f32, wrap: f32) -> printpdf::lopdf::Dictionary {
     const PT_PER_MM: f32 = 72.0 / 25.4;
-    let bleed_pt  = bleed * PT_PER_MM;
-    let total_w   = (spread_w + 2.0 * bleed) * PT_PER_MM;
-    let total_h   = (ph      + 2.0 * bleed) * PT_PER_MM;
+    let margin_pt = (bleed + wrap) * PT_PER_MM;  // trim inset from the media edge
+    let wrap_pt   = wrap * PT_PER_MM;            // bleed-box inset from the media edge
+    let total_w   = (trim_w + 2.0 * (bleed + wrap)) * PT_PER_MM;
+    let total_h   = (ph     + 2.0 * (bleed + wrap)) * PT_PER_MM;
 
     use printpdf::lopdf::Object::{Array, Real};
-    let trim_box  = Array(vec![Real(bleed_pt), Real(bleed_pt), Real(total_w - bleed_pt), Real(total_h - bleed_pt)]);
-    let bleed_box = Array(vec![Real(0.0),      Real(0.0),      Real(total_w),             Real(total_h)]);
+    let trim_box  = Array(vec![Real(margin_pt), Real(margin_pt), Real(total_w - margin_pt), Real(total_h - margin_pt)]);
+    let bleed_box = Array(vec![Real(wrap_pt),   Real(wrap_pt),   Real(total_w - wrap_pt),   Real(total_h - wrap_pt)]);
 
     let mut dict = printpdf::lopdf::Dictionary::new();
     dict.set("TrimBox",  trim_box);
@@ -985,14 +1108,14 @@ fn draw_border_rect(
                 frame.w + w,
                 frame.h + w,
             ),
-            BorderPosition::Centered | BorderPosition::Mixed => (frame.x, frame.y, frame.w, frame.h),
+            BorderPosition::Centered => (frame.x, frame.y, frame.w, frame.h),
         };
         let (cr0, cr1, cr2, cr3) = border.corner_radii();
         let base_r = cr0.max(cr1).max(cr2).max(cr3).max(0.0);
         let stroke_r = match border.position {
             BorderPosition::Inner  => (base_r - hw).max(0.0),
             BorderPosition::Outer  => base_r + hw,
-            BorderPosition::Centered | BorderPosition::Mixed => base_r,
+            BorderPosition::Centered => base_r,
         };
         use printpdf::lopdf::content::Operation;
         layer.set_outline_thickness(w * 72.0 / 25.4);
@@ -1032,7 +1155,7 @@ fn draw_border_rect(
             draw_line(wb, fx,        fy + fh + wb/2.0, fx + fw,   fy + fh + wb/2.0);
             draw_line(wl, fx - wl/2.0, fy, fx - wl/2.0,           fy + fh);
         }
-        BorderPosition::Centered | BorderPosition::Mixed => {
+        BorderPosition::Centered => {
             draw_line(wt, fx,      fy,      fx + fw, fy);
             draw_line(wr, fx + fw, fy,      fx + fw, fy + fh);
             draw_line(wb, fx,      fy + fh, fx + fw, fy + fh);
@@ -1483,5 +1606,189 @@ mod tests {
         }
     }
 
+    fn export_with_target(doc: &PhotobookDocument, target: ExportTarget) -> Vec<u8> {
+        let mut state = pdf_export_begin_with_bytes(doc, HashMap::new(), HashMap::new(), target)
+            .expect("export should produce at least one page");
+        while state.next_job < state.jobs.len() {
+            let _ = pdf_export_spread_one(&mut state, doc);
+        }
+        pdf_export_finish(state)
+    }
+
+    fn page_dicts(parsed: &printpdf::lopdf::Document) -> Vec<printpdf::lopdf::Dictionary> {
+        parsed.get_pages().values()
+            .map(|id| parsed.get_object(*id).and_then(|o| o.as_dict()).unwrap().clone())
+            .collect()
+    }
+
+    fn box_array(dict: &printpdf::lopdf::Dictionary, key: &[u8]) -> Vec<f32> {
+        dict.get(key).unwrap().as_array().unwrap()
+            .iter().map(|o| o.as_float().unwrap()).collect()
+    }
+
+    /// The exported PDF must identify as PDF/X-4: PDF 1.6 header, GTS_PDFX
+    /// output intent with an embedded RGB destination profile (under the
+    /// spec-correct /DestOutputProfile key), XMP metadata, and a document ID.
+    #[test]
+    fn pdf_is_pdfx4_with_srgb_output_intent() {
+        let doc = doc_single_frame(None);
+        let pdf = export_pdf(&doc, "[]", "[]");
+        assert!(pdf.starts_with(b"%PDF-1.6"), "PDF/X-4 export should be PDF 1.6");
+
+        let parsed = printpdf::lopdf::Document::load_mem(&pdf).expect("parseable PDF");
+        let catalog = parsed.catalog().expect("catalog");
+
+        let intents = catalog.get(b"OutputIntents").expect("OutputIntents present")
+            .as_array().expect("OutputIntents is an array");
+        assert_eq!(intents.len(), 1);
+        let intent = intents[0].as_dict().expect("output intent dictionary");
+        assert_eq!(intent.get(b"S").unwrap().as_name().unwrap(), b"GTS_PDFX");
+        let profile_id = intent.get(b"DestOutputProfile")
+            .expect("DestOutputProfile present (not the misspelled long form)")
+            .as_reference().unwrap();
+        let profile = parsed.get_object(profile_id).unwrap().as_stream().unwrap();
+        assert_eq!(profile.dict.get(b"N").unwrap().as_i64().unwrap(), 3,
+            "destination profile should be 3-component (RGB)");
+        assert!(!profile.content.is_empty(), "ICC profile bytes should be embedded");
+
+        assert!(catalog.has(b"Metadata"), "XMP metadata stream should be referenced");
+        assert!(parsed.trailer.has(b"ID"), "trailer should carry a document ID");
+
+        // The XMP packet must be scannable in the raw bytes (uncompressed).
+        let needle = b"pdfxid:GTS_PDFXVersion";
+        assert!(pdf.windows(needle.len()).any(|w| w == needle),
+            "uncompressed XMP packet with pdfxid:GTS_PDFXVersion should be present");
+    }
+
+    #[test]
+    fn build_jobs_cover_body_split_and_single_pages() {
+        let mut doc = doc_single_frame(None); // cover + 1 content spread
+        doc.export_body_pages = true;
+
+        let cover = build_jobs(&doc, ExportTarget::Cover);
+        assert_eq!(cover.len(), 1);
+        assert!((cover[0].trim_w_mm - doc.spread_width_mm(&doc.spreads[0])).abs() < 1e-4);
+
+        let body = build_jobs(&doc, ExportTarget::Body);
+        assert_eq!(body.len(), 2, "one content spread → two single pages");
+        assert_eq!(body[0].origin_x_mm, 0.0);
+        assert!((body[1].origin_x_mm - 210.0).abs() < 1e-4);
+        assert!((body[0].trim_w_mm - 210.0).abs() < 1e-4);
+
+        doc.export_body_pages = false;
+        let all = build_jobs(&doc, ExportTarget::All);
+        assert_eq!(all.len(), 2, "spread mode: one page per spread");
+    }
+
+    /// Body-as-single-pages export: each output page is one trim page wide.
+    #[test]
+    fn pdf_body_pages_have_single_page_media() {
+        const PT_PER_MM: f32 = 72.0 / 25.4;
+        let mut doc = doc_single_frame(None);
+        doc.export_body_pages = true;
+
+        let pdf = export_with_target(&doc, ExportTarget::Body);
+        let parsed = printpdf::lopdf::Document::load_mem(&pdf).unwrap();
+        let pages = page_dicts(&parsed);
+        assert_eq!(pages.len(), 2);
+        for page in &pages {
+            let media = box_array(page, b"MediaBox");
+            let expected_w = (210.0 + 2.0 * 3.0) * PT_PER_MM;
+            assert!((media[2] - expected_w).abs() < 0.01,
+                "single-page media width: got {}, want {}", media[2], expected_w);
+        }
+    }
+
+    /// Cover wrap allowance: MediaBox ⊇ BleedBox ⊇ TrimBox with the wrap
+    /// between media and bleed, and the bleed between bleed-box and trim.
+    #[test]
+    fn pdf_cover_wrap_extends_media_beyond_bleed() {
+        const PT_PER_MM: f32 = 72.0 / 25.4;
+        let mut doc = doc_single_frame(None);
+        doc.cover_wrap_mm = 15.0;
+
+        let pdf = export_with_target(&doc, ExportTarget::Cover);
+        let parsed = printpdf::lopdf::Document::load_mem(&pdf).unwrap();
+        let pages = page_dicts(&parsed);
+        assert_eq!(pages.len(), 1);
+
+        let media = box_array(&pages[0], b"MediaBox");
+        let bleed = box_array(&pages[0], b"BleedBox");
+        let trim  = box_array(&pages[0], b"TrimBox");
+
+        let wrap_pt  = 15.0 * PT_PER_MM;
+        let bleed_pt = 3.0 * PT_PER_MM;
+        let tol = 0.01;
+        assert!((bleed[0] - (media[0] + wrap_pt)).abs() < tol, "BleedBox inset by wrap");
+        assert!((trim[0]  - (bleed[0] + bleed_pt)).abs() < tol, "TrimBox inset by bleed inside BleedBox");
+
+        // Cover trim width = 2 pages + spine (minimum 5mm applies here).
+        let spine = doc.spine_mm();
+        let expected_trim_w = (2.0 * 210.0 + spine) * PT_PER_MM;
+        assert!(((trim[2] - trim[0]) - expected_trim_w).abs() < tol,
+            "cover trim width: got {}, want {}", trim[2] - trim[0], expected_trim_w);
+    }
+
+    /// Peecho-style export: one file of single pages where the front cover
+    /// (right half of the cover spread) comes first and the back cover
+    /// (left half) comes last; endpaper blanks are not emitted.
+    #[test]
+    fn build_jobs_cover_pages_orders_front_first_back_last() {
+        let mut doc = doc_single_frame(None); // cover + 1 content spread
+        doc.add_spread();                     // need ≥2 content spreads for endpapers
+        doc.export_cover_pages = true;
+        doc.export_body_pages = true;
+        doc.endpapers = true;
+
+        let jobs = build_jobs(&doc, ExportTarget::All);
+        let cover_w = doc.spread_width_mm(&doc.spreads[0]);
+
+        // front cover, 1 page (left endpaper skipped), 2 pages, 1 page
+        // (right endpaper skipped), back cover
+        assert_eq!(jobs.len(), 1 + 1 + 1 + 1);
+        assert_eq!(jobs[0].spread_idx, 0);
+        assert!((jobs[0].origin_x_mm - (cover_w - 210.0)).abs() < 1e-4,
+            "front cover is the right half of the cover spread");
+        assert!((jobs[0].trim_w_mm - 210.0).abs() < 1e-4);
+        // Spread 1 has a left endpaper: only its right page is emitted.
+        assert_eq!(jobs[1].spread_idx, 1);
+        assert!((jobs[1].origin_x_mm - 210.0).abs() < 1e-4);
+        // Spread 2 has a right endpaper: only its left page is emitted.
+        assert_eq!(jobs[2].spread_idx, 2);
+        assert_eq!(jobs[2].origin_x_mm, 0.0);
+        // Back cover last.
+        let back = jobs.last().unwrap();
+        assert_eq!(back.spread_idx, 0);
+        assert_eq!(back.origin_x_mm, 0.0);
+        assert!((back.trim_w_mm - 210.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn page_count_rules_enforce_min_and_block_removal() {
+        let mut doc = doc_single_frame(None); // 1 content spread = 2 pages
+        doc.page_rule_min = 16;
+        doc.page_rule_max = 120;
+        doc.page_rule_multiple = 2;
+        let added = doc.enforce_page_count_rules();
+        assert_eq!(added, 7, "2 → 16 pages needs 7 more spreads");
+        assert_eq!(doc.interior_page_count(), 16);
+        assert!(!doc.can_remove_spreads(doc.spread_step()), "at the minimum, removal is blocked");
+        assert!(doc.can_add_spreads(doc.spread_step()));
+
+        doc.page_rule_max = 16;
+        assert!(!doc.can_add_spreads(doc.spread_step()), "at the maximum, adding is blocked");
+    }
+
+    /// Crop marks are opt-in: the default export must not contain the mark
+    /// strokes, the opted-in export must paint more content.
+    #[test]
+    fn crop_marks_are_off_by_default() {
+        let mut doc = doc_single_frame(None);
+        let without = export_pdf(&doc, "[]", "[]");
+        doc.export_crop_marks = true;
+        let with = export_pdf(&doc, "[]", "[]");
+        assert!(with.len() > without.len(),
+            "enabling crop marks should add content ({} vs {} bytes)", with.len(), without.len());
+    }
 }
 

@@ -44,7 +44,7 @@ export class OuterMarginDialog {
   private _build(): void {
     this._built = true;
     this._el.innerHTML = `
-      <div class="om-title">Outer Margins (mm)</div>
+      <div class="tool-dialog-header"><span class="tool-dialog-title">Outer Margins (mm)</span></div>
       ${marginSectionHtml('', (name, label) => numField(name, label, { min: 0 }), 'om')}
     `;
 

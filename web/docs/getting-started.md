@@ -12,7 +12,8 @@ Photobook is a browser-based editor for designing print-ready photo books. It ru
 
 | Area | Purpose |
 |------|---------|
-| **Toolbar** (top) | Global actions: save/load, undo/redo, add text, cut tool, export PDF, project settings, help |
+| **Toolbar** (top) | Global actions: save/load, undo/redo, export PDF, project settings, help |
+| **Canvas toolbar** (left of canvas) | Layout and image tools: cut, text, swap, flip, distribute, gap tools, zoom, fullscreen preview |
 | **Left sidebar** | Image browser — open a folder and drag photos onto the canvas |
 | **Canvas** (centre) | The current spread at the selected zoom level |
 | **Right sidebar** | Properties for the selected frame, text, or divider; spread settings when nothing is selected |
@@ -23,6 +24,8 @@ Photobook is a browser-based editor for designing print-ready photo books. It ru
 ## Your first book
 
 1. **Open a folder** — click **Open Folder** in the left sidebar and select a folder of images. Thumbnails appear immediately.
+
+   > **Your photos never leave your computer.** The editor runs entirely in your browser and has no server. Some browsers word the folder dialog as "upload files" — that is the browser's generic phrasing for letting a page *read* the files; nothing is transmitted anywhere.
 2. **Set the page size** — click the **Project Settings** gear icon in the toolbar and choose a page size (or leave the default).
 3. **Add spreads** — click **+ Spread** in the footer (or press **N**) to add pages to your book.
 4. **Split frames** — press **K** to activate the Cut tool, then click on a frame to split it into two. Click more times to create more frames. Press **Escape** when done.

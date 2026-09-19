@@ -6,6 +6,37 @@ use lopdf;
 
 use crate::glob_defines::ICC_PROFILE_ECI_V2;
 
+/// Human-readable description of the printing condition, written into the
+/// `/OutputIntents` dictionary on save (together with the embedded ICC profile).
+/// The default describes Coated FOGRA39, matching the default ECI CMYK profile.
+#[derive(Debug, Clone)]
+pub struct OutputIntentDescription {
+    /// Concise, human-readable name of the printing condition (`/OutputConditionIdentifier`).
+    /// Use a registered identifier (e.g. "FOGRA39") or "Custom".
+    pub output_condition_identifier: String,
+    /// Longer description of the intended printing condition (`/OutputCondition`).
+    pub output_condition: String,
+    /// Registry the identifier belongs to (`/RegistryName`), e.g. "http://www.color.org".
+    /// Omitted from the PDF when `None` (required for "Custom" identifiers).
+    pub registry_name: Option<String>,
+    /// Human-readable description of the embedded destination profile (`/Info`).
+    pub info: String,
+}
+
+impl Default for OutputIntentDescription {
+    fn default() -> Self {
+        OutputIntentDescription {
+            output_condition_identifier: "FOGRA39".into(),
+            output_condition: "Commercial and special offset print acccording to ISO \
+                               12647-2:2004 / Amd 1, paper type 1 or 2 (matte or gloss-coated \
+                               offset paper, 115 g/m2), screen ruling 60/cm"
+                .into(),
+            registry_name: Some("http://www.color.org".into()),
+            info: "Coated FOGRA39 (ISO 12647-2:2004)".into(),
+        }
+    }
+}
+
 /// This is a wrapper in order to keep shared data between the documents XMP metadata and
 /// the "Info" dictionary in sync
 #[derive(Debug, Clone)]
@@ -42,6 +73,8 @@ pub struct PdfMetadata {
     pub document_info: DocumentInfo,
     /// Target color profile
     pub target_icc_profile: Option<IccProfile>,
+    /// Description of the printing condition written to `/OutputIntents`.
+    pub output_intent: OutputIntentDescription,
 }
 
 impl PdfMetadata {
@@ -74,6 +107,7 @@ impl PdfMetadata {
             xmp_metadata: XmpMetadata::new(Some("default".into()), 1),
             document_info: DocumentInfo::new(),
             target_icc_profile: None,
+            output_intent: OutputIntentDescription::default(),
         }
     }
 

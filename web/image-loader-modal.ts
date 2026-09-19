@@ -69,6 +69,7 @@ export class ImageLoaderModal {
       </div>
       <p class="ilm-status"></p>
       <ul class="ilm-list"></ul>
+      <p class="privacy-hint">Your photos stay on your computer — nothing is uploaded.</p>
       <div class="ilm-actions">
         <button class="ilm-select">Select Folder</button>
         <button class="ilm-continue">Continue</button>
@@ -145,11 +146,17 @@ export class ImageLoaderModal {
       return; // user cancelled
     }
 
+    void this._onFolderPicked?.(dirHandle);
+    await this.scanHandle(dirHandle);
+  }
+
+  /** Recursively scan a directory handle and load every matching pending
+   *  image. Public so a remembered recent folder can be applied without the
+   *  picker; closes the modal automatically when nothing remains missing. */
+  async scanHandle(dirHandle: FileSystemDirectoryHandle): Promise<void> {
     this.selectBtn.disabled   = true;
     this.continueBtn.disabled = true;
     this.statusEl.textContent = 'Scanning folder…';
-
-    void this._onFolderPicked?.(dirHandle);
 
     const byPath = new Map<string, FileSystemFileHandle>();
     const byName = new Map<string, FileSystemFileHandle>();

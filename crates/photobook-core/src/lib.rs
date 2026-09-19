@@ -15,12 +15,12 @@ mod editor_image_ops;
 mod editor_text_ops;
 mod editor_spread_settings;
 mod editor_pinwheel;
+mod editor_preflight;
 pub(crate) mod editor_tests;
 
 #[cfg(feature = "wasm-test")]
 mod wasm_test_runner;
 
-use editor_layout::DragEdgePanel;
 use editor_pinwheel::DragPinwheelSpawn;
 use interaction::DragState;
 use layout::{Rect, ResolvedDivider, ResolvedFrame};
@@ -35,10 +35,21 @@ use std::collections::{HashMap, HashSet};
 // ---------------------------------------------------------------------------
 
 pub(crate) struct LowDpiCache {
+    /// Editor revision the report was computed at — stale when it differs.
+    pub revision: u64,
     pub canvas_w_bits: u32,
     pub canvas_h_bits: u32,
     pub spread_idx: usize,
     pub json: String,
+}
+
+/// Which spread thumbnails need repainting. Keyed by spread *id*, not index,
+/// so structural edits (insert / remove / reorder) cannot desynchronise the
+/// bookkeeping — there is nothing to resize or shift.
+pub(crate) enum ThumbsDirty {
+    /// Every thumbnail (order or document-wide settings changed).
+    All,
+    Ids(HashSet<u32>),
 }
 
 #[cfg(feature = "console_error_panic_hook")]
@@ -61,22 +72,27 @@ pub struct PhotobookEditor {
     pub(crate) selection: Vec<FaceId>,
     pub(crate) selected_segments: Vec<EdgeId>,
     pub(crate) drag: Option<DragState>,
-    pub(crate) edge_panel_drag: Option<DragEdgePanel>,
     pub(crate) drag_pinwheel: Option<DragPinwheelSpawn>,
     pub(crate) debug_snapshot: Option<Box<GridLayout>>,
     pub(crate) mouse_x: f32,
     pub(crate) mouse_y: f32,
     pub(crate) image_sizes: HashMap<String, (u32, u32)>,
 
-    // Dirty tracking for incremental rendering
+    // Dirty tracking for incremental rendering.
+    // `revision` is the single "document changed" signal: every mutation entry
+    // point bumps it, and revision-tagged caches (low-DPI report) compare
+    // against it instead of carrying their own dirty flag. `structure_dirty` /
+    // `leaf_dirty` survive because they are the *payload selectors* of the
+    // canvas delta protocol (full resend vs. per-face updates).
+    pub(crate) revision: u64,
     pub(crate) structure_dirty: bool,
     pub(crate) leaf_dirty: HashSet<FaceId>,
-    pub(crate) spread_dirty: Vec<bool>,
-    pub(crate) low_dpi_dirty: bool,
+    pub(crate) dirty_thumbs: ThumbsDirty,
     pub(crate) low_dpi_cache: Option<LowDpiCache>,
     pub(crate) last_delta_canvas_w_bits: u32,
     pub(crate) last_delta_canvas_h_bits: u32,
     pub(crate) snap_disabled: bool,
+    pub(crate) bleed_visible: bool,
     pub(crate) pdf_state: Option<Box<crate::pdf::PdfExportState>>,
     pub(crate) pdf_staged_images: HashMap<String, Vec<u8>>,
     pub(crate) pdf_staged_fonts:  HashMap<String, Vec<u8>>,
@@ -101,20 +117,20 @@ impl PhotobookEditor {
             selection: vec![],
             selected_segments: vec![],
             drag: None,
-            edge_panel_drag: None,
             drag_pinwheel: None,
             debug_snapshot: None,
             mouse_x: 0.0,
             mouse_y: 0.0,
             image_sizes: HashMap::new(),
+            revision: 0,
             structure_dirty: true,
             leaf_dirty: HashSet::new(),
-            spread_dirty: vec![true],
-            low_dpi_dirty: true,
+            dirty_thumbs: ThumbsDirty::All,
             low_dpi_cache: None,
             last_delta_canvas_w_bits: 0,
             last_delta_canvas_h_bits: 0,
             snap_disabled: false,
+            bleed_visible: true,
             pdf_state: None,
             pdf_staged_images: HashMap::new(),
             pdf_staged_fonts:  HashMap::new(),
@@ -125,6 +141,11 @@ impl PhotobookEditor {
 
     pub fn set_snap_disabled(&mut self, disabled: bool) {
         self.snap_disabled = disabled;
+    }
+
+    pub fn set_bleed_visible(&mut self, visible: bool) {
+        self.bleed_visible = visible;
+        self.mark_structure_dirty();
     }
 
     pub fn get_debug_layout_dump(&self) -> String {
@@ -153,47 +174,59 @@ impl PhotobookEditor {
     }
 
     pub(crate) fn mm_to_px(&self, canvas_w: f32) -> f32 {
-        let spread_w_mm = self.doc.spread_width_mm(self.doc.current_spread());
-        if spread_w_mm > 0.0 { canvas_w / spread_w_mm } else { 1.0 }
+        // For endpaper spreads the TypeScript passes one-page width as canvas_w,
+        // so divide by page_width_mm rather than the full two-page spread width.
+        let idx = self.doc.current_spread;
+        let effective_w_mm = if self.doc.endpaper_side(idx).is_some() {
+            self.doc.page_size.width_mm
+        } else {
+            self.doc.spread_width_mm(self.doc.current_spread())
+        };
+        if effective_w_mm > 0.0 { canvas_w / effective_w_mm } else { 1.0 }
     }
 
     pub(crate) fn save_debug_snapshot(&mut self) {
         self.debug_snapshot = Some(Box::new(self.doc.current_spread().layout.clone()));
     }
 
+    /// Single "the document changed" entry point — bumps the revision that
+    /// revision-tagged caches compare against.
+    pub(crate) fn touch(&mut self) {
+        self.revision += 1;
+    }
+
+    pub(crate) fn mark_current_thumb_dirty(&mut self) {
+        let id = self.doc.current_spread().id;
+        if let ThumbsDirty::Ids(set) = &mut self.dirty_thumbs {
+            set.insert(id);
+        }
+    }
+
+    pub(crate) fn mark_all_thumbs_dirty(&mut self) {
+        self.dirty_thumbs = ThumbsDirty::All;
+    }
+
     pub(crate) fn mark_structure_dirty(&mut self) {
+        self.touch();
         self.structure_dirty = true;
-        self.low_dpi_dirty = true;
-        let idx = self.doc.current_spread;
-        self.ensure_spread_dirty_len();
-        self.spread_dirty[idx] = true;
+        self.mark_current_thumb_dirty();
     }
 
     pub(crate) fn mark_leaf_dirty(&mut self, id: FaceId) {
+        self.touch();
         self.leaf_dirty.insert(id);
-        self.low_dpi_dirty = true;
-        let idx = self.doc.current_spread;
-        self.ensure_spread_dirty_len();
-        self.spread_dirty[idx] = true;
-    }
-
-    pub(crate) fn ensure_spread_dirty_len(&mut self) {
-        let n = self.doc.spreads.len();
-        if self.spread_dirty.len() < n {
-            self.spread_dirty.resize(n, true);
-        }
+        self.mark_current_thumb_dirty();
     }
 
     /// Mark every render cache dirty. Called by `install_doc_full` and by
     /// doc-wide settings changes whose effect is hard to bound to a subset.
     pub(crate) fn full_invalidate(&mut self) {
-        let n = self.doc.spreads.len();
+        self.touch();
         self.selection.clear();
         self.structure_dirty = true;
         self.leaf_dirty.clear();
-        self.low_dpi_dirty = true;
         self.low_dpi_cache = None;
-        self.spread_dirty = vec![true; n];
+        self.dirty_thumbs = ThumbsDirty::All;
     }
 
     /// Install `new_doc` as the live document and full-invalidate. Used by
@@ -204,8 +237,9 @@ impl PhotobookEditor {
     }
 
     /// `self.doc` has just been replaced; mark dirty bits by diffing it against
-    /// `old`. Preserves cached low-DPI / clean spread state where possible.
+    /// `old`. Preserves clean thumbnail state where possible.
     pub(crate) fn diff_invalidate(&mut self, old: &PhotobookDocument) {
+        self.touch();
         let doc_settings_changed = old.page_size         != self.doc.page_size
             || old.bleed_mm          != self.doc.bleed_mm
             || old.spine_mm_per_page != self.doc.spine_mm_per_page
@@ -217,42 +251,48 @@ impl PhotobookEditor {
             return;
         }
 
-        let new_n = self.doc.spreads.len();
-        if self.spread_dirty.len() != new_n {
-            self.spread_dirty.resize(new_n, false);
-        }
-
-        for i in 0..new_n {
-            if old.spreads.get(i) != Some(&self.doc.spreads[i]) {
-                self.spread_dirty[i] = true;
+        // Thumbnails are addressed by position in the strip, so an order or
+        // count change shifts every index → repaint all. Otherwise repaint
+        // exactly the spreads whose content differs.
+        let order_changed = old.spreads.len() != self.doc.spreads.len()
+            || old.spreads.iter().zip(&self.doc.spreads).any(|(a, b)| a.id != b.id);
+        if order_changed {
+            self.mark_all_thumbs_dirty();
+        } else {
+            for (i, spread) in self.doc.spreads.iter().enumerate() {
+                if old.spreads.get(i) != Some(spread) {
+                    if let ThumbsDirty::Ids(set) = &mut self.dirty_thumbs {
+                        set.insert(spread.id);
+                    }
+                }
             }
         }
 
         let cur = self.doc.current_spread;
         let current_changed = old.current_spread != cur
-            || old.spreads.len() != new_n
+            || old.spreads.len() != self.doc.spreads.len()
             || old.spreads.get(cur) != self.doc.spreads.get(cur);
 
         if current_changed {
             self.structure_dirty = true;
             self.leaf_dirty.clear();
-            self.low_dpi_dirty = true;
-        }
-        if let Some(c) = &self.low_dpi_cache {
-            if c.spread_idx >= new_n || self.spread_dirty[c.spread_idx] {
-                self.low_dpi_cache = None;
-                self.low_dpi_dirty = true;
-            }
         }
         self.selection.clear();
     }
 
     pub(crate) fn root_rect_with_bleed(&self, canvas_w: f32, canvas_h: f32) -> Rect {
         let bleed_px = self.doc.bleed_mm * self.mm_to_px(canvas_w);
+        // Endpaper pages have no bleed at the fold (gutter) side.
+        let idx = self.doc.current_spread;
+        let (left_bleed, right_bleed) = match self.doc.endpaper_side(idx) {
+            Some("left")  => (0.0, bleed_px),  // fold is left edge of printable page
+            Some("right") => (bleed_px, 0.0),  // fold is right edge of printable page
+            _             => (bleed_px, bleed_px),
+        };
         Rect::new(
+            -left_bleed,
             -bleed_px,
-            -bleed_px,
-            canvas_w + 2.0 * bleed_px,
+            canvas_w + left_bleed + right_bleed,
             canvas_h + 2.0 * bleed_px,
         )
     }
@@ -265,7 +305,9 @@ impl PhotobookEditor {
         let spread = self.doc.current_spread();
         let mm_to_px = self.mm_to_px(canvas_w);
         let rect = self.root_rect_with_bleed(canvas_w, canvas_h);
-        let resolver = GridResolver::new(&spread.layout, &self.selection, mm_to_px);
+        let visible_bleed_px = if self.bleed_visible { self.doc.bleed_mm * mm_to_px } else { 0.0 };
+        let resolver = GridResolver::new(&spread.layout, &self.selection, mm_to_px)
+            .with_visible_bleed(visible_bleed_px);
         let frames   = resolver.resolve_frames(rect);
         let dividers = resolver.resolve_divider_hits(rect);
         (frames, dividers)

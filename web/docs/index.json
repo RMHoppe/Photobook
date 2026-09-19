@@ -9,6 +9,7 @@
   { "title": "Canvas Navigation",         "file": "canvas-navigation.md" },
   { "title": "Project Settings & Saving", "file": "project.md" },
   { "title": "Exporting to PDF",          "file": "export-pdf.md" },
+  { "title": "Ordering a Printed Book",   "file": "ordering.md" },
   { "title": "Keyboard Shortcuts",        "file": "shortcuts.md" },
   { "title": "Glossary",                  "file": "glossary.md" }
 ]

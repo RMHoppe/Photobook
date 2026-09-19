@@ -44,6 +44,7 @@ export interface InteractionContext {
   snapshot: () => void;
   refreshBoxModel: () => void;
   redraw: () => void;
+  commit: () => void;
   setMode: (mode: InteractionMode, state: ModeState) => void;
   modeState: ModeState;
   /** Called when a text element is selected (or created) — id is the new selection. */
@@ -57,7 +58,22 @@ export interface InteractionMode {
   onMouseMove: (e: MouseEvent, ctx: InteractionContext) => void;
   onMouseUp:   (e: MouseEvent, ctx: InteractionContext) => void;
   onMouseLeave:(e: MouseEvent, ctx: InteractionContext) => void;
-  onWheel?:    (e: WheelEvent, ctx: InteractionContext) => void;
+  onWheel?:    (e: WheelEvent,   ctx: InteractionContext) => void;
+  onKeyDown?:  (e: KeyboardEvent, ctx: InteractionContext) => void;
+}
+
+// Sidebar refresh coalescer for continuous drags: mousemove can fire faster
+// than the display refreshes (120 Hz+ mice), and refreshBoxModel does several
+// WASM calls plus DOM writes. ctx.redraw is already rAF-coalesced; this gives
+// per-move sidebar updates the same treatment.
+let _boxModelRefreshScheduled = false;
+function scheduleBoxModelRefresh(ctx: InteractionContext): void {
+  if (_boxModelRefreshScheduled) return;
+  _boxModelRefreshScheduled = true;
+  requestAnimationFrame(() => {
+    _boxModelRefreshScheduled = false;
+    ctx.refreshBoxModel();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -106,11 +122,6 @@ interface ImagePanState {
 }
 interface ImageSwapState      { sourceId: number; targetId: number | null; }
 interface SplitPreviewState { nodeId: number; axis: 'v' | 'h' | 'quadrant' | null; ratio: number | null; numCuts: number; }
-interface EdgeLiveDragState { edge: 'top' | 'bottom' | 'left' | 'right'; axis: 'h' | 'v'; newIsFirst: boolean; spawned: boolean; segmentId: number; }
-
-// Tracks the currently hovered spread edge (for the new-split-at-root drag gesture).
-let _hoveredEdge: 'top' | 'bottom' | 'left' | 'right' | null = null;
-
 // When a twin handle is selected: chain rep ID and specific edge ID of the selected twin.
 let _selectedTwinChainId: number | null = null;
 let _selectedTwinEdgeId: number | null = null;
@@ -188,21 +199,23 @@ interface IdleGeo {
   canvasY: number;
 }
 
-function idleHandleEdgeHit(e: MouseEvent, ctx: InteractionContext, _geo: IdleGeo): void {
-  const { snapshot, setMode } = ctx;
-  const edge = _hoveredEdge!;
-  const axis: 'h' | 'v' = (edge === 'top' || edge === 'bottom') ? 'h' : 'v';
-  snapshot();
-  setMode(edgeLiveDragMode, {
-    edge, axis, newIsFirst: edge === 'top' || edge === 'left', spawned: false, segmentId: NULL_ID,
-  } as EdgeLiveDragState);
-  e.preventDefault();
-}
-
 function idleHandleDividerHit(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo): void {
-  const { editor, renderer, snapshot, refreshBoxModel, redraw, setMode } = ctx;
+  const { editor, renderer, snapshot, refreshBoxModel, commit, setMode } = ctx;
   const { sr, relX, relY } = geo;
   const divId = renderer.hoveredDivider!;
+
+  // Boundary edges are selectable for gap editing but not draggable.
+  const divs = getDividers(editor, sr.w, sr.h);
+  const div = divs.find(d => d.segment_id === divId);
+  if (div?.is_boundary) {
+    if (e.metaKey || e.ctrlKey) {
+      editor.toggle_segment(divId);
+    } else {
+      renderer.selectedTextIds.clear();
+      editor.select_segment(divId);
+    }
+    commit(); e.preventDefault(); return;
+  }
 
   if (renderer.twinSegmentSelected && divId === _selectedTwinChainId && _selectedTwinEdgeId !== null) {
     const selTh = renderer._twinHandles.find(h => h.edge_id === _selectedTwinEdgeId);
@@ -227,11 +240,13 @@ function idleHandleDividerHit(e: MouseEvent, ctx: InteractionContext, geo: IdleG
 
   if (e.metaKey || e.ctrlKey) {
     editor.toggle_segment(divId);
-    refreshBoxModel(); redraw(); e.preventDefault(); return;
+    commit(); e.preventDefault(); return;
   }
-  renderer.selectedTextIds.clear();
-  editor.select_segment(divId);
-  refreshBoxModel();
+  if (editor.get_selection_count() === 0) {
+    renderer.selectedTextIds.clear();
+    editor.select_segment(divId);
+    refreshBoxModel();
+  }
   snapshot();
   editor.begin_divider_drag(divId, true, sr.w, sr.h);
   setMode(dividerDragMode, { nodeId: divId } as DividerDragState);
@@ -251,7 +266,7 @@ function idleHandleImageSwapHit(e: MouseEvent, ctx: InteractionContext, geo: Idl
 }
 
 function idleHandleTextHit(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo): boolean {
-  const { editor, renderer, refreshBoxModel, redraw, setMode } = ctx;
+  const { editor, renderer, redraw, commit, setMode } = ctx;
   const { sr, relX, relY, canvasX, canvasY } = geo;
   const textHit = renderer.hitTestText(canvasX, canvasY);
   if (!textHit) return false;
@@ -261,7 +276,7 @@ function idleHandleTextHit(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo)
   if (e.metaKey || e.ctrlKey) {
     if (renderer.selectedTextIds.has(textHit.id)) renderer.selectedTextIds.delete(textHit.id);
     else renderer.selectedTextIds.add(textHit.id);
-    refreshBoxModel(); redraw(); e.preventDefault(); return true;
+    commit(); e.preventDefault(); return true;
   }
 
   editor.select_face(NULL_ID);
@@ -310,7 +325,7 @@ function idleHandleTextHit(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo)
 }
 
 function idleHandleLeafHit(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo): void {
-  const { editor, renderer, refreshBoxModel, redraw, setMode } = ctx;
+  const { editor, renderer, commit, setMode } = ctx;
   const { sr, relX, relY } = geo;
   editor.set_mouse_pos(relX, relY);
   const insideSpread = relX >= 0 && relX <= sr.w && relY >= 0 && relY <= sr.h;
@@ -318,11 +333,11 @@ function idleHandleLeafHit(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo)
 
   if (hitId !== NULL_ID) {
     if (e.metaKey || e.ctrlKey) {
-      editor.toggle_selection(hitId); refreshBoxModel(); redraw(); e.preventDefault(); return;
+      editor.toggle_selection(hitId); commit(); e.preventDefault(); return;
     }
     renderer.selectedTextIds.clear();
     if (!editor.is_selected(hitId) || editor.get_selection_count() > 1 || editor.get_selected_segment() !== NULL_ID) {
-      editor.select_face(hitId); refreshBoxModel(); redraw();
+      editor.select_face(hitId); commit();
     }
     const t = getFrameTransform(editor, hitId);
     if (t) {
@@ -349,7 +364,7 @@ function idleHandleLeafHit(e: MouseEvent, ctx: InteractionContext, geo: IdleGeo)
   } else {
     editor.select_face(NULL_ID);
     renderer.selectedTextIds.clear();
-    refreshBoxModel(); redraw();
+    commit();
     setMode(marqueeMode, { startX: relX, startY: relY, shiftKey: false } as MarqueeState);
     ctx.canvasEl.style.cursor = 'crosshair';
     e.preventDefault();
@@ -366,16 +381,16 @@ export const idleMode: InteractionMode = {
     const geo = ctx.toSpread(e);
     const { sr, relX, relY } = geo;
 
-    if (_hoveredEdge !== null)                  { idleHandleEdgeHit(e, ctx, geo); return; }
-
     // Transform box handles take precedence over X-junction pinwheel handles.
     if (renderer.hoveredTwinHandle !== null) {
       const th = renderer.hoveredTwinHandle;
-      editor.select_segment(th.edge_id);
-      renderer.twinSegmentSelected = true;
-      _selectedTwinChainId = renderer.hoveredDivider;
-      _selectedTwinEdgeId = th.edge_id;
-      refreshBoxModel();
+      if (editor.get_selection_count() === 0) {
+        editor.select_segment(th.edge_id);
+        renderer.twinSegmentSelected = true;
+        _selectedTwinChainId = renderer.hoveredDivider;
+        _selectedTwinEdgeId = th.edge_id;
+        refreshBoxModel();
+      }
       snapshot();
       editor.begin_divider_drag(th.edge_id, false, sr.w, sr.h);
       setMode(dividerDragMode, { nodeId: th.edge_id } as DividerDragState);
@@ -439,31 +454,19 @@ export const idleMode: InteractionMode = {
        newXJunction.tl_id !== renderer.hoveredXJunction.tl_id);
     renderer.hoveredXJunction = newXJunction;
 
-    // Detect hover within EDGE_THRESHOLD px outside the outer visible edge (bleed boundary).
-    const EDGE_THRESHOLD = 20;
-    const bp = renderer.visibleBleedPx;
-    const rawX = cx - sr.x;
-    const rawY = cy - sr.y;
-    let edgeHit: 'top' | 'bottom' | 'left' | 'right' | null = null;
-    if (rawX >= -bp && rawX <= sr.w + bp && rawY >= -bp - EDGE_THRESHOLD && rawY < -bp) edgeHit = 'top';
-    else if (rawX >= -bp && rawX <= sr.w + bp && rawY > sr.h + bp && rawY <= sr.h + bp + EDGE_THRESHOLD) edgeHit = 'bottom';
-    else if (rawY >= -bp && rawY <= sr.h + bp && rawX >= -bp - EDGE_THRESHOLD && rawX < -bp) edgeHit = 'left';
-    else if (rawY >= -bp && rawY <= sr.h + bp && rawX > sr.w + bp && rawX <= sr.w + bp + EDGE_THRESHOLD) edgeHit = 'right';
-    const edgeChanged = edgeHit !== _hoveredEdge;
-    _hoveredEdge = edgeHit;
-    renderer.hoveredEdge = edgeHit;
-
     if (renderer.hoveredTwinHandle !== null) {
       canvasEl.style.cursor = 'pointer';
     } else if (renderer.hoveredXJunction !== null) {
       canvasEl.style.cursor = 'crosshair';
     } else if (renderer.hoveredDivider !== null) {
-      const divs = getDividers(editor, sr.w, sr.h);
-      const div = divs.find(d => d.segment_id === renderer.hoveredDivider);
-      canvasEl.style.cursor = div ? (div.axis === 'v' ? 'col-resize' : 'row-resize') : 'default';
-    } else if (edgeHit) {
-      const EDGE_CURSORS = { top: 's-resize', bottom: 'n-resize', left: 'e-resize', right: 'w-resize' };
-      canvasEl.style.cursor = EDGE_CURSORS[edgeHit];
+      // Cursor choice only needs axis/boundary of the hovered divider — the
+      // renderer's last-draw cache is always fresh enough for that.
+      const div = renderer.cachedDividers().find(d => d.segment_id === renderer.hoveredDivider);
+      if (div?.is_boundary) {
+        canvasEl.style.cursor = 'pointer';
+      } else {
+        canvasEl.style.cursor = div ? (div.axis === 'v' ? 'col-resize' : 'row-resize') : 'default';
+      }
     } else {
       const textHit = renderer.hitTestText(cx, cy);
       if (!textHit) {
@@ -477,7 +480,7 @@ export const idleMode: InteractionMode = {
         canvasEl.style.cursor = 'text';
       }
     }
-    if (changed || edgeChanged || twinChanged || xjChanged) redraw();
+    if (changed || twinChanged || xjChanged) redraw();
   },
 
   onMouseUp(_e, _ctx) {},
@@ -485,10 +488,8 @@ export const idleMode: InteractionMode = {
   onMouseLeave(_e, ctx) {
     const { renderer, redraw, canvasEl } = ctx;
     renderer.hoveredDivider = null;
-    renderer.hoveredEdge = null;
     renderer.hoveredTwinHandle = null;
     renderer.hoveredXJunction = null;
-    _hoveredEdge = null;
     canvasEl.style.cursor = 'default';
     redraw();
   },
@@ -502,19 +503,19 @@ export const dividerDragMode: InteractionMode = {
   onMouseDown(_e, _ctx) {},
 
   onMouseMove(e, ctx) {
-    const { editor, toSpread, refreshBoxModel, redraw } = ctx;
+    const { editor, toSpread, redraw } = ctx;
     const { sr, relX, relY } = toSpread(e);
     editor.set_snap_disabled(e.altKey);
-    editor.update_divider_drag(relX, relY, sr.w, sr.h);
-    refreshBoxModel();
+    editor.update_divider_drag(relX, relY, sr.w, sr.h, e.shiftKey);
+    scheduleBoxModelRefresh(ctx);
     redraw();
   },
 
-  onMouseUp(_e, ctx) {
+  onMouseUp(e, ctx) {
     const { editor, spreadRect, refreshBoxModel, redraw, setMode, canvasEl } = ctx;
     const sr = spreadRect();
     editor.set_snap_disabled(false);
-    editor.end_divider_drag(sr.w, sr.h);
+    editor.end_divider_drag(sr.w, sr.h, e.shiftKey);
     refreshBoxModel();
     canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
@@ -565,80 +566,6 @@ export const imageSwapMode: InteractionMode = {
   onMouseLeave(_e, ctx) {
     const { overlays, canvasEl, redraw, setMode } = ctx;
     overlays.swapOverlay = null;
-    canvasEl.style.cursor = 'default';
-    setMode(idleMode, {});
-    redraw();
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Edge drag mode — drag inward from a spread edge to insert a new split at root
-// ---------------------------------------------------------------------------
-
-export const edgeLiveDragMode: InteractionMode = {
-  onMouseDown(_e, _ctx) {},
-
-  onMouseMove(e, ctx) {
-    const { editor, overlays, toSpread, redraw, canvasEl, modeState } = ctx;
-    const state = modeState as EdgeLiveDragState;
-    const { relX, relY, sr } = toSpread(e);
-    const MIN_SPAWN_PX = 8;
-    const newIsFirst = state.edge === 'top' || state.edge === 'left';
-
-    const distFromEdge =
-      state.edge === 'top'    ? relY :
-      state.edge === 'bottom' ? sr.h - relY :
-      state.edge === 'left'   ? relX :
-                                sr.w - relX;
-
-    if (!state.spawned) {
-      if (distFromEdge >= MIN_SPAWN_PX) {
-        const segmentId = editor.begin_edge_panel_drag(state.axis, state.newIsFirst, relX, relY, sr.w, sr.h);
-        if (segmentId !== NULL_ID) {
-          state.spawned = true;
-          state.segmentId = segmentId;
-          overlays.edgeDragPreview = null;
-        }
-      } else {
-        // Ghost preview before threshold — show where the panel edge will appear.
-        const ratio = state.axis === 'h'
-          ? Math.max(0.01, Math.min(0.99, relY / sr.h))
-          : Math.max(0.01, Math.min(0.99, relX / sr.w));
-        overlays.edgeDragPreview = { axis: state.axis, ratio, newIsFirst };
-        canvasEl.style.cursor = state.axis === 'h' ? 'row-resize' : 'col-resize';
-        redraw();
-        return;
-      }
-    }
-
-    editor.set_snap_disabled(e.altKey);
-    editor.update_edge_panel_drag(relX, relY, sr.w, sr.h);
-    canvasEl.style.cursor = state.axis === 'h' ? 'row-resize' : 'col-resize';
-    redraw();
-  },
-
-  onMouseUp(_e, ctx) {
-    const { editor, overlays, refreshBoxModel, redraw, setMode, canvasEl } = ctx;
-    const state = ctx.modeState as EdgeLiveDragState;
-    editor.set_snap_disabled(false);
-    if (state.spawned) {
-      editor.end_edge_panel_drag();
-      refreshBoxModel();
-    }
-    overlays.edgeDragPreview = null;
-    canvasEl.style.cursor = 'default';
-    setMode(idleMode, {});
-    redraw();
-  },
-
-  onMouseLeave(_e, ctx) {
-    const { editor, overlays, redraw, setMode, canvasEl } = ctx;
-    const state = ctx.modeState as EdgeLiveDragState;
-    editor.set_snap_disabled(false);
-    if (state.spawned) {
-      editor.end_edge_panel_drag();
-    }
-    overlays.edgeDragPreview = null;
     canvasEl.style.cursor = 'default';
     setMode(idleMode, {});
     redraw();
@@ -1052,7 +979,7 @@ interface CutToolState { numCuts: number; nodeId: number; axis: 'v' | 'h' | 'qua
 export const cutToolMode: InteractionMode = {
   onMouseDown(e, ctx) {
     if (e.button !== 0) return;
-    const { editor, overlays, snapshot, refreshBoxModel, redraw } = ctx;
+    const { editor, overlays, snapshot, commit } = ctx;
     const state = ctx.modeState as CutToolState;
     if (state.nodeId === NULL_ID || state.axis === null) return;
 
@@ -1065,9 +992,8 @@ export const cutToolMode: InteractionMode = {
       editor.split_face_at(state.nodeId, state.axis, state.ratio);
     }
     overlays.splitPreview = null;
-    refreshBoxModel();
     ctx.setMode(idleMode, {});
-    redraw();
+    commit();
   },
 
   onMouseMove(e, ctx) {
@@ -1159,6 +1085,18 @@ export const cutToolMode: InteractionMode = {
     }
     ctx.redraw();
   },
+
+  onKeyDown(e, ctx) {
+    const digit = e.key >= '1' && e.key <= '9' ? parseInt(e.key, 10) : null;
+    if (digit === null) return;
+    e.preventDefault();
+    const state = ctx.modeState as CutToolState;
+    state.numCuts = Math.min(digit, 12);
+    if (ctx.overlays.splitPreview) {
+      ctx.overlays.splitPreview = { ...ctx.overlays.splitPreview, numCuts: state.numCuts };
+    }
+    ctx.redraw();
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1174,7 +1112,7 @@ export const pinwheelSpawnMode: InteractionMode = {
   onMouseDown(_e, _ctx) {},
 
   onMouseMove(e, ctx) {
-    const { editor, renderer, refreshBoxModel, redraw, modeState, canvasEl } = ctx;
+    const { editor, renderer, redraw, modeState, canvasEl } = ctx;
     const state  = modeState as PinwheelSpawnState;
     const sr     = state.spreadRect;
     const rect   = canvasEl.getBoundingClientRect();
@@ -1182,24 +1120,26 @@ export const pinwheelSpawnMode: InteractionMode = {
     const cy     = e.clientY - rect.top;
     const { nx, ny } = renderer.canvasToNorm(cx, cy, sr);
     editor.update_pinwheel_spawn(nx, ny);
-    refreshBoxModel();
+    scheduleBoxModelRefresh(ctx);
     redraw();
   },
 
   onMouseUp(_e, ctx) {
-    const { editor, refreshBoxModel, redraw, setMode } = ctx;
+    const { editor, renderer, commit, setMode } = ctx;
     editor.end_pinwheel_spawn();
-    refreshBoxModel();
+    renderer.hoveredXJunction = null;
+    renderer.hoveredDivider = null;
     setMode(idleMode, {});
-    redraw();
+    commit();
   },
 
   onMouseLeave(_e, ctx) {
-    const { editor, refreshBoxModel, redraw, setMode } = ctx;
+    const { editor, renderer, commit, setMode } = ctx;
     editor.cancel_pinwheel_spawn();
-    refreshBoxModel();
+    renderer.hoveredXJunction = null;
+    renderer.hoveredDivider = null;
     setMode(idleMode, {});
-    redraw();
+    commit();
   },
 };
 

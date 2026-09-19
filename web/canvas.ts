@@ -10,9 +10,10 @@ import {
 } from './wasm-bridge.js';
 import { drawRulers } from './canvas-draw-rulers.js';
 import type { PhotobookEditor } from './pkg/photobook_core.js';
+import { isSinglePageKind } from './types.js';
 import type {
   SpreadInfo, SpreadRect, RenderFrame,
-  DpiBadge, Overlays, ObjectFit, TextElement, EdgeDragPreview, TwinHandle,
+  DpiBadge, Overlays, ObjectFit, TextElement, TwinHandle,
   Divider, SpreadDelta, XJunction, ImageDropPreview,
 } from './types.js';
 
@@ -97,7 +98,6 @@ export class CanvasRenderer {
   dpr: number;
   imageCache = new LruCache<HTMLImageElement | ImageBitmap>(CANVAS_IMAGE_BUDGET_BYTES, rasterBytes);
   hoveredDivider: number | null = null;
-  hoveredEdge: 'top' | 'bottom' | 'left' | 'right' | null = null;
   hoveredTwinHandle: TwinHandle | null = null;
   /** True when the current segment selection was made by clicking a twin handle (not the full-chain divider). */
   twinSegmentSelected = false;
@@ -205,7 +205,7 @@ export class CanvasRenderer {
     };
   }
 
-  draw(editor: PhotobookEditor, overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, edgeDragPreview: null, imageDropPreview: null }): void {
+  draw(editor: PhotobookEditor, overlays: Overlays = { marqueeRect: null, splitPreview: null, swapOverlay: null, imageDropPreview: null }): void {
     const { marqueeRect = null } = overlays;
     const { ctx, dpr, cssW, cssH } = this;
     if (!cssW || !cssH) return;
@@ -251,23 +251,30 @@ export class CanvasRenderer {
     const lowDpiMap = new Map<number, number>(lowDpiFrames.map(f => [f.id, f.effective_dpi]));
     const printDpi = editor.get_print_dpi();
     const selectedSegmentId = editor.get_selected_segment();
+    const multiSegmentSelected = editor.get_selected_segment_count() > 1;
 
     this._drawSpreadBackground(ctx, spreadRect, spreadInfo, metrics);
-    this._drawFrames(ctx, layoutRect, drawList, lowDpiMap, printDpi, metrics);
+    this._drawFrames(ctx, layoutRect, drawList, lowDpiMap, printDpi, metrics, endpaperSide);
 
     if (!this.previewMode) {
       // Grey overlay on the non-printable page.
       if (endpaperSide) {
         const npX = endpaperSide === 'left' ? spreadRect.x : spreadRect.x + spreadRect.w / 2;
+        const npW = spreadRect.w / 2;
+        const npCx = npX + npW / 2;
+        const npCy = spreadRect.y + spreadRect.h / 2;
         ctx.save();
-        ctx.fillStyle = 'rgba(80, 80, 80, 0.35)';
-        ctx.fillRect(npX, spreadRect.y, spreadRect.w / 2, spreadRect.h);
-        ctx.fillStyle = 'rgba(200, 200, 200, 0.65)';
-        const fontSize = Math.max(10, spreadRect.h * 0.035);
-        ctx.font = `${fontSize}px sans-serif`;
+        ctx.fillStyle = 'rgba(40, 40, 40, 0.45)';
+        ctx.fillRect(npX, spreadRect.y, npW, spreadRect.h);
+        const fontSize = Math.max(11, spreadRect.h * 0.038);
+        ctx.font = `600 ${fontSize}px sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('Not printed', npX + spreadRect.w / 4, spreadRect.y + spreadRect.h / 2);
+        // Shadow for contrast against both light and dark backgrounds.
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+        ctx.shadowBlur = 4;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+        ctx.fillText('Not printed', npCx, npCy);
         ctx.restore();
       }
 
@@ -343,26 +350,38 @@ export class CanvasRenderer {
       spreadRect.x - visibleBleedPx, spreadRect.y - visibleBleedPx,
       spreadRect.w + visibleBleedPx * 2, spreadRect.h + visibleBleedPx * 2,
     );
-    if (spreadInfo.left_bg) {
-      ctx.fillStyle = spreadInfo.left_bg;
-      ctx.fillRect(
-        spreadRect.x - visibleBleedPx,
-        spreadRect.y - visibleBleedPx,
-        pageWPx + visibleBleedPx,
-        spreadRect.h + visibleBleedPx * 2,
-      );
-    }
-    if (spreadInfo.right_bg) {
-      ctx.fillStyle = spreadInfo.right_bg;
-      const rightX = spreadInfo.kind === 'cover'
-        ? spreadRect.x + pageWPx + spinePx
-        : spreadRect.x + pageWPx;
-      ctx.fillRect(
-        rightX,
-        spreadRect.y - visibleBleedPx,
-        pageWPx + visibleBleedPx,
-        spreadRect.h + visibleBleedPx * 2,
-      );
+    if (isSinglePageKind(spreadInfo.kind)) {
+      // Standalone cover page — one background across the whole page.
+      const bg = spreadInfo.left_bg || spreadInfo.right_bg;
+      if (bg) {
+        ctx.fillStyle = bg;
+        ctx.fillRect(
+          spreadRect.x - visibleBleedPx, spreadRect.y - visibleBleedPx,
+          spreadRect.w + visibleBleedPx * 2, spreadRect.h + visibleBleedPx * 2,
+        );
+      }
+    } else {
+      if (spreadInfo.left_bg) {
+        ctx.fillStyle = spreadInfo.left_bg;
+        ctx.fillRect(
+          spreadRect.x - visibleBleedPx,
+          spreadRect.y - visibleBleedPx,
+          pageWPx + visibleBleedPx,
+          spreadRect.h + visibleBleedPx * 2,
+        );
+      }
+      if (spreadInfo.right_bg) {
+        ctx.fillStyle = spreadInfo.right_bg;
+        const rightX = spreadInfo.kind === 'cover'
+          ? spreadRect.x + pageWPx + spinePx
+          : spreadRect.x + pageWPx;
+        ctx.fillRect(
+          rightX,
+          spreadRect.y - visibleBleedPx,
+          pageWPx + visibleBleedPx,
+          spreadRect.h + visibleBleedPx * 2,
+        );
+      }
     }
     if (this.showBleed) {
       ctx.strokeStyle = BLEED_COLOR;
@@ -383,16 +402,20 @@ export class CanvasRenderer {
     lowDpiMap: Map<number, number>,
     printDpi: number,
     metrics: DrawMetrics,
+    endpaperSide: 'left' | 'right' | null = null,
   ): void {
     const { bleedPx, visibleBleedPx } = metrics;
+    // Endpaper pages have no bleed at the fold (gutter) side.
+    const leftVBp  = endpaperSide === 'left'  ? 0 : visibleBleedPx;
+    const rightVBp = endpaperSide === 'right' ? 0 : visibleBleedPx;
     // Images and borders share the same clip so neither bleeds outside the
     // visible area. When showBleed is false, visibleBleedPx=0 clips to the
     // trim boundary; when true, it clips to the full bleed extent.
     this._dpiBadges = [];
     ctx.save();
     ctx.beginPath();
-    ctx.rect(spreadRect.x - visibleBleedPx, spreadRect.y - visibleBleedPx,
-             spreadRect.w + visibleBleedPx * 2, spreadRect.h + visibleBleedPx * 2);
+    ctx.rect(spreadRect.x - leftVBp, spreadRect.y - visibleBleedPx,
+             spreadRect.w + leftVBp + rightVBp, spreadRect.h + visibleBleedPx * 2);
     ctx.clip();
     for (const frame of renderList) {
       const rx = spreadRect.x + frame.rect.x;
@@ -401,11 +424,13 @@ export class CanvasRenderer {
     }
     ctx.restore();
     if (this.showBleed && bleedPx > 0) {
+      const leftBp  = endpaperSide === 'left'  ? 0 : bleedPx;
+      const rightBp = endpaperSide === 'right' ? 0 : bleedPx;
       ctx.save();
       ctx.fillStyle = this._getHatchPattern(ctx);
       ctx.beginPath();
-      ctx.rect(spreadRect.x - bleedPx, spreadRect.y - bleedPx,
-               spreadRect.w + bleedPx * 2, spreadRect.h + bleedPx * 2);
+      ctx.rect(spreadRect.x - leftBp, spreadRect.y - bleedPx,
+               spreadRect.w + leftBp + rightBp, spreadRect.h + bleedPx * 2);
       ctx.rect(spreadRect.x, spreadRect.y, spreadRect.w, spreadRect.h);
       ctx.fill('evenodd');
       ctx.restore();
@@ -441,7 +466,7 @@ export class CanvasRenderer {
     overlays: Overlays,
     renderList: RenderFrame[],
   ): void {
-    const { splitPreview, edgeDragPreview, swapOverlay, imageDropPreview } = overlays;
+    const { splitPreview, swapOverlay, imageDropPreview } = overlays;
     if (splitPreview) {
       const { frameRect, axis, ratio, numCuts } = splitPreview;
       const fx = spreadRect.x + frameRect.x;
@@ -478,11 +503,6 @@ export class CanvasRenderer {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
-    }
-    if (edgeDragPreview) {
-      this._drawEdgeDragPreview(ctx, spreadRect, edgeDragPreview);
-    } else if (this.hoveredEdge) {
-      this._drawEdgeHoverHint(ctx, spreadRect, this.hoveredEdge);
     }
     if (swapOverlay) {
       const { sourceId, targetId } = swapOverlay;
@@ -592,7 +612,7 @@ export class CanvasRenderer {
     const dividers = this._geoCache.dividers;
     for (const div of dividers) {
       // Suppress the full-chain highlight when a specific twin segment is selected.
-      const isSelected = selectedTwin === null && selectedSegmentId !== NULL_ID && div.segment_id === selectedSegmentId;
+      const isSelected = selectedTwin === null && editor.is_segment_selected(div.segment_id);
       const isHovered = this.hoveredDivider === div.segment_id;
       if (!isSelected && !isHovered) continue;
       ctx.strokeStyle = isSelected ? SELECTED_COLOR : DIVIDER_HOVER_COLOR;
@@ -635,15 +655,6 @@ export class CanvasRenderer {
       const rr = frame.face_rect;
       const rrx = spreadRect.x + rr.x;
       const rry = spreadRect.y + rr.y;
-      const nodeRad = (frame.face_rotation_deg * Math.PI) / 180;
-      ctx.save();
-      if (nodeRad !== 0) {
-        const rcx = rrx + rr.w / 2;
-        const rcy = rry + rr.h / 2;
-        ctx.translate(rcx, rcy);
-        ctx.rotate(-nodeRad);
-        ctx.translate(-rcx, -rcy);
-      }
       ctx.strokeStyle = SELECTED_COLOR;
       const lw = 2;
       ctx.lineWidth = lw;
@@ -651,7 +662,6 @@ export class CanvasRenderer {
       // Inset by half the stroke width so the border stays fully inside the face
       // boundary — prevents double-width lines where two selected faces share an edge.
       ctx.strokeRect(rrx + lw / 2, rry + lw / 2, rr.w - lw, rr.h - lw);
-      ctx.restore();
     }
 
     // Twin handles — only visible while hovering the divider (or the handle itself).
@@ -935,6 +945,12 @@ export class CanvasRenderer {
     const bottom = spreadRect.y + pageHPx;
     const TICK   = 6;
 
+    // Standalone cover pages have no spine or fold — nothing to draw.
+    if (isSinglePageKind(spreadInfo.kind)) {
+      void mmToPx;
+      return;
+    }
+
     if (spreadInfo.kind === 'cover') {
       const spineLeft  = spreadRect.x + pageWPx;
       const spineRight = spineLeft + spinePx;
@@ -1010,6 +1026,13 @@ export class CanvasRenderer {
     }
 
     void mmToPx; // used indirectly via pageWPx / spinePx
+  }
+
+  /** Dividers resolved by the last draw — for hover/cursor decisions, which
+   *  never need fresher geometry than what is on screen. Avoids re-resolving
+   *  the layout across the WASM boundary on every mousemove. */
+  cachedDividers(): Divider[] {
+    return this._geoCache.dividers;
   }
 
   updateHover(
@@ -1225,39 +1248,6 @@ export class CanvasRenderer {
     return { x: cssX - spreadRect.x, y: cssY - spreadRect.y };
   }
 
-  private _drawEdgeDragPreview(
-    ctx: CanvasRenderingContext2D,
-    sr: SpreadRect,
-    preview: EdgeDragPreview,
-  ): void {
-    const { axis, ratio, newIsFirst } = preview;
-    ctx.save();
-    ctx.fillStyle = 'rgba(74, 144, 226, 0.15)';
-    if (axis === 'h') {
-      const divY = sr.y + ratio * sr.h;
-      ctx.fillRect(sr.x, newIsFirst ? sr.y : divY, sr.w, newIsFirst ? ratio * sr.h : (1 - ratio) * sr.h);
-      ctx.strokeStyle = SELECTED_COLOR;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(sr.x, divY);
-      ctx.lineTo(sr.x + sr.w, divY);
-      ctx.stroke();
-    } else {
-      const divX = sr.x + ratio * sr.w;
-      ctx.fillRect(newIsFirst ? sr.x : divX, sr.y, newIsFirst ? ratio * sr.w : (1 - ratio) * sr.w, sr.h);
-      ctx.strokeStyle = SELECTED_COLOR;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(divX, sr.y);
-      ctx.lineTo(divX, sr.y + sr.h);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
-    ctx.restore();
-  }
-
   private _drawTwinHandle(
     ctx: CanvasRenderingContext2D,
     cx: number, cy: number,
@@ -1335,21 +1325,4 @@ export class CanvasRenderer {
     };
   }
 
-  private _drawEdgeHoverHint(
-    ctx: CanvasRenderingContext2D,
-    sr: SpreadRect,
-    edge: 'top' | 'bottom' | 'left' | 'right',
-  ): void {
-    const STRIP = 3;
-    const bp = this.visibleBleedPx;
-    ctx.save();
-    ctx.fillStyle = 'rgba(74, 144, 226, 0.5)';
-    switch (edge) {
-      case 'top':    ctx.fillRect(sr.x - bp, sr.y - bp, sr.w + 2 * bp, STRIP); break;
-      case 'bottom': ctx.fillRect(sr.x - bp, sr.y + sr.h + bp - STRIP, sr.w + 2 * bp, STRIP); break;
-      case 'left':   ctx.fillRect(sr.x - bp, sr.y - bp, STRIP, sr.h + 2 * bp); break;
-      case 'right':  ctx.fillRect(sr.x + sr.w + bp - STRIP, sr.y - bp, STRIP, sr.h + 2 * bp); break;
-    }
-    ctx.restore();
-  }
 }

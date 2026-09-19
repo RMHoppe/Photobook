@@ -72,10 +72,18 @@ impl XmpMetadata {
             producer = m.producer
         );
 
-        Stream(LoStream::new(
-            LoDictionary::from_iter(vec![("Type", "Metadata".into()), ("Subtype", "XML".into())]),
-            xmp_metadata.as_bytes().to_vec(),
-        ))
+        // The XMP packet must stay uncompressed so metadata scanners (and
+        // PDF/X preflight) can locate it without inflating streams.
+        Stream(
+            LoStream::new(
+                LoDictionary::from_iter(vec![
+                    ("Type", "Metadata".into()),
+                    ("Subtype", "XML".into()),
+                ]),
+                xmp_metadata.as_bytes().to_vec(),
+            )
+            .with_compression(false),
+        )
     }
 }
 

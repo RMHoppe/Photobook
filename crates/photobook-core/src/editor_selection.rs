@@ -109,6 +109,13 @@ impl PhotobookEditor {
         any
     }
 
+    /// True when the first selected segment is a boundary edge.
+    pub fn is_selected_segment_boundary(&self) -> bool {
+        self.selected_segments.first()
+            .map(|&eid| self.doc.current_spread().layout.is_boundary_edge(eid))
+            .unwrap_or(false)
+    }
+
     pub fn is_selected(&self, id: u32) -> bool {
         self.selection.contains(&id)
     }
@@ -155,18 +162,12 @@ impl PhotobookEditor {
         for id in self.collect_faces_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
             self.selection.push(id);
         }
-        for id in self.collect_edges_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
-            self.selected_segments.push(id);
-        }
         self.mark_structure_dirty();
     }
 
     pub fn toggle_all_in_rect(&mut self, rx: f32, ry: f32, rw: f32, rh: f32, canvas_w: f32, canvas_h: f32) {
         for id in self.collect_faces_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
             self.toggle_selection(id);
-        }
-        for id in self.collect_edges_in_rect(rx, ry, rw, rh, canvas_w, canvas_h) {
-            self.toggle_segment(id);
         }
         self.mark_structure_dirty();
     }

@@ -17,46 +17,44 @@ fn axis_drag_coord(axis: SplitAxis, mouse_x: f32, mouse_y: f32, root: Rect) -> (
     }
 }
 
-/// Snap and clamp a drag position. Nearest candidate within `snap_r` wins.
-/// Candidates: spread centre (0.5), drag-range midpoint, other dividers.
-/// `layout.snap` returns `raw` unchanged when nothing is nearby, so we only
-/// treat it as a candidate when it actually moved.
-/// Returns `None` if the drag range is invalid (lo ≥ hi after padding).
-fn apply_drag_snap(
+/// Snap `raw` to the nearest candidate within `snap_r`, then clamp to `(lo, hi)`.
+/// Candidates: initial offset (snap-back), spread centre (0.5), range midpoint,
+/// other dividers (excluding `chain`).
+fn snap_and_clamp(
     layout: &GridLayout, axis: SplitAxis, raw: f32, chain: &[EdgeId], snap_r: f32,
-) -> Option<f32> {
-    let (lo, hi) = layout.chain_drag_bounds(chain)?;
+    lo: f32, hi: f32, initial_offset: f32,
+) -> f32 {
     let edge_snap = layout.snap(axis, raw, chain, snap_r);
-
     let mut snapped = raw;
     let mut best_dist = snap_r;
-    for &t in &[0.5_f32, (lo + hi) / 2.0] {
+    for &t in &[initial_offset, 0.5_f32, (lo + hi) / 2.0] {
         let d = (t - raw).abs();
         if d < best_dist { best_dist = d; snapped = t; }
     }
-    // Only consider edge_snap when it actually found a nearby divider.
     if edge_snap != raw {
         let d = (edge_snap - raw).abs();
         if d < best_dist { snapped = edge_snap; }
     }
+    snapped.clamp(lo + 1e-4, hi - 1e-4)
+}
 
+/// Snap and clamp a drag position. Nearest candidate within `snap_r` wins.
+/// Candidates: initial offset (snap-back), spread centre (0.5), drag-range
+/// midpoint, other dividers.
+/// Returns `None` if the drag range is invalid (lo ≥ hi after padding).
+///
+/// `total_w_mm` / `total_h_mm`: full spread width/height in mm including bleed
+/// (the mm extent corresponding to the [0, 1] normalized offset space), used
+/// by `chain_drag_bounds` to account for half-gap margins in the valid range.
+fn apply_drag_snap(
+    layout: &GridLayout, axis: SplitAxis, raw: f32, chain: &[EdgeId], snap_r: f32,
+    total_w_mm: f32, total_h_mm: f32, initial_offset: f32,
+) -> Option<f32> {
+    let (lo, hi) = layout.chain_drag_bounds(chain, total_w_mm, total_h_mm)?;
     let clo = lo + 1e-4;
     let chi = hi - 1e-4;
-    if clo <= chi { Some(snapped.clamp(clo, chi)) } else { None }
-}
-
-// ---------------------------------------------------------------------------
-// Edge panel drag state
-// ---------------------------------------------------------------------------
-
-pub(crate) struct DragEdgePanel {
-    pub axis: SplitAxis,
-    pub new_is_first: bool,
-    pub saved_layout: Box<GridLayout>,
-}
-
-fn snap_to_center(raw: f32, snap_r: f32) -> f32 {
-    if (0.5 - raw).abs() < snap_r { 0.5 } else { raw }
+    if clo > chi { return None; }
+    Some(snap_and_clamp(layout, axis, raw, chain, snap_r, lo, hi, initial_offset))
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +82,9 @@ impl PhotobookEditor {
         let spread = self.doc.current_spread();
         let mm_to_px = self.mm_to_px(canvas_w);
         let rect = self.root_rect_with_bleed(canvas_w, canvas_h);
+        let visible_bleed_px = if self.bleed_visible { self.doc.bleed_mm * mm_to_px } else { 0.0 };
         let divs = GridResolver::new(&spread.layout, &[], mm_to_px)
+            .with_visible_bleed(visible_bleed_px)
             .resolve_dividers(rect);
         serde_json::to_string(&divs).unwrap_or_default()
     }
@@ -161,7 +161,9 @@ impl PhotobookEditor {
         let rect = self.root_rect_with_bleed(canvas_w, canvas_h);
 
         if self.structure_dirty || canvas_changed {
+            let visible_bleed_px = if self.bleed_visible { self.doc.bleed_mm * mm_to_px } else { 0.0 };
             let resolved = GridResolver::new(&spread.layout, &self.selection, mm_to_px)
+                .with_visible_bleed(visible_bleed_px)
                 .resolve_all(rect);
             self.structure_dirty = false;
             self.leaf_dirty.clear();
@@ -191,86 +193,21 @@ impl PhotobookEditor {
         serde_json::to_string(&frames).unwrap_or_else(|_| "[]".into())
     }
 
+    /// Drain the dirty-thumbnail set, returning the affected spread *indices*
+    /// (ids are mapped to current positions at drain time).
     pub fn get_dirty_spread_indices(&mut self) -> String {
-        self.ensure_spread_dirty_len();
-        let dirty: Vec<usize> = self.spread_dirty.iter().enumerate()
-            .filter_map(|(i, &d)| if d { Some(i) } else { None })
-            .collect();
-        for i in &dirty {
-            self.spread_dirty[*i] = false;
-        }
+        let drained = std::mem::replace(
+            &mut self.dirty_thumbs,
+            crate::ThumbsDirty::Ids(std::collections::HashSet::new()),
+        );
+        let dirty: Vec<usize> = match drained {
+            crate::ThumbsDirty::All => (0..self.doc.spreads.len()).collect(),
+            crate::ThumbsDirty::Ids(ids) => self.doc.spreads.iter().enumerate()
+                .filter(|(_, s)| ids.contains(&s.id))
+                .map(|(i, _)| i)
+                .collect(),
+        };
         serde_json::to_string(&dirty).unwrap_or_else(|_| "[]".into())
-    }
-
-    // -----------------------------------------------------------------------
-    // Edge panel drag
-    // -----------------------------------------------------------------------
-
-    pub fn begin_edge_panel_drag(
-        &mut self,
-        axis: &str,
-        new_is_first: bool,
-        mouse_x: f32,
-        mouse_y: f32,
-        canvas_w: f32,
-        canvas_h: f32,
-    ) -> u32 {
-        let root_rect = self.root_rect_with_bleed(canvas_w, canvas_h);
-        let axis_enum = if axis == "h" { SplitAxis::Horizontal } else { SplitAxis::Vertical };
-        let (raw, snap_r) = axis_drag_coord(axis_enum, mouse_x, mouse_y, root_rect);
-        let effective_snap_r = if self.snap_disabled { 0.0 } else { snap_r };
-        let pos = snap_to_center(raw, effective_snap_r).clamp(0.02, 0.98);
-
-        let saved_layout = Box::new(self.doc.current_spread().layout.clone());
-        let layout = &mut self.doc.current_spread_mut().layout;
-        layout.rescale_interior_edges(axis_enum, pos, new_is_first);
-        let chain = layout.split_all(pos, axis_enum, new_is_first);
-        if chain.is_empty() {
-            *layout = *saved_layout;
-            return OUTER_FACE;
-        }
-        let rep_id = chain[0];
-
-        self.edge_panel_drag = Some(DragEdgePanel { axis: axis_enum, new_is_first, saved_layout });
-        self.mark_structure_dirty();
-        rep_id
-    }
-
-    pub fn update_edge_panel_drag(
-        &mut self,
-        mouse_x: f32,
-        mouse_y: f32,
-        canvas_w: f32,
-        canvas_h: f32,
-    ) {
-        let Some(drag) = &self.edge_panel_drag else { return };
-        let (axis, new_is_first) = (drag.axis, drag.new_is_first);
-        let saved = drag.saved_layout.as_ref().clone();
-
-        let root_rect = self.root_rect_with_bleed(canvas_w, canvas_h);
-        let (raw, snap_r) = axis_drag_coord(axis, mouse_x, mouse_y, root_rect);
-        let effective_snap_r = if self.snap_disabled { 0.0 } else { snap_r };
-        let pos = snap_to_center(raw, effective_snap_r).clamp(0.02, 0.98);
-
-        let layout = &mut self.doc.current_spread_mut().layout;
-        *layout = saved;
-        layout.rescale_interior_edges(axis, pos, new_is_first);
-        layout.split_all(pos, axis, new_is_first);
-        self.mark_structure_dirty();
-    }
-
-    pub fn end_edge_panel_drag(&mut self) {
-        if let Some(drag) = self.edge_panel_drag.take() {
-            self.debug_snapshot = Some(drag.saved_layout);
-        }
-    }
-
-    pub fn cancel_edge_panel_drag(&mut self) {
-        if let Some(drag) = self.edge_panel_drag.take() {
-            let layout = &mut self.doc.current_spread_mut().layout;
-            *layout = *drag.saved_layout;
-            self.mark_structure_dirty();
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -283,11 +220,10 @@ impl PhotobookEditor {
     /// moved together. When false only the selected twin pair (two edges) is moved,
     /// which breaks the chain at its endpoints on the first mouse movement.
     pub fn begin_divider_drag(&mut self, edge_id: u32, full_chain: bool, canvas_w: f32, canvas_h: f32) {
-        let _ = (canvas_w, canvas_h);
         self.save_debug_snapshot();
         let layout = &self.doc.current_spread().layout;
         let Some(axis) = layout.edge_axis(edge_id) else { return };
-        let chain = if full_chain {
+        let mut chain = if full_chain {
             layout.chain_for_edge(edge_id)
         } else {
             match layout.twin(edge_id) {
@@ -295,15 +231,39 @@ impl PhotobookEditor {
                 None          => vec![edge_id],
             }
         };
-        self.drag = Some(DragState { edge_id, axis, chain });
+        // With multiple frames selected, restrict the chain to the contiguous
+        // sub-chain whose cross-sections touch the selection, terminated at the
+        // nearest X-junction beyond the selection boundary.
+        if self.selection.len() > 1 {
+            let sel: std::collections::HashSet<FaceId> =
+                self.selection.iter().copied().collect();
+            // Convert the stored mouse position to a normalised perpendicular
+            // coordinate so the slot under the pointer is identified correctly,
+            // independent of which chain-representative edge_id was passed.
+            let root_rect = self.root_rect_with_bleed(canvas_w, canvas_h);
+            let click_perp = match axis {
+                crate::layout::SplitAxis::Vertical =>
+                    if root_rect.h > 0.0 { (self.mouse_y - root_rect.y) / root_rect.h } else { 0.5 },
+                crate::layout::SplitAxis::Horizontal =>
+                    if root_rect.w > 0.0 { (self.mouse_x - root_rect.x) / root_rect.w } else { 0.5 },
+            };
+            chain = layout.chain_for_edge_in_selection(edge_id, &sel, click_perp);
+            if chain.is_empty() { return; }
+        }
+        let initial_offset = chain.first()
+            .and_then(|&eid| layout.edges.get(&eid))
+            .map(|e| e.offset)
+            .unwrap_or(0.5);
+        let prop = layout.build_prop_drag(&chain, &self.selection, axis);
+        self.drag = Some(DragState { edge_id, axis, chain, initial_offset, prop });
     }
 
-    pub fn update_divider_drag(&mut self, mouse_x: f32, mouse_y: f32, canvas_w: f32, canvas_h: f32) {
+    pub fn update_divider_drag(&mut self, mouse_x: f32, mouse_y: f32, canvas_w: f32, canvas_h: f32, shift: bool) {
         self.mouse_x = mouse_x;
         self.mouse_y = mouse_y;
 
-        let (_edge_id, axis, chain) = match &self.drag {
-            Some(d) => (d.edge_id, d.axis, d.chain.clone()),
+        let (_edge_id, axis, chain, initial_offset, prop) = match &self.drag {
+            Some(d) => (d.edge_id, d.axis, d.chain.clone(), d.initial_offset, d.prop.clone()),
             None => return,
         };
 
@@ -311,29 +271,62 @@ impl PhotobookEditor {
         let (raw_norm, snap_r) = axis_drag_coord(axis, mouse_x, mouse_y, root_rect);
         let effective_snap_r = if self.snap_disabled { 0.0 } else { snap_r };
 
-        let layout = &self.doc.current_spread().layout;
-        if let Some(pos) = apply_drag_snap(layout, axis, raw_norm, &chain, effective_snap_r) {
-            let layout = &mut self.doc.current_spread_mut().layout;
-            layout.move_chain(&chain, pos);
+        match (shift, prop.as_ref()) {
+            (true, Some(p)) => {
+                let pos = {
+                    let layout = &self.doc.current_spread().layout;
+                    snap_and_clamp(layout, axis, raw_norm, &chain, effective_snap_r, p.lo_bound, p.hi_bound, p.pivot)
+                };
+                let layout = &mut self.doc.current_spread_mut().layout;
+                layout.move_chain(&chain, pos);
+                p.apply(layout, pos);
+            }
+            _ => {
+                let mm_to_px = self.mm_to_px(canvas_w);
+                let total_w_mm = if mm_to_px > 0.0 { root_rect.w / mm_to_px } else { 1.0 };
+                let total_h_mm = if mm_to_px > 0.0 { root_rect.h / mm_to_px } else { 1.0 };
+                let layout = &self.doc.current_spread().layout;
+                if let Some(pos) = apply_drag_snap(layout, axis, raw_norm, &chain, effective_snap_r, total_w_mm, total_h_mm, initial_offset) {
+                    let layout = &mut self.doc.current_spread_mut().layout;
+                    layout.move_chain(&chain, pos);
+                }
+            }
         }
         self.mark_structure_dirty();
     }
 
-    pub fn end_divider_drag(&mut self, canvas_w: f32, canvas_h: f32) {
+    pub fn end_divider_drag(&mut self, canvas_w: f32, canvas_h: f32, shift: bool) {
         let mouse_x = self.mouse_x;
         let mouse_y = self.mouse_y;
 
         if let Some(ref drag) = self.drag {
-            let (_edge_id, axis, chain) = (drag.edge_id, drag.axis, drag.chain.clone());
+            let (_edge_id, axis, chain, initial_offset, prop) =
+                (drag.edge_id, drag.axis, drag.chain.clone(), drag.initial_offset, drag.prop.clone());
 
             let root_rect = self.root_rect_with_bleed(canvas_w, canvas_h);
             let (raw_norm, snap_r) = axis_drag_coord(axis, mouse_x, mouse_y, root_rect);
             let effective_snap_r = if self.snap_disabled { 0.0 } else { snap_r };
 
-            let layout = &self.doc.current_spread().layout;
-            if let Some(pos) = apply_drag_snap(layout, axis, raw_norm, &chain, effective_snap_r) {
-                let layout = &mut self.doc.current_spread_mut().layout;
-                layout.move_chain(&chain, pos);
+            match (shift, prop.as_ref()) {
+                (true, Some(p)) => {
+                    let pos = {
+                        let layout = &self.doc.current_spread().layout;
+                        snap_and_clamp(layout, axis, raw_norm, &chain, effective_snap_r, p.lo_bound, p.hi_bound, p.pivot)
+                    };
+                    let layout = &mut self.doc.current_spread_mut().layout;
+                    layout.move_chain(&chain, pos);
+                    p.apply(layout, pos);
+                }
+                _ => {
+                    let mm_to_px = self.mm_to_px(canvas_w);
+                    let total_w_mm = if mm_to_px > 0.0 { root_rect.w / mm_to_px } else { 1.0 };
+                    let total_h_mm = if mm_to_px > 0.0 { root_rect.h / mm_to_px } else { 1.0 };
+                    let layout = &self.doc.current_spread().layout;
+                    if let Some(pos) = apply_drag_snap(layout, axis, raw_norm, &chain, effective_snap_r, total_w_mm, total_h_mm, initial_offset) {
+                        let layout = &mut self.doc.current_spread_mut().layout;
+                        layout.move_chain(&chain, pos);
+                    }
+                }
             }
             self.mark_structure_dirty();
         }
@@ -351,6 +344,9 @@ impl PhotobookEditor {
     pub fn get_chain_half_gaps(&self, edge_id: u32) -> String {
         let layout = &self.doc.current_spread().layout;
         let chain = layout.chain_for_edge(edge_id);
+        if chain.is_empty() {
+            return serde_json::json!({"a": 0.0, "b": 0.0, "axis": "v"}).to_string();
+        }
         let axis = layout.edges.get(&chain[0])
             .map(|e| e.orientation.clone())
             .unwrap_or(Orientation::Vertical);
@@ -422,6 +418,79 @@ impl PhotobookEditor {
             .collect();
         let layout = &mut self.doc.current_spread_mut().layout;
         for eid in ids { layout.set_half_gap(eid, v); }
+        self.mark_structure_dirty();
+    }
+
+    /// Returns `{gap, side}` for an all-boundary chain.
+    /// `side` is one of "top", "bottom", "left", "right".
+    pub fn get_boundary_chain_gap(&self, edge_id: u32) -> String {
+        let layout = &self.doc.current_spread().layout;
+        let chain = layout.chain_for_edge(edge_id);
+        let Some(e) = chain.first().and_then(|&eid| layout.edges.get(&eid)) else {
+            return serde_json::json!({"gap": 0.0, "side": "top"}).to_string();
+        };
+        let gap = e.half_gap;
+        let side = match e.orientation {
+            Orientation::Horizontal => if e.offset < 0.5 { "top" }    else { "bottom" },
+            Orientation::Vertical   => if e.offset < 0.5 { "left" }   else { "right" },
+        };
+        serde_json::json!({"gap": gap, "side": side}).to_string()
+    }
+
+    /// Set half_gap on every edge in the all-boundary chain containing `edge_id`.
+    pub fn set_boundary_chain_gap(&mut self, edge_id: u32, v: f32) {
+        let layout = &self.doc.current_spread().layout;
+        let chain = layout.chain_for_edge(edge_id);
+        let layout = &mut self.doc.current_spread_mut().layout;
+        for eid in chain { layout.set_half_gap(eid, v); }
+        self.mark_structure_dirty();
+    }
+
+    /// Assign a random symmetric half-gap to every inner chain in the current spread.
+    /// `min`/`max` are half-gap values; each chain gets one random value so both
+    /// sides of the visual gap are equal.
+    #[cfg(target_arch = "wasm32")]
+    pub fn randomize_inner_gaps(&mut self, min: f32, max: f32) {
+        if self.selection.is_empty() { return; }
+        let sel: std::collections::HashSet<FaceId> = self.selection.iter().copied().collect();
+        let layout = &self.doc.current_spread().layout;
+
+        let is_selection_inner = |eid: EdgeId| -> bool {
+            let Some(e) = layout.edges.get(&eid) else { return false };
+            if e.is_boundary || !sel.contains(&e.face_id) { return false }
+            let opp = e.facing.opposite();
+            let Some((elo, ehi)) = layout.edge_extent(eid) else { return false };
+            layout.edges.values().any(|nb| {
+                nb.id != eid
+                && nb.orientation == e.orientation
+                && (nb.offset - e.offset).abs() < crate::grid_layout::EPS
+                && nb.facing == opp
+                && sel.contains(&nb.face_id)
+                && layout.edge_extent(nb.id)
+                    .map(|(nlo, nhi)| nlo < ehi - crate::grid_layout::EPS && nhi > elo + crate::grid_layout::EPS)
+                    .unwrap_or(false)
+            })
+        };
+
+        let mut seen = std::collections::HashSet::<EdgeId>::new();
+        let candidate_ids: Vec<EdgeId> = layout.edges.keys().copied().collect();
+        let mut assignments: Vec<(Vec<EdgeId>, f32)> = Vec::new();
+        for eid in candidate_ids {
+            if seen.contains(&eid) { continue; }
+            if !is_selection_inner(eid) { seen.insert(eid); continue; }
+            let chain = layout.chain_for_edge(eid);
+            for &id in &chain { seen.insert(id); }
+            let v = (min + (max - min) * (js_sys::Math::random() as f32)).max(0.0);
+            assignments.push((chain, v));
+        }
+        let layout = &mut self.doc.current_spread_mut().layout;
+        for (chain, v) in assignments {
+            for eid in chain {
+                if layout.edges.get(&eid).map(|e| sel.contains(&e.face_id)).unwrap_or(false) {
+                    layout.set_half_gap(eid, v);
+                }
+            }
+        }
         self.mark_structure_dirty();
     }
 }

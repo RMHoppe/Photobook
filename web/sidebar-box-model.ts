@@ -1,11 +1,7 @@
 // sidebar-box-model.ts — BoxModelEditor panel (shown when a frame is selected).
 //
-// Multi-selection sentinel values:
-//   null/absent for border-width fields (Rust Option::None → skip, per-side pattern)
-//   null/absent for margin and rotation (Rust Option::None → skip)
-//   "__mixed__" for color fields (Rust skips this exact string)
-//   ""          for border-position (Rust deserialises as BorderPosition::Mixed → skip)
-//   -1          for border.radius (f32 field, Rust skips if < 0)
+// Multi-selection sentinel: every DTO field uses `null` uniformly — reading,
+// null = the selection disagrees ("mixed"); writing, null = leave unchanged.
 
 import type { BoxModel } from './types.js';
 import { debounce } from './utils.js';
@@ -80,8 +76,8 @@ export class BoxModelEditor {
       left:   border.radius_bl ?? null,
     };
     this._updateSidesUI(this._radiusCtrl, 'radius', rad);
-    this._set('border-color',    border.color    ?? '#000000');
-    this._set('border-position', border.position ?? 'centered');
+    this._set('border-color',    border.color    ?? null);
+    this._set('border-position', border.position ?? null);
 
     // Node transform (undefined/null → show Mixed placeholder)
     this._setOffset('node-rotation', bm.face_rotation_deg);
@@ -107,10 +103,8 @@ export class BoxModelEditor {
   // ---------------------------------------------------------------------------
 
   /**
-   * Set a single field. Handles sentinel values produced by the Rust multi-selection merger:
-   *   f32 sentinel  : -1 (or any negative) → blank number input
-   *   string sentinel: "__mixed__"          → dimmed colour swatch
-   *   position sentinel: "mixed"            → "—" select option
+   * Set a single field. `null`/`undefined` means the multi-selection disagrees
+   * ("mixed") — render the field blank/dimmed and tag it so _emit sends null.
    */
   private _set(name: string, value: unknown): void {
     const el = this.containerEl.querySelector<HTMLInputElement | HTMLSelectElement>(
@@ -120,25 +114,26 @@ export class BoxModelEditor {
 
     // Reset mixed state from previous update.
     delete (el as HTMLElement & { dataset: DOMStringMap }).dataset.mixed;
+    const mixed = value === null || value === undefined;
 
     if (el instanceof HTMLInputElement && el.type === 'number') {
-      if (typeof value === 'number' && value < 0) {
+      if (mixed) {
         el.value = '';
         el.placeholder = 'Mixed';
         el.dataset.mixed = '1';
       } else {
-        el.value = typeof value === 'number' ? value.toFixed(2) : (String(value ?? '0'));
+        el.value = typeof value === 'number' ? value.toFixed(2) : String(value);
         el.placeholder = '';
       }
     } else if (el instanceof HTMLInputElement && el.type === 'color') {
-      if (value === '__mixed__') {
+      if (mixed) {
         el.value = '#808080';
         el.dataset.mixed = '1';
       } else {
-        el.value = (value && value !== '') ? String(value) : '#ffffff';
+        el.value = value ? String(value) : '#ffffff';
       }
     } else if (el instanceof HTMLSelectElement) {
-      if (!value || value === 'mixed') {
+      if (mixed) {
         el.value = '';
         el.dataset.mixed = '1';
       } else {
@@ -298,23 +293,16 @@ export class BoxModelEditor {
   // Field value readers (used by _emit)
   // ---------------------------------------------------------------------------
 
-  private _gNum(name: string): number {
+  private _gColor(name: string): string | null {
     const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-    if (!el || el.dataset.mixed) return -1;
-    const v = parseFloat(el.value);
-    return isNaN(v) ? 0 : v;
-  }
-
-  private _gColor(name: string): string {
-    const el = this.containerEl.querySelector<HTMLInputElement>(`[data-field="${name}"]`);
-    if (!el || el.dataset.mixed) return '__mixed__';
+    if (!el || el.dataset.mixed) return null;
     return el.value || '#ffffff';
   }
 
-  private _gSel(name: string): string {
+  private _gSel(name: string): string | null {
     const el = this.containerEl.querySelector<HTMLSelectElement>(`[data-field="${name}"]`);
-    if (!el || el.dataset.mixed) return '';
-    return el.value;
+    if (!el || el.dataset.mixed) return null;
+    return el.value || null;
   }
 
   private _gOffset(name: string): number | null {
@@ -395,7 +383,6 @@ export class BoxModelEditor {
         width_right:  bw.right,
         width_bottom: bw.bottom,
         width_left:   bw.left,
-        radius:    -1,
         radius_tl: rad.top,
         radius_tr: rad.right,
         radius_br: rad.bottom,

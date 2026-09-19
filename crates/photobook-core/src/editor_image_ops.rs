@@ -72,7 +72,7 @@ impl PhotobookEditor {
 
     pub fn set_face_frame_rotation(&mut self, face_id: u32, rotation_deg: f32) {
         if let Some(face) = self.doc.current_spread_mut().layout.faces.get_mut(&face_id) {
-            face.box_model.face_rotation_deg = Some(rotation_deg);
+            face.box_model.face_rotation_deg = rotation_deg;
         }
         self.mark_structure_dirty();
     }
@@ -97,22 +97,23 @@ impl PhotobookEditor {
             _ => {
                 // Non-margin fields write to the face's box_model.
                 let Some(face) = layout.faces.get_mut(&face_id) else { return };
+                let b = &mut face.box_model.border;
+                let v = value.max(0.0);
                 match field {
-                    "bw-all"        => { let b = &mut face.box_model.border; b.width_top = Some(value); b.width_right = Some(value); b.width_bottom = Some(value); b.width_left = Some(value); }
-                    "bw-v"          => { face.box_model.border.width_top    = Some(value); face.box_model.border.width_bottom = Some(value); }
-                    "bw-h"          => { face.box_model.border.width_right  = Some(value); face.box_model.border.width_left   = Some(value); }
-                    "bw-top"        => { face.box_model.border.width_top    = Some(value); }
-                    "bw-right"      => { face.box_model.border.width_right  = Some(value); }
-                    "bw-bottom"     => { face.box_model.border.width_bottom = Some(value); }
-                    "bw-left"       => { face.box_model.border.width_left   = Some(value); }
-                    "border-radius" => { face.box_model.border.radius = value.max(0.0); }
-                    "radius-all"    => { let v = value.max(0.0); let b = &mut face.box_model.border; b.radius_tl = Some(v); b.radius_tr = Some(v); b.radius_br = Some(v); b.radius_bl = Some(v); }
-                    "radius-v"      => { let v = value.max(0.0); face.box_model.border.radius_tl = Some(v); face.box_model.border.radius_br = Some(v); }
-                    "radius-h"      => { let v = value.max(0.0); face.box_model.border.radius_tr = Some(v); face.box_model.border.radius_bl = Some(v); }
-                    "radius-top"    => { face.box_model.border.radius_tl = Some(value.max(0.0)); }
-                    "radius-right"  => { face.box_model.border.radius_tr = Some(value.max(0.0)); }
-                    "radius-bottom" => { face.box_model.border.radius_br = Some(value.max(0.0)); }
-                    "radius-left"   => { face.box_model.border.radius_bl = Some(value.max(0.0)); }
+                    "bw-all"        => { b.width_top = v; b.width_right = v; b.width_bottom = v; b.width_left = v; }
+                    "bw-v"          => { b.width_top = v; b.width_bottom = v; }
+                    "bw-h"          => { b.width_right = v; b.width_left = v; }
+                    "bw-top"        => { b.width_top = v; }
+                    "bw-right"      => { b.width_right = v; }
+                    "bw-bottom"     => { b.width_bottom = v; }
+                    "bw-left"       => { b.width_left = v; }
+                    "radius-all"    => { b.radius_tl = v; b.radius_tr = v; b.radius_br = v; b.radius_bl = v; }
+                    "radius-v"      => { b.radius_tl = v; b.radius_br = v; }
+                    "radius-h"      => { b.radius_tr = v; b.radius_bl = v; }
+                    "radius-top"    => { b.radius_tl = v; }
+                    "radius-right"  => { b.radius_tr = v; }
+                    "radius-bottom" => { b.radius_br = v; }
+                    "radius-left"   => { b.radius_bl = v; }
                     _ => {}
                 }
             }
@@ -126,8 +127,8 @@ impl PhotobookEditor {
 
     pub fn register_image_size(&mut self, image_id: &str, width_px: u32, height_px: u32) {
         self.image_sizes.insert(image_id.to_string(), (width_px, height_px));
-        self.low_dpi_dirty = true;
-        self.low_dpi_cache = None;
+        // Affects only the revision-tagged low-DPI report, not the canvas delta.
+        self.touch();
     }
 
     /// Split `face_id` into `count` leaf faces using recursive binary halving with
@@ -168,11 +169,11 @@ impl PhotobookEditor {
         let spread_idx = self.doc.current_spread;
         let w_bits = canvas_w.to_bits();
         let h_bits = canvas_h.to_bits();
-        if !self.low_dpi_dirty {
-            if let Some(ref c) = self.low_dpi_cache {
-                if c.canvas_w_bits == w_bits && c.canvas_h_bits == h_bits && c.spread_idx == spread_idx {
-                    return c.json.clone();
-                }
+        if let Some(ref c) = self.low_dpi_cache {
+            if c.revision == self.revision
+                && c.canvas_w_bits == w_bits && c.canvas_h_bits == h_bits
+                && c.spread_idx == spread_idx {
+                return c.json.clone();
             }
         }
         let spread = self.doc.current_spread();
@@ -212,12 +213,12 @@ impl PhotobookEditor {
 
         let json = serde_json::to_string(&low_dpi).unwrap_or_else(|_| "[]".into());
         self.low_dpi_cache = Some(crate::LowDpiCache {
+            revision: self.revision,
             canvas_w_bits: w_bits,
             canvas_h_bits: h_bits,
             spread_idx,
             json: json.clone(),
         });
-        self.low_dpi_dirty = false;
         json
     }
 }

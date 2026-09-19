@@ -2,12 +2,28 @@ use serde::{Deserialize, Serialize};
 use crate::grid_layout::GridLayout;
 use crate::layout::SplitAxis;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub enum SpreadKind {
     /// Front cover + spine + back cover as one unified layout.
     Cover,
+    /// Front cover as a standalone single page (cover-as-pages export mode).
+    CoverFront,
+    /// Back cover as a standalone single page (cover-as-pages export mode).
+    CoverBack,
     /// Two interior pages side by side.
     Content,
+}
+
+impl SpreadKind {
+    /// Any cover variant (wraparound or standalone front/back page).
+    pub fn is_cover(self) -> bool {
+        matches!(self, SpreadKind::Cover | SpreadKind::CoverFront | SpreadKind::CoverBack)
+    }
+
+    /// Spread is a single page wide (no fold, no spine).
+    pub fn is_single_page(self) -> bool {
+        matches!(self, SpreadKind::CoverFront | SpreadKind::CoverBack)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -88,12 +104,17 @@ pub struct Spread {
 impl Spread {
     pub fn new(id: u32, kind: SpreadKind) -> Self {
         let label = match kind {
-            SpreadKind::Cover   => "Cover".into(),
-            SpreadKind::Content => format!("Spread {}", id),
+            SpreadKind::Cover      => "Cover".into(),
+            SpreadKind::CoverFront => "Front Cover".into(),
+            SpreadKind::CoverBack  => "Back Cover".into(),
+            SpreadKind::Content    => format!("Spread {}", id),
         };
         let mut layout = GridLayout::new();
-        let face_id = *layout.faces.keys().next().unwrap();
-        layout.split_face(face_id, 0.5, SplitAxis::Vertical);
+        // Two-page spreads start pre-split at the fold; single pages keep one face.
+        if !kind.is_single_page() {
+            let face_id = *layout.faces.keys().next().unwrap();
+            layout.split_face(face_id, 0.5, SplitAxis::Vertical);
+        }
 
         Spread {
             id,
@@ -134,9 +155,6 @@ pub struct PhotobookDocument {
     pub spine_mm_per_page: f32,
     /// Minimum spine width in mm regardless of page count.
     pub spine_min_mm: f32,
-    /// Snapping step for the transform box margin handles (0 = continuous).
-    #[serde(default)]
-    pub margin_step_mm: f32,
     /// Target print resolution in pixels per inch (used when exporting PDF).
     #[serde(default = "default_print_dpi")]
     pub print_dpi: f32,
@@ -147,6 +165,39 @@ pub struct PhotobookDocument {
     /// When true, the first and last content spread each have one non-printable inner page.
     #[serde(default)]
     pub endpapers: bool,
+    /// Draw printer's crop marks at the trim corners on export. Off by default —
+    /// automated print workflows read the TrimBox instead.
+    #[serde(default)]
+    pub export_crop_marks: bool,
+    /// Export the cover as a separate PDF from the interior pages.
+    #[serde(default)]
+    pub export_split_cover: bool,
+    /// Export interior spreads as two single pages each (perfect binding)
+    /// instead of one full-spread page (layflat binding).
+    #[serde(default)]
+    pub export_body_pages: bool,
+    /// Extra wrap/turn-in allowance beyond the bleed on every cover edge, in mm
+    /// (hardcover case wrap). Applied to cover spreads only.
+    #[serde(default)]
+    pub cover_wrap_mm: f32,
+    /// Id of the print-shop spec preset selected in project settings (TS-side
+    /// catalog); empty = custom settings. Drives preflight rules.
+    #[serde(default)]
+    pub print_spec_id: String,
+    /// Export the cover as two single pages — front cover first, back cover
+    /// last — instead of one wraparound spread. For shops (e.g. Peecho) that
+    /// compute the spine themselves and want one PDF of single pages.
+    #[serde(default)]
+    pub export_cover_pages: bool,
+    /// Page-count rules from the selected print-shop spec, enforced when
+    /// adding/removing spreads. 0 disables a rule. Counts are interior pages
+    /// (2 per content spread).
+    #[serde(default)]
+    pub page_rule_min: u32,
+    #[serde(default)]
+    pub page_rule_max: u32,
+    #[serde(default)]
+    pub page_rule_multiple: u32,
 }
 
 fn default_print_dpi() -> f32 { 300.0 }
@@ -168,22 +219,79 @@ impl PhotobookDocument {
             safe_zone_mm: 5.0,
             spine_mm_per_page: 0.12,
             spine_min_mm: 5.0,
-            margin_step_mm: 0.0,
             print_dpi: 300.0,
             next_spread_id: 2,
             next_text_id: 500_000_000,
             endpapers: false,
+            export_crop_marks: false,
+            export_split_cover: false,
+            export_body_pages: false,
+            cover_wrap_mm: 0.0,
+            print_spec_id: String::new(),
+            export_cover_pages: false,
+            page_rule_min: 0,
+            page_rule_max: 0,
+            page_rule_multiple: 0,
         }
     }
 
     pub fn add_spread(&mut self) {
         let id = self.next_spread_id;
         self.next_spread_id += 1;
-        self.spreads.push(Spread::new(id, SpreadKind::Content));
+        // The back cover (cover-as-pages mode) stays the last spread.
+        let pos = if self.spreads.last().is_some_and(|s| s.kind == SpreadKind::CoverBack) {
+            self.spreads.len() - 1
+        } else {
+            self.spreads.len()
+        };
+        self.spreads.insert(pos, Spread::new(id, SpreadKind::Content));
+    }
+
+    /// How many content spreads each add/remove must step by to keep the
+    /// interior page count on the spec's multiple (1 when unconstrained —
+    /// a spread is always 2 pages, so "multiple of 2" needs no stepping).
+    pub fn spread_step(&self) -> usize {
+        if self.page_rule_multiple > 2 {
+            (self.page_rule_multiple as usize / 2).max(1)
+        } else {
+            1
+        }
+    }
+
+    /// True if `step` more content spreads would stay within the spec's
+    /// maximum interior page count.
+    pub fn can_add_spreads(&self, step: usize) -> bool {
+        self.page_rule_max == 0
+            || self.interior_page_count() + 2 * step as u32 <= self.page_rule_max
+    }
+
+    /// True if `step` fewer content spreads would stay above both the spec's
+    /// minimum page count and the structural minimum (cover + endpapers).
+    pub fn can_remove_spreads(&self, step: usize) -> bool {
+        let structural_min = if self.endpapers { 2 } else { 1 };
+        let remaining = self.content_spread_count().saturating_sub(step);
+        remaining >= structural_min && remaining as u32 * 2 >= self.page_rule_min
+    }
+
+    /// Append content spreads until the interior page count satisfies the
+    /// spec's minimum and multiple. Returns how many spreads were added.
+    pub fn enforce_page_count_rules(&mut self) -> usize {
+        let mut added = 0;
+        loop {
+            let pages = self.interior_page_count();
+            let below_min = self.page_rule_min > 0 && pages < self.page_rule_min;
+            let off_multiple = self.page_rule_multiple > 1 && pages % self.page_rule_multiple != 0;
+            let within_max = self.page_rule_max == 0 || pages + 2 <= self.page_rule_max;
+            if !(below_min || off_multiple) || !within_max || added > 512 { break; }
+            self.add_spread();
+            added += 1;
+        }
+        added
     }
 
     pub fn remove_spread(&mut self, spread_idx: usize) {
-        if spread_idx == 0 { return; } // never remove cover
+        // Only content spreads are removable (never any cover variant).
+        if self.spreads.get(spread_idx).is_none_or(|s| s.kind != SpreadKind::Content) { return; }
         let min = if self.endpapers { 2 } else { 1 };
         if self.content_spread_count() <= min { return; }
         self.spreads.remove(spread_idx);
@@ -210,17 +318,25 @@ impl PhotobookDocument {
     }
 
     /// Returns "left", "right", or None for the given spread index.
-    /// "left"  → left page is non-printable (Spread 1 with endpapers enabled).
+    /// "left"  → left page is non-printable (first content spread with endpapers enabled).
     /// "right" → right page is non-printable (last content spread with endpapers enabled).
     pub fn endpaper_side(&self, spread_idx: usize) -> Option<&'static str> {
-        if !self.endpapers || spread_idx == 0 { return None; }
-        let last = self.spreads.len().saturating_sub(1);
-        match (spread_idx == 1, spread_idx == last) {
+        if !self.endpapers { return None; }
+        if self.spreads.get(spread_idx).is_none_or(|s| s.kind != SpreadKind::Content) { return None; }
+        let first = self.spreads.iter().position(|s| s.kind == SpreadKind::Content)?;
+        let last  = self.spreads.iter().rposition(|s| s.kind == SpreadKind::Content)?;
+        match (spread_idx == first, spread_idx == last) {
             (true, false)  => Some("left"),
             (false, true)  => Some("right"),
             (true, true)   => None, // only one content spread — shouldn't happen when endpapers are on
             (false, false) => None,
         }
+    }
+
+    /// Index of the last content spread (the highest index a spread may be
+    /// moved to / removed from). Falls back to 0 for degenerate documents.
+    pub fn last_content_idx(&self) -> usize {
+        self.spreads.iter().rposition(|s| s.kind == SpreadKind::Content).unwrap_or(0)
     }
 
     /// Computed spine thickness in mm.
@@ -232,8 +348,81 @@ impl PhotobookDocument {
     /// Width of the given spread in mm.
     pub fn spread_width_mm(&self, spread: &Spread) -> f32 {
         match spread.kind {
-            SpreadKind::Cover   => self.page_size.width_mm * 2.0 + self.spine_mm(),
-            SpreadKind::Content => self.page_size.width_mm * 2.0,
+            SpreadKind::Cover      => self.page_size.width_mm * 2.0 + self.spine_mm(),
+            SpreadKind::CoverFront |
+            SpreadKind::CoverBack  => self.page_size.width_mm,
+            SpreadKind::Content    => self.page_size.width_mm * 2.0,
         }
+    }
+
+    /// Restructure the cover to match the cover-as-pages export mode:
+    /// `true`  → split the wraparound cover into a standalone front-cover page
+    ///           (first spread) and back-cover page (last spread),
+    /// `false` → merge the two cover pages back into one wraparound spread.
+    ///
+    /// Background colours and text elements are carried over; the cover's
+    /// frame layout is reset (a wraparound layout cannot be split losslessly).
+    /// Returns true when the structure changed.
+    pub fn set_cover_pages_mode(&mut self, pages: bool) -> bool {
+        let page_w = self.page_size.width_mm;
+        if pages {
+            if self.spreads.first().is_none_or(|s| s.kind != SpreadKind::Cover) { return false; }
+            let spine = self.spine_mm();
+            let old = self.spreads.remove(0);
+
+            let mut front = Spread::new(self.next_spread_id, SpreadKind::CoverFront);
+            let mut back  = Spread::new(self.next_spread_id + 1, SpreadKind::CoverBack);
+            self.next_spread_id += 2;
+
+            // Single-page spreads keep left_bg == right_bg (renderers fill both halves).
+            front.left_bg = old.right_bg.clone();
+            front.right_bg = old.right_bg;
+            back.left_bg = old.left_bg.clone();
+            back.right_bg = old.left_bg;
+
+            // Texts right of the spine centre belong to the front cover.
+            for mut t in old.text_elements {
+                if t.x_mm >= page_w + spine / 2.0 {
+                    t.x_mm -= page_w + spine;
+                    front.text_elements.push(t);
+                } else {
+                    back.text_elements.push(t);
+                }
+            }
+
+            self.spreads.insert(0, front);
+            self.spreads.push(back);
+            self.current_spread = self.current_spread.min(self.spreads.len() - 1);
+            true
+        } else {
+            if self.spreads.first().is_none_or(|s| s.kind != SpreadKind::CoverFront) { return false; }
+            let front = self.spreads.remove(0);
+            let back_idx = self.spreads.iter().position(|s| s.kind == SpreadKind::CoverBack);
+            let back = back_idx.map(|i| self.spreads.remove(i));
+
+            let mut cover = Spread::new(self.next_spread_id, SpreadKind::Cover);
+            self.next_spread_id += 1;
+            cover.right_bg = front.right_bg;
+            let spine = self.spine_mm();
+            for mut t in front.text_elements {
+                t.x_mm += page_w + spine;
+                cover.text_elements.push(t);
+            }
+            if let Some(back) = back {
+                cover.left_bg = back.left_bg;
+                cover.text_elements.extend(back.text_elements);
+            }
+
+            self.spreads.insert(0, cover);
+            self.current_spread = self.current_spread.min(self.spreads.len() - 1);
+            true
+        }
+    }
+
+    /// Bring the cover structure in line with `export_cover_pages` — used when
+    /// loading projects saved before the mode became structural (or saved with
+    /// the flag but a wraparound cover).
+    pub fn normalize_cover_structure(&mut self) -> bool {
+        self.set_cover_pages_mode(self.export_cover_pages)
     }
 }

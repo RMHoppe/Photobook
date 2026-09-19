@@ -46,6 +46,12 @@ export interface ExportWorkerTimings {
   totalMs: number;
 }
 
+/** One finished PDF (a split export produces a cover file and a body file). */
+export interface ExportedPdf {
+  name: string;
+  bytes: Uint8Array;
+}
+
 let initialized = false;
 
 ctx.addEventListener('message', async (e: MessageEvent) => {
@@ -89,24 +95,40 @@ ctx.addEventListener('message', async (e: MessageEvent) => {
     // 0.0–0.15 covers staging/setup; spreads fill the remaining 0.15–1.0.
     ctx.postMessage({ type: 'progress', reqId, fraction: 0.15 });
 
-    t = performance.now();
-    const total = editor.pdf_export_begin_v2();
-    const beginMs = performance.now() - t;
+    // A split export runs the staged pipeline twice (cover, then body); the
+    // staged image/font bytes are handed back by pdf_export_finish so the
+    // second pass needs no re-staging.
+    const settings = JSON.parse(editor.get_export_settings()) as { split_cover: boolean };
+    const passes: { target: string; name: string }[] = settings.split_cover
+      ? [{ target: 'cover', name: 'photobook-cover.pdf' },
+         { target: 'body',  name: 'photobook-body.pdf' }]
+      : [{ target: 'all',   name: 'photobook.pdf' }];
 
+    let beginMs = 0;
+    let finishMs = 0;
     const perSpreadMs: number[] = [];
     const perSpreadPhases: SpreadPhases[] = [];
-    for (let i = 0; i < total; i++) {
-      const ts = performance.now();
-      const phasesJson = editor.pdf_export_spread();
-      perSpreadMs.push(performance.now() - ts);
-      try { perSpreadPhases.push(JSON.parse(phasesJson) as SpreadPhases); }
-      catch { perSpreadPhases.push({ decode_ms: 0, crop_ms: 0, resample_ms: 0, encode_ms: 0, image_count: 0 }); }
-      ctx.postMessage({ type: 'progress', reqId, fraction: 0.15 + (i + 1) / Math.max(total, 1) * 0.85 });
-    }
+    const pdfs: ExportedPdf[] = [];
 
-    t = performance.now();
-    const pdfBytes = editor.pdf_export_finish();
-    const finishMs = performance.now() - t;
+    for (let pi = 0; pi < passes.length; pi++) {
+      t = performance.now();
+      const total = editor.pdf_export_begin_target(passes[pi].target);
+      beginMs += performance.now() - t;
+
+      for (let i = 0; i < total; i++) {
+        const ts = performance.now();
+        const phasesJson = editor.pdf_export_spread();
+        perSpreadMs.push(performance.now() - ts);
+        try { perSpreadPhases.push(JSON.parse(phasesJson) as SpreadPhases); }
+        catch { perSpreadPhases.push({ decode_ms: 0, crop_ms: 0, resample_ms: 0, encode_ms: 0, image_count: 0 }); }
+        const passFraction = (pi + (i + 1) / Math.max(total, 1)) / passes.length;
+        ctx.postMessage({ type: 'progress', reqId, fraction: 0.15 + passFraction * 0.85 });
+      }
+
+      t = performance.now();
+      pdfs.push({ name: passes[pi].name, bytes: editor.pdf_export_finish() });
+      finishMs += performance.now() - t;
+    }
 
     editor.free();
 
@@ -122,8 +144,8 @@ ctx.addEventListener('message', async (e: MessageEvent) => {
       totalMs: performance.now() - workerStart,
     };
 
-    // wasm-bindgen returns a fresh Uint8Array; transfer its buffer back.
-    ctx.postMessage({ type: 'done', reqId, pdf: pdfBytes, timings }, [pdfBytes.buffer]);
+    // wasm-bindgen returns fresh Uint8Arrays; transfer their buffers back.
+    ctx.postMessage({ type: 'done', reqId, pdfs, timings }, pdfs.map(p => p.bytes.buffer));
   } catch (err) {
     ctx.postMessage({ type: 'error', reqId, message: err instanceof Error ? err.message : String(err) });
   }

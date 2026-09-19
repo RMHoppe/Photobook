@@ -23,4 +23,10 @@ Hold **Shift** and **scroll** the mouse wheel over a frame to rotate the image w
 
 ## Swapping two images
 
-Hold **Alt** and **drag** from one frame to another to swap their images. While dragging, the source and target frames are highlighted. Release over the target frame to complete the swap; release outside any frame to cancel.
+There are two ways to swap images between frames:
+
+**Toolbar button:** Click the **Swap** button (arrows icon) in the canvas toolbar to activate swap mode. The button stays highlighted while the tool is active. Then drag from one frame to another. Click the button again or press **Escape** to deactivate.
+
+**Alt key:** Hold **Alt** and drag from one frame to another without activating the toolbar button.
+
+In both cases, the source and target frames are highlighted while dragging. Release over the target frame to complete the swap; release outside any frame to cancel.

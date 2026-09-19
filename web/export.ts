@@ -1,12 +1,23 @@
 // export.ts — orchestrates PDF export. The heavy work (PDF generation) runs in
 // export-worker.ts so the UI thread stays responsive and a panic during export
 // is isolated to the worker.
+//
+// Two entry points share the pipeline:
+//   exportPdf()    — the toolbar "Export PDF" flow: progress bar + downloads.
+//   generatePdfs() — produce the bytes only; used by the POD ordering flow
+//                    (web/pod/) which uploads instead of downloading.
 
 import type { PhotobookEditor } from './pkg/photobook_core.js';
 import { getTextElements } from './wasm-bridge.js';
 import { getFontBytes } from './fonts.js';
 import { showToast } from './toast.js';
-import type { ExportWorkerTimings, SpreadPhases } from './export-worker.js';
+import type { ExportedPdf, ExportWorkerTimings, SpreadPhases } from './export-worker.js';
+
+export type { ExportedPdf };
+
+/** Image-buffer source: yields the original encoded bytes for each used id. */
+export type BufferSource = (usedIds: ReadonlySet<string>) =>
+  AsyncIterable<{ id: string; buffer: ArrayBuffer; width_px: number; height_px: number }>;
 
 // --- Worker lifecycle (lazily created, recreated after a crash) ---------------
 
@@ -32,7 +43,7 @@ let _exportSeq = 0;
 
 type WorkerMessage =
   | { type: 'progress'; reqId: number; fraction: number }
-  | { type: 'done';     reqId: number; pdf: Uint8Array; timings: ExportWorkerTimings }
+  | { type: 'done';     reqId: number; pdfs: ExportedPdf[]; timings: ExportWorkerTimings }
   | { type: 'error';    reqId: number; message: string };
 
 interface MainThreadTimings {
@@ -78,9 +89,98 @@ function logExportProfile(main: MainThreadTimings, worker: ExportWorkerTimings, 
   console.log(lines.join('\n'));
 }
 
+// --- PDF production (shared by export-to-download and ordering) ---------------
+
+export interface GeneratePdfOptions {
+  /** Overall progress 0..1 (input gathering ≈ 0–0.1, worker 0.1–1). */
+  onProgress: (fraction: number) => void;
+  /** Aborting kills the worker (a fresh one is created for the next run)
+   *  and rejects with Error('Export cancelled'). */
+  signal?: AbortSignal;
+}
+
+/** Produce the export PDFs (one file, or cover/body when split is enabled)
+ *  without delivering them anywhere. Throws on worker failure or abort. */
+export async function generatePdfs(
+  editor: PhotobookEditor,
+  getBuffers: BufferSource,
+  opts: GeneratePdfOptions,
+): Promise<ExportedPdf[]> {
+  const { onProgress, signal } = opts;
+  const tExportStart = performance.now();
+
+  // --- Gather inputs on the main thread (cheap: IDs, JSON, buffer refs) ---
+  const usedIds = new Set<string>(JSON.parse(editor.get_used_image_ids()) as string[]);
+  const documentJson = editor.save_state();
+
+  const tImagesStart = performance.now();
+  const images: { id: string; buffer: ArrayBuffer; width_px: number; height_px: number }[] = [];
+  for await (const entry of getBuffers(usedIds)) {
+    images.push({ id: entry.id, buffer: entry.buffer, width_px: entry.width_px, height_px: entry.height_px });
+  }
+  const collectImagesMs = performance.now() - tImagesStart;
+
+  type FontInput = { family: string; bold: boolean; italic: boolean; buffer: ArrayBuffer };
+  const fonts: FontInput[] = [];
+  const seenFontKeys = new Set<string>();
+  const tFontsStart = performance.now();
+  for (const el of getTextElements(editor)) {
+    const key = `${el.font_family}:${el.bold}:${el.italic}`;
+    if (seenFontKeys.has(key)) continue;
+    seenFontKeys.add(key);
+    const buf = await getFontBytes(el.font_family, el.bold, el.italic);
+    if (buf) fonts.push({ family: el.font_family, bold: el.bold, italic: el.italic, buffer: buf });
+  }
+  const collectFontsMs = performance.now() - tFontsStart;
+
+  if (signal?.aborted) throw new Error('Export cancelled');
+  onProgress(0.1);
+
+  // --- Hand off to the worker. Image/font buffers are COPIED (structured
+  // clone, not transferred) so the sidebar's cached buffers stay intact. ---
+  const reqId = ++_exportSeq;
+  const w = getWorker();
+  const tWorkerStart = performance.now();
+  const { pdfs, timings: workerTimings } = await new Promise<{ pdfs: ExportedPdf[]; timings: ExportWorkerTimings }>((resolve, reject) => {
+    const onMessage = (e: MessageEvent) => {
+      const m = e.data as WorkerMessage;
+      if (m.reqId !== reqId) return;  // stale response from a previous export
+      if (m.type === 'progress') onProgress(m.fraction);
+      else if (m.type === 'done') { cleanup(); resolve({ pdfs: m.pdfs, timings: m.timings }); }
+      else if (m.type === 'error') { cleanup(); reject(new Error(m.message)); }
+    };
+    const onError = (ev: ErrorEvent) => {
+      cleanup();
+      killWorker();  // poisoned WASM instance — drop it so the next export is fresh
+      reject(new Error(ev.message || 'Export worker crashed'));
+    };
+    const onAbort = () => {
+      cleanup();
+      killWorker();
+      reject(new Error('Export cancelled'));
+    };
+    const cleanup = () => {
+      w.removeEventListener('message', onMessage);
+      w.removeEventListener('error', onError);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    w.addEventListener('message', onMessage);
+    w.addEventListener('error', onError);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    w.postMessage({ type: 'export', reqId, documentJson, images, fonts });
+  });
+  const workerRoundTripMs = performance.now() - tWorkerStart;
+  const totalMs = performance.now() - tExportStart;
+
+  logExportProfile({ collectImagesMs, collectFontsMs, workerRoundTripMs, totalMs }, workerTimings, images.length, fonts.length);
+  return pdfs;
+}
+
+// --- Export-to-download flow (toolbar "Export PDF") ---------------------------
+
 export async function exportPdf(
   editor: PhotobookEditor,
-  getBuffers: (usedIds: ReadonlySet<string>) => AsyncIterable<{ id: string; buffer: ArrayBuffer; width_px: number; height_px: number }>,
+  getBuffers: BufferSource,
 ): Promise<void> {
   const btn       = document.getElementById('btn-export-pdf') as HTMLButtonElement;
   const cancelBtn = document.getElementById('btn-cancel-export') as HTMLButtonElement | null;
@@ -91,87 +191,31 @@ export async function exportPdf(
     bar.style.width = `${Math.round(fraction * 100)}%`;
   };
 
+  const controller = new AbortController();
+  const onCancel = () => controller.abort();
+
   btn.disabled = true;
   btn.textContent = 'Exporting…';
-  if (cancelBtn) cancelBtn.hidden = false;
+  if (cancelBtn) { cancelBtn.hidden = false; cancelBtn.addEventListener('click', onCancel, { once: true }); }
   setProgress(0);
   progress.hidden = false;
 
   try {
-    const tExportStart = performance.now();
-
-    // --- Gather inputs on the main thread (cheap: IDs, JSON, buffer refs) ---
-    const usedIds = new Set<string>(JSON.parse(editor.get_used_image_ids()) as string[]);
-    const documentJson = editor.save_state();
-
-    const tImagesStart = performance.now();
-    const images: { id: string; buffer: ArrayBuffer; width_px: number; height_px: number }[] = [];
-    for await (const entry of getBuffers(usedIds)) {
-      images.push({ id: entry.id, buffer: entry.buffer, width_px: entry.width_px, height_px: entry.height_px });
-    }
-    const collectImagesMs = performance.now() - tImagesStart;
-
-    type FontInput = { family: string; bold: boolean; italic: boolean; buffer: ArrayBuffer };
-    const fonts: FontInput[] = [];
-    const seenFontKeys = new Set<string>();
-    const tFontsStart = performance.now();
-    for (const el of getTextElements(editor)) {
-      const key = `${el.font_family}:${el.bold}:${el.italic}`;
-      if (seenFontKeys.has(key)) continue;
-      seenFontKeys.add(key);
-      const buf = await getFontBytes(el.font_family, el.bold, el.italic);
-      if (buf) fonts.push({ family: el.font_family, bold: el.bold, italic: el.italic, buffer: buf });
-    }
-    const collectFontsMs = performance.now() - tFontsStart;
-
-    setProgress(0.1);
-
-    // --- Hand off to the worker. Image/font buffers are COPIED (structured
-    // clone, not transferred) so the sidebar's cached buffers stay intact. ---
-    const reqId = ++_exportSeq;
-    const w = getWorker();
-    const tWorkerStart = performance.now();
-    const { pdf: pdfBytes, timings: workerTimings } = await new Promise<{ pdf: Uint8Array; timings: ExportWorkerTimings }>((resolve, reject) => {
-      const onMessage = (e: MessageEvent) => {
-        const m = e.data as WorkerMessage;
-        if (m.reqId !== reqId) return;  // stale response from a previous export
-        if (m.type === 'progress') setProgress(m.fraction);
-        else if (m.type === 'done') { cleanup(); resolve({ pdf: m.pdf, timings: m.timings }); }
-        else if (m.type === 'error') { cleanup(); reject(new Error(m.message)); }
-      };
-      const onError = (ev: ErrorEvent) => {
-        cleanup();
-        killWorker();  // poisoned WASM instance — drop it so the next export is fresh
-        reject(new Error(ev.message || 'Export worker crashed'));
-      };
-      const onCancel = () => {
-        cleanup();
-        killWorker();
-        reject(new Error('Export cancelled'));
-      };
-      const cleanup = () => {
-        w.removeEventListener('message', onMessage);
-        w.removeEventListener('error', onError);
-        cancelBtn?.removeEventListener('click', onCancel);
-      };
-      w.addEventListener('message', onMessage);
-      w.addEventListener('error', onError);
-      cancelBtn?.addEventListener('click', onCancel, { once: true });
-      w.postMessage({ type: 'export', reqId, documentJson, images, fonts });
+    const pdfs = await generatePdfs(editor, getBuffers, {
+      onProgress: setProgress,
+      signal: controller.signal,
     });
-    const workerRoundTripMs = performance.now() - tWorkerStart;
-    const totalMs = performance.now() - tExportStart;
 
-    logExportProfile({ collectImagesMs, collectFontsMs, workerRoundTripMs, totalMs }, workerTimings, images.length, fonts.length);
-
-    // --- Trigger download ---
-    const blob = new Blob([pdfBytes as unknown as BlobPart], { type: 'application/pdf' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = 'photobook.pdf';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    // --- Trigger downloads (two files for a split cover/body export) ---
+    for (const pdf of pdfs) {
+      const blob = new Blob([pdf.bytes as unknown as BlobPart], { type: 'application/pdf' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = pdf.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
   } catch (err) {
     const msg = (err as Error).message;
     if (msg !== 'Export cancelled') {
@@ -181,7 +225,7 @@ export async function exportPdf(
   } finally {
     btn.disabled    = false;
     btn.textContent = 'Export PDF';
-    if (cancelBtn) cancelBtn.hidden = true;
+    if (cancelBtn) { cancelBtn.hidden = true; cancelBtn.removeEventListener('click', onCancel); }
     progress.hidden = true;
     setProgress(0);
   }

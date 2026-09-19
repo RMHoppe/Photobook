@@ -4,7 +4,11 @@
 export class PhotobookEditor {
     free(): void;
     [Symbol.dispose](): void;
-    add_page(): void;
+    /**
+     * Add content spreads (one, or more when the print spec demands a page
+     * multiple). Returns false when the spec's maximum page count blocks it.
+     */
+    add_page(): boolean;
     /**
      * Add a new text element at (x_mm, y_mm) on the current spread.
      * Returns the new element's unique ID.
@@ -19,7 +23,6 @@ export class PhotobookEditor {
      * which breaks the chain at its endpoints on the first mouse movement.
      */
     begin_divider_drag(edge_id: number, full_chain: boolean, canvas_w: number, canvas_h: number): void;
-    begin_edge_panel_drag(axis: string, new_is_first: boolean, mouse_x: number, mouse_y: number, canvas_w: number, canvas_h: number): number;
     /**
      * Prepare for a pinwheel spawn from the given X-junction.
      */
@@ -29,8 +32,12 @@ export class PhotobookEditor {
      */
     can_delete_segment(segment_id: number): boolean;
     can_redo(): boolean;
+    /**
+     * Whether the spread at `spread_idx` can be removed without violating any
+     * structural or spec-defined minimum. Mirrors the check inside `remove_page`.
+     */
+    can_remove_page(spread_idx: number): boolean;
     can_undo(): boolean;
-    cancel_edge_panel_drag(): void;
     /**
      * Abort the spawn, restoring the original layout.
      */
@@ -64,8 +71,7 @@ export class PhotobookEditor {
      * Redistribute interior horizontal dividers so all rows have equal height.
      */
     distribute_selection_v(): void;
-    end_divider_drag(canvas_w: number, canvas_h: number): void;
-    end_edge_panel_drag(): void;
+    end_divider_drag(canvas_w: number, canvas_h: number, shift: boolean): void;
     /**
      * Confirm the current spawn.
      */
@@ -81,6 +87,11 @@ export class PhotobookEditor {
     flip_selection_v(): void;
     get_all_selected(): string;
     get_bleed_mm(): number;
+    /**
+     * Returns `{gap, side}` for an all-boundary chain.
+     * `side` is one of "top", "bottom", "left", "right".
+     */
+    get_boundary_chain_gap(edge_id: number): string;
     get_box_model(): string;
     /**
      * Returns `{a, b, axis}` where `a` = Facing::End side (left/top of the
@@ -91,6 +102,10 @@ export class PhotobookEditor {
     get_current_spread_index(): number;
     get_current_spread_info(): string;
     get_debug_layout_dump(): string;
+    /**
+     * Drain the dirty-thumbnail set, returning the affected spread *indices*
+     * (ids are mapped to current positions at drain time).
+     */
     get_dirty_spread_indices(): string;
     get_dividers(canvas_w: number, canvas_h: number): string;
     /**
@@ -99,17 +114,35 @@ export class PhotobookEditor {
      */
     get_edge_pair_half_gaps(edge_id: number): string;
     get_endpapers(): boolean;
+    /**
+     * Export-related document settings as JSON (consumed by the export worker
+     * and the project settings panel).
+     */
+    get_export_settings(): string;
     get_face_box_model(): string;
     get_face_z_index(id: number): number;
     get_frame_transform(face_id: number): string;
+    /**
+     * Returns a JSON object `{id: offset, …}` for every non-boundary edge in
+     * the current spread.  Call this *before* applying outer margins so the
+     * original offsets can be passed back to
+     * `set_selection_outer_margins_and_adjust` on each live update, avoiding
+     * cumulative drift.
+     */
+    get_inner_edge_offsets(): string;
     get_low_dpi_frames(canvas_w: number, canvas_h: number): string;
-    get_margin_step_mm(): number;
     get_page_size_mm(): string;
     /**
      * Return the pinwheel centre face IDs as a JSON array.
      */
     get_pinwheel_centers(): string;
+    /**
+     * Run document-wide pre-export checks and return the issues as JSON.
+     * `rules_json` is a `PreflightRules` object (unknown fields ignored).
+     */
+    get_preflight_report(rules_json: string): string;
     get_print_dpi(): number;
+    get_print_spec_id(): string;
     get_render_list(canvas_w: number, canvas_h: number): string;
     get_resolved_spread_delta(canvas_w: number, canvas_h: number): string;
     get_safe_zone_mm(): number;
@@ -120,9 +153,9 @@ export class PhotobookEditor {
     get_selected_segment(): number;
     get_selected_segment_count(): number;
     /**
-     * Returns `{a, b, axis}` for the first selected divider chain.
-     * `a` = Facing::End side (left for vertical, top for horizontal).
-     * `b` = Facing::Start side (right for vertical, bottom for horizontal).
+     * Returns `{ h: {a,b}|null, v: {a,b}|null }` aggregated across all selected segments.
+     * Each axis key is `null` when no selected segment has that orientation.
+     * `a`/`b` inside an axis block are `null` when values disagree across segments.
      */
     get_selected_segment_half_gaps(): string;
     get_selected_transform_handles(canvas_w: number, canvas_h: number): string;
@@ -167,6 +200,10 @@ export class PhotobookEditor {
     hovered_divider(canvas_w: number, canvas_h: number): number;
     is_segment_selected(segment_id: number): boolean;
     is_selected(id: number): boolean;
+    /**
+     * True when the first selected segment is a boundary edge.
+     */
+    is_selected_segment_boundary(): boolean;
     load_state(json: string): boolean;
     move_face_z_order(id: number, direction: string): void;
     move_spread(from_idx: number, to_idx: number): void;
@@ -186,13 +223,22 @@ export class PhotobookEditor {
      */
     pdf_export_begin(images_json: string, fonts_json: string): number;
     /**
+     * Phase 1 of the staged export for one output file. `target` selects which
+     * spreads are included: "all" (single PDF), "cover", or "body". Consumes the
+     * staging buffers; `pdf_export_finish` hands them back so a second target
+     * can be exported without re-staging. Returns the output page count, 0 on failure.
+     */
+    pdf_export_begin_target(target: string): number;
+    /**
      * Phase 1 of the staged export using pre-staged raw bytes (no base64/JSON overhead).
-     * Consumes the staging buffers. Returns the total spread count, 0 on failure.
+     * Consumes the staging buffers. Returns the total output page count, 0 on failure.
      */
     pdf_export_begin_v2(): number;
     /**
      * Phase 3 of the staged export. Serialises and returns the finished PDF,
-     * then clears the internal state.
+     * then clears the internal state. The staged image/font source bytes are
+     * returned to the staging buffers so a follow-up `pdf_export_begin_target`
+     * (cover/body split) can run without the caller re-staging them.
      */
     pdf_export_finish(): Uint8Array;
     /**
@@ -210,9 +256,20 @@ export class PhotobookEditor {
      * The bytes are the original encoded file (JPEG, PNG, …); no base64 needed.
      */
     pdf_stage_image(id: string, bytes: Uint8Array): void;
+    /**
+     * Assign a random symmetric half-gap to every inner chain in the current spread.
+     * `min`/`max` are half-gap values; each chain gets one random value so both
+     * sides of the visual gap are equal.
+     */
+    randomize_inner_gaps(min: number, max: number): void;
     redo(): boolean;
     register_image_size(image_id: string, width_px: number, height_px: number): void;
-    remove_page(spread_idx: number): void;
+    /**
+     * Remove the given spread (plus trailing spreads when the print spec
+     * demands a page multiple). Returns false when the spec's minimum page
+     * count or the structural minimum blocks it.
+     */
+    remove_page(spread_idx: number): boolean;
     reset_undo(): void;
     /**
      * Rotate selected faces 90° counter-clockwise within their bounding box.
@@ -250,9 +307,19 @@ export class PhotobookEditor {
      */
     select_segment(segment_id: number): void;
     /**
+     * Returns true if any selected frame has a non-zero half_gap on any of
+     * its four edges, or a non-zero face rotation.
+     */
+    selection_has_transformations(): boolean;
+    /**
      * Returns true if ≥2 selected faces tile a complete rectangle (no gaps).
      */
     selection_is_rectangular(): boolean;
+    set_bleed_visible(visible: boolean): void;
+    /**
+     * Set half_gap on every edge in the all-boundary chain containing `edge_id`.
+     */
+    set_boundary_chain_gap(edge_id: number, v: number): void;
     set_box_model(json: string): void;
     /**
      * Set half_gap on the Facing::End edges of the chain (left/top side of gap).
@@ -264,6 +331,7 @@ export class PhotobookEditor {
     set_chain_half_gap_b(edge_id: number, v: number): void;
     set_current_spread(spread_idx: number): void;
     set_endpapers(enabled: boolean): void;
+    set_export_settings(crop_marks: boolean, split_cover: boolean, body_pages: boolean, cover_pages: boolean, cover_wrap_mm: number): void;
     set_face_box_model(json: string): void;
     set_face_box_model_field(face_id: number, field: string, value: number): void;
     set_face_frame_rotation(face_id: number, rotation_deg: number): void;
@@ -271,15 +339,30 @@ export class PhotobookEditor {
     set_image_transform(node_id: number, pan_x: number, pan_y: number, scale: number, rotation_deg: number, flip_h: boolean, flip_v: boolean): void;
     set_mouse_pos(x: number, y: number): void;
     set_node_margin(top: number, right: number, bottom: number, left: number): void;
-    set_page_settings(width_mm: number, height_mm: number, bleed_mm: number, safe_zone_mm: number, spine_mm_per_page: number, spine_min_mm: number, margin_step_mm: number, print_dpi: number): void;
+    /**
+     * Store the page-count rules of the selected print-shop spec
+     * (0 disables a rule) and append blank spreads until the document
+     * satisfies the minimum and multiple.
+     */
+    set_page_count_rules(min_pages: number, max_pages: number, multiple_of: number): void;
+    set_page_settings(width_mm: number, height_mm: number, bleed_mm: number, safe_zone_mm: number, spine_mm_per_page: number, spine_min_mm: number, print_dpi: number): void;
+    set_print_spec_id(id: string): void;
     /**
      * Set half_gap on the Facing::End (left/top) side of all selected chains.
      */
     set_selected_segment_half_gap_a(v: number): void;
     /**
+     * Set half_gap on the Facing::End side of selected chains with the given orientation ("h"/"v").
+     */
+    set_selected_segment_half_gap_a_axis(axis: string, v: number): void;
+    /**
      * Set half_gap on the Facing::Start (right/bottom) side of all selected chains.
      */
     set_selected_segment_half_gap_b(v: number): void;
+    /**
+     * Set half_gap on the Facing::Start side of selected chains with the given orientation ("h"/"v").
+     */
+    set_selected_segment_half_gap_b_axis(axis: string, v: number): void;
     /**
      * Set half_gap on all inner edges of the current selection.
      * `json` = `{h?: number|null, v?: number|null}`.
@@ -299,6 +382,20 @@ export class PhotobookEditor {
      * gap wraps cleanly around the corner without gaps or overlaps.
      */
     set_selection_outer_margins(json: string): void;
+    /**
+     * Apply outer margins, keeping perimeter-connected divider chains aligned
+     * at concave corners. Other internal dividers retain their relative position
+     * within the margin-inset content area.  The mapping is from the *original* content area
+     * (defined by `original_margins_json`, captured before the first drag
+     * update) to the new content area (defined by `margins_json`), so that
+     * inner edges are stationary when the margins haven't actually changed.
+     *
+     * `original_offsets_json` is the verbatim output of `get_inner_edge_offsets`
+     * captured before the first margin was applied for this tool activation.
+     * `original_margins_json` is the verbatim output of `get_selection_outer_margins`
+     * captured at the same moment.
+     */
+    set_selection_outer_margins_and_adjust(margins_json: string, original_offsets_json: string, original_margins_json: string): void;
     set_snap_disabled(disabled: boolean): void;
     set_spread_left_bg(color: string): void;
     set_spread_right_bg(color: string): void;
@@ -337,8 +434,7 @@ export class PhotobookEditor {
      */
     toggle_selection(id: number): void;
     undo(): boolean;
-    update_divider_drag(mouse_x: number, mouse_y: number, canvas_w: number, canvas_h: number): void;
-    update_edge_panel_drag(mouse_x: number, mouse_y: number, canvas_w: number, canvas_h: number): void;
+    update_divider_drag(mouse_x: number, mouse_y: number, canvas_w: number, canvas_h: number, shift: boolean): void;
     /**
      * Update the live spawn preview with the current mouse position (normalised).
      */
@@ -364,16 +460,15 @@ export interface InitOutput {
     readonly __wbg_photobookeditor_free: (a: number, b: number) => void;
     readonly compute_image_cover: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number];
     readonly init_panic_hook: () => void;
-    readonly photobookeditor_add_page: (a: number) => void;
+    readonly photobookeditor_add_page: (a: number) => number;
     readonly photobookeditor_add_text_element: (a: number, b: number, c: number) => number;
     readonly photobookeditor_assign_image: (a: number, b: number, c: number, d: number) => void;
     readonly photobookeditor_begin_divider_drag: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly photobookeditor_begin_edge_panel_drag: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
     readonly photobookeditor_begin_pinwheel_spawn: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly photobookeditor_can_delete_segment: (a: number, b: number) => number;
     readonly photobookeditor_can_redo: (a: number) => number;
+    readonly photobookeditor_can_remove_page: (a: number, b: number) => number;
     readonly photobookeditor_can_undo: (a: number) => number;
-    readonly photobookeditor_cancel_edge_panel_drag: (a: number) => void;
     readonly photobookeditor_cancel_pinwheel_spawn: (a: number) => void;
     readonly photobookeditor_clear_selection_gaps: (a: number) => void;
     readonly photobookeditor_delete_segment: (a: number, b: number) => number;
@@ -382,14 +477,14 @@ export interface InitOutput {
     readonly photobookeditor_delete_text_element: (a: number, b: number) => void;
     readonly photobookeditor_distribute_selection_h: (a: number) => void;
     readonly photobookeditor_distribute_selection_v: (a: number) => void;
-    readonly photobookeditor_end_divider_drag: (a: number, b: number, c: number) => void;
-    readonly photobookeditor_end_edge_panel_drag: (a: number) => void;
+    readonly photobookeditor_end_divider_drag: (a: number, b: number, c: number, d: number) => void;
     readonly photobookeditor_end_pinwheel_spawn: (a: number) => void;
     readonly photobookeditor_export_pdf: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly photobookeditor_flip_selection_h: (a: number) => void;
     readonly photobookeditor_flip_selection_v: (a: number) => void;
     readonly photobookeditor_get_all_selected: (a: number) => [number, number];
     readonly photobookeditor_get_bleed_mm: (a: number) => number;
+    readonly photobookeditor_get_boundary_chain_gap: (a: number, b: number) => [number, number];
     readonly photobookeditor_get_box_model: (a: number) => [number, number];
     readonly photobookeditor_get_chain_half_gaps: (a: number, b: number) => [number, number];
     readonly photobookeditor_get_current_spread_index: (a: number) => number;
@@ -399,13 +494,16 @@ export interface InitOutput {
     readonly photobookeditor_get_dividers: (a: number, b: number, c: number) => [number, number];
     readonly photobookeditor_get_edge_pair_half_gaps: (a: number, b: number) => [number, number];
     readonly photobookeditor_get_endpapers: (a: number) => number;
+    readonly photobookeditor_get_export_settings: (a: number) => [number, number];
     readonly photobookeditor_get_face_z_index: (a: number, b: number) => number;
     readonly photobookeditor_get_frame_transform: (a: number, b: number) => [number, number];
+    readonly photobookeditor_get_inner_edge_offsets: (a: number) => [number, number];
     readonly photobookeditor_get_low_dpi_frames: (a: number, b: number, c: number) => [number, number];
-    readonly photobookeditor_get_margin_step_mm: (a: number) => number;
     readonly photobookeditor_get_page_size_mm: (a: number) => [number, number];
     readonly photobookeditor_get_pinwheel_centers: (a: number) => [number, number];
+    readonly photobookeditor_get_preflight_report: (a: number, b: number, c: number) => [number, number];
     readonly photobookeditor_get_print_dpi: (a: number) => number;
+    readonly photobookeditor_get_print_spec_id: (a: number) => [number, number];
     readonly photobookeditor_get_render_list: (a: number, b: number, c: number) => [number, number];
     readonly photobookeditor_get_resolved_spread_delta: (a: number, b: number, c: number) => [number, number];
     readonly photobookeditor_get_safe_zone_mm: (a: number) => number;
@@ -432,6 +530,7 @@ export interface InitOutput {
     readonly photobookeditor_hovered_divider: (a: number, b: number, c: number) => number;
     readonly photobookeditor_is_segment_selected: (a: number, b: number) => number;
     readonly photobookeditor_is_selected: (a: number, b: number) => number;
+    readonly photobookeditor_is_selected_segment_boundary: (a: number) => number;
     readonly photobookeditor_load_state: (a: number, b: number, c: number) => number;
     readonly photobookeditor_move_face_z_order: (a: number, b: number, c: number, d: number) => void;
     readonly photobookeditor_move_spread: (a: number, b: number, c: number) => void;
@@ -439,14 +538,16 @@ export interface InitOutput {
     readonly photobookeditor_navigate: (a: number, b: number, c: number) => void;
     readonly photobookeditor_new: (a: number, b: number, c: number) => number;
     readonly photobookeditor_pdf_export_begin: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly photobookeditor_pdf_export_begin_target: (a: number, b: number, c: number) => number;
     readonly photobookeditor_pdf_export_begin_v2: (a: number) => number;
     readonly photobookeditor_pdf_export_finish: (a: number) => [number, number];
     readonly photobookeditor_pdf_export_spread: (a: number) => [number, number];
     readonly photobookeditor_pdf_stage_font: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly photobookeditor_pdf_stage_image: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly photobookeditor_randomize_inner_gaps: (a: number, b: number, c: number) => void;
     readonly photobookeditor_redo: (a: number) => number;
     readonly photobookeditor_register_image_size: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly photobookeditor_remove_page: (a: number, b: number) => void;
+    readonly photobookeditor_remove_page: (a: number, b: number) => number;
     readonly photobookeditor_reset_undo: (a: number) => void;
     readonly photobookeditor_rotate_selection_ccw: (a: number) => void;
     readonly photobookeditor_rotate_selection_cw: (a: number) => void;
@@ -456,12 +557,16 @@ export interface InitOutput {
     readonly photobookeditor_select_face: (a: number, b: number) => void;
     readonly photobookeditor_select_faces_in_rect: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly photobookeditor_select_segment: (a: number, b: number) => void;
+    readonly photobookeditor_selection_has_transformations: (a: number) => number;
     readonly photobookeditor_selection_is_rectangular: (a: number) => number;
+    readonly photobookeditor_set_bleed_visible: (a: number, b: number) => void;
+    readonly photobookeditor_set_boundary_chain_gap: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_box_model: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_chain_half_gap_a: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_chain_half_gap_b: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_current_spread: (a: number, b: number) => void;
     readonly photobookeditor_set_endpapers: (a: number, b: number) => void;
+    readonly photobookeditor_set_export_settings: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly photobookeditor_set_face_box_model: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_face_box_model_field: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly photobookeditor_set_face_frame_rotation: (a: number, b: number, c: number) => void;
@@ -469,11 +574,16 @@ export interface InitOutput {
     readonly photobookeditor_set_image_transform: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly photobookeditor_set_mouse_pos: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_node_margin: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly photobookeditor_set_page_settings: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly photobookeditor_set_page_count_rules: (a: number, b: number, c: number, d: number) => void;
+    readonly photobookeditor_set_page_settings: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly photobookeditor_set_print_spec_id: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_selected_segment_half_gap_a: (a: number, b: number) => void;
+    readonly photobookeditor_set_selected_segment_half_gap_a_axis: (a: number, b: number, c: number, d: number) => void;
     readonly photobookeditor_set_selected_segment_half_gap_b: (a: number, b: number) => void;
+    readonly photobookeditor_set_selected_segment_half_gap_b_axis: (a: number, b: number, c: number, d: number) => void;
     readonly photobookeditor_set_selection_inner_gaps: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_selection_outer_margins: (a: number, b: number, c: number) => void;
+    readonly photobookeditor_set_selection_outer_margins_and_adjust: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly photobookeditor_set_snap_disabled: (a: number, b: number) => void;
     readonly photobookeditor_set_spread_left_bg: (a: number, b: number, c: number) => void;
     readonly photobookeditor_set_spread_right_bg: (a: number, b: number, c: number) => void;
@@ -490,8 +600,7 @@ export interface InitOutput {
     readonly photobookeditor_toggle_segment: (a: number, b: number) => void;
     readonly photobookeditor_toggle_selection: (a: number, b: number) => void;
     readonly photobookeditor_undo: (a: number) => number;
-    readonly photobookeditor_update_divider_drag: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly photobookeditor_update_edge_panel_drag: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly photobookeditor_update_divider_drag: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly photobookeditor_update_pinwheel_spawn: (a: number, b: number, c: number) => void;
     readonly photobookeditor_update_text_element: (a: number, b: number, c: number) => void;
     readonly wasm_test_list: () => [number, number];

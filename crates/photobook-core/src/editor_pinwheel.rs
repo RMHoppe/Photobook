@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use crate::grid_layout::{EdgeId, FaceId, GridLayout, Orientation, EPS, MIN_FRAC};
+use crate::grid_layout::{EdgeId, FaceId, GridLayout, Orientation, Facing, EPS, MIN_FRAC};
 use crate::page::Spread;
 use crate::PhotobookEditor;
 
@@ -194,13 +194,32 @@ impl PhotobookEditor {
             (cx2, cx1, cy1, cy2)
         };
 
-        // Capture chain half-gaps before moving edges.
-        let v_gap = v_upper.first().or(v_lower.first())
-            .and_then(|eid| layout.edges.get(eid))
-            .map_or(0.0, |e| e.half_gap);
-        let h_gap = h_left.first().or(h_right.first())
-            .and_then(|eid| layout.edges.get(eid))
-            .map_or(0.0, |e| e.half_gap);
+        // Each new side replaces one particular side at the junction. Copy
+        // that side's inset, not an arbitrary edge from the whole axis: opposite
+        // sides may have different (even negative) half-gaps after outer margins.
+        // Choose the segment nearest the junction to also handle longer chains
+        // with T-junctions and different gaps further along the arm.
+        let side_gap = |chain: &[EdgeId], facing: Facing, junction: f32| -> f32 {
+            chain.iter().filter_map(|eid| {
+                let edge = layout.edges.get(eid)?;
+                if edge.facing != facing { return None; }
+                let (lo, hi) = layout.edge_extent(*eid)?;
+                let distance = (lo - junction).abs().min((hi - junction).abs());
+                Some((distance, *eid, edge.half_gap))
+            }).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+                .map_or(0.0, |(_, _, gap)| gap)
+        };
+        let (left_gap, right_gap, top_gap, bottom_gap) = if cw {
+            (side_gap(&v_upper, Facing::Start, hy),
+             side_gap(&v_lower, Facing::End, hy),
+             side_gap(&h_right, Facing::Start, vx),
+             side_gap(&h_left, Facing::End, vx))
+        } else {
+            (side_gap(&v_lower, Facing::Start, hy),
+             side_gap(&v_upper, Facing::End, hy),
+             side_gap(&h_left, Facing::Start, vx),
+             side_gap(&h_right, Facing::End, vx))
+        };
 
         for eid in v_upper { if let Some(e) = layout.edges.get_mut(&eid) { e.offset = vu_off; } }
         for eid in v_lower { if let Some(e) = layout.edges.get_mut(&eid) { e.offset = vl_off; } }
@@ -214,12 +233,115 @@ impl PhotobookEditor {
             (f.left_edge_id, f.right_edge_id, f.top_edge_id, f.bottom_edge_id)
         });
         if let Some((l, r, t, b)) = center_edges {
-            layout.set_half_gap(l, v_gap);
-            layout.set_half_gap(r, v_gap);
-            layout.set_half_gap(t, h_gap);
-            layout.set_half_gap(b, h_gap);
+            layout.set_half_gap(l, left_gap);
+            layout.set_half_gap(r, right_gap);
+            layout.set_half_gap(t, top_gap);
+            layout.set_half_gap(b, bottom_gap);
         }
 
         spread.pinwheel_centers.push(center_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid_resolver::resolve_frames_mm;
+    use crate::layout::Rect;
+
+    fn ring(gap: f32, margins: &str) -> PhotobookEditor {
+        let mut ed = PhotobookEditor::new(200.0, 200.0, 0.0);
+        ed.doc.current_spread_mut().kind = crate::page::SpreadKind::CoverFront;
+        ed.doc.current_spread_mut().layout = GridLayout::new();
+        let id = *ed.doc.current_spread().layout.faces.keys().next().unwrap();
+        assert!(ed.split_face_into_n(id, "h", 3));
+        let rows: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied().collect();
+        for id in rows { assert!(ed.split_face_into_n(id, "v", 3)); }
+        let layout = &mut ed.doc.current_spread_mut().layout;
+        for edge in layout.edges.values_mut().filter(|e| !e.is_boundary) {
+            edge.half_gap = gap / 2.0;
+        }
+        let center = layout.face_at(0.5, 0.5).unwrap();
+        ed.select_all();
+        ed.toggle_selection(center);
+        let offsets = ed.get_inner_edge_offsets();
+        let original = ed.get_selection_outer_margins();
+        ed.set_selection_outer_margins_and_adjust(margins, &offsets, &original);
+        ed
+    }
+
+    fn rectangles(ed: &PhotobookEditor) -> std::collections::HashMap<FaceId, Rect> {
+        resolve_frames_mm(&ed.doc.current_spread().layout, 200.0, 200.0, 0.0)
+            .into_iter().collect()
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < 0.002, "expected {expected}, got {actual}");
+    }
+
+    #[test]
+    fn pinwheel_after_ring_margins_preserves_each_junction_gap() {
+        for gap in [0.0, 4.0] {
+            for margins in [r#"{"top":10,"right":10,"bottom":10,"left":10}"#,
+                            r#"{"top":3,"right":7,"bottom":11,"left":5}"#] {
+                for corner in 0..4 {
+                    for cw in [true, false] {
+                        let mut ed = ring(gap, margins);
+                        let mut junctions = ed.doc.current_spread().layout.find_xjunctions();
+                        junctions.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.total_cmp(&b.0)));
+                        let (x, y, tl, tr, bl, br) = junctions[corner];
+                        let before = rectangles(&ed);
+                        let (a, b, c, d) = (before[&tl], before[&tr], before[&bl], before[&br]);
+                        // The visible gaps of the four original arms, measured
+                        // independently of the half-gap inheritance implementation.
+                        let upper = b.x - (a.x + a.w);
+                        let lower = d.x - (c.x + c.w);
+                        let left = c.y - (a.y + a.h);
+                        let right = d.y - (b.y + b.h);
+                        ed.begin_pinwheel_spawn(tl, tr, bl, br, x, y);
+                        ed.update_pinwheel_spawn(x + 0.075, y + if cw { -0.075 } else { 0.075 });
+                        ed.end_pinwheel_spawn();
+                        let after = rectangles(&ed);
+                        assert_eq!(after.len(), 10);
+                        let new = after[&ed.doc.current_spread().pinwheel_centers[0]];
+                        let (a, b, c, d) = (after[&tl], after[&tr], after[&bl], after[&br]);
+                        let (actual, expected) = if cw {
+                            ([new.x - (a.x+a.w), d.x - (new.x+new.w),
+                              new.y - (b.y+b.h), c.y - (new.y+new.h)],
+                             [upper, lower, right, left])
+                        } else {
+                            ([new.x - (c.x+c.w), b.x - (new.x+new.w),
+                              new.y - (a.y+a.h), d.y - (new.y+new.h)],
+                             [lower, upper, left, right])
+                        };
+                        for (a, e) in actual.into_iter().zip(expected) { assert_close(a, e); }
+                        for (&id, a) in &after {
+                            assert!(a.w > 0.0 && a.h > 0.0);
+                            for (&other, b) in &after {
+                                if id >= other { continue; }
+                                let overlap_w = ((a.x+a.w).min(b.x+b.w) - a.x.max(b.x)).max(0.0);
+                                let overlap_h = ((a.y+a.h).min(b.y+b.h) - a.y.max(b.y)).max(0.0);
+                                assert!(overlap_w * overlap_h < 0.01, "panels {id}/{other} overlap");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pinwheel_preview_after_margins_is_repeatable_and_cancellable() {
+        let mut ed = ring(4.0, r#"{"top":3,"right":7,"bottom":11,"left":5}"#);
+        let original: serde_json::Value = serde_json::from_str(&ed.save_state()).unwrap();
+        let (x, y, tl, tr, bl, br) = ed.doc.current_spread().layout.find_xjunctions()[0];
+        ed.begin_pinwheel_spawn(tl, tr, bl, br, x, y);
+        ed.update_pinwheel_spawn(x + 0.075, y - 0.075);
+        let direct: serde_json::Value = serde_json::from_str(&ed.save_state()).unwrap();
+        ed.update_pinwheel_spawn(x + 0.09, y + 0.09);
+        ed.update_pinwheel_spawn(x + 0.075, y - 0.075);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&ed.save_state()).unwrap(), direct);
+        ed.cancel_pinwheel_spawn();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&ed.save_state()).unwrap(), original);
     }
 }

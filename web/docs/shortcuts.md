@@ -35,6 +35,7 @@
 |----------|--------|
 | `K` | Toggle cut (frame splitting) tool |
 | `T` | Enter text placement mode |
+| `Alt` (hold) | Temporarily enable swap mode — drag from one frame to another to swap images |
 
 ## Selection
 
@@ -50,7 +51,7 @@
 
 | Modifier | Effect |
 |----------|--------|
-| `Alt` (during divider drag or cut tool) | Disable snapping — position freely |
+| `Alt` (during divider drag, cut tool, or text drag) | Disable snapping — position freely |
 
 ## Image adjustments (on canvas)
 

@@ -1,5 +1,5 @@
 use crate::layout::{Rect, ResolvedDivider, ResolvedFrame, SplitAxis};
-use crate::grid_layout::{EdgeId, FaceId, OUTER_FACE};
+use crate::grid_layout::{EdgeId, FaceId, PropDragState, OUTER_FACE};
 
 const DIVIDER_HIT_RADIUS: f32 = 6.0;
 
@@ -67,4 +67,8 @@ pub struct DragState {
     pub axis: SplitAxis,
     /// All edges in the same collinear chain as `edge_id` (for chain-move).
     pub chain: Vec<EdgeId>,
+    /// Normalized offset of the chain before the drag began (snap-back target).
+    pub initial_offset: f32,
+    /// When shift was held at drag-start, proportional scaling state.
+    pub prop: Option<PropDragState>,
 }

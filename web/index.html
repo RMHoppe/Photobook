@@ -39,6 +39,40 @@
     </div>
   </div>
 
+  <div id="start-screen" hidden>
+    <div class="start-inner">
+      <h1 class="start-title">Photobook</h1>
+      <p class="start-subtitle">Design print-ready photo books in your browser.</p>
+      <div class="start-cards">
+        <div class="start-card">
+          <i class="ti ti-file-plus start-icon" aria-hidden="true"></i>
+          <h2>New book</h2>
+          <label class="start-field">Print shop
+            <select id="start-shop"></select>
+          </label>
+          <label class="start-field" id="start-format-field">Page format
+            <select id="start-format"></select>
+          </label>
+          <button id="start-new" class="btn-confirm">Create</button>
+        </div>
+        <div class="start-card">
+          <i class="ti ti-folder-open start-icon" aria-hidden="true"></i>
+          <h2>Open project</h2>
+          <p class="start-card-text">Continue from a saved <code>.photobook</code> file.</p>
+          <button id="start-load">Open file…</button>
+        </div>
+        <div class="start-card" id="start-restore-card" hidden>
+          <i class="ti ti-history start-icon" aria-hidden="true"></i>
+          <h2>Restore session</h2>
+          <p class="start-card-text" id="start-restore-info"></p>
+          <button id="start-restore" class="btn-confirm">Restore</button>
+          <button id="start-restore-discard" class="start-link">Discard</button>
+        </div>
+      </div>
+      <p class="start-privacy"><i class="ti ti-lock" aria-hidden="true"></i> Everything stays on your computer — nothing is uploaded.</p>
+    </div>
+  </div>
+
   <div id="app">
     <header id="toolbar">
       <span class="app-title">Photobook</span>
@@ -46,6 +80,7 @@
         <button id="btn-open-project" title="Open project file">Load</button>
         <button id="btn-save-project" title="Save project file">Save</button>
         <button id="btn-export-pdf" title="Export PDF">Export PDF</button>
+        <button id="btn-order-book" title="Select a print-on-demand preset in Project Settings to order" disabled>Order Book</button>
         <div id="export-progress" class="export-progress" hidden>
           <div class="export-progress-bar"></div>
         </div>
@@ -70,6 +105,8 @@
           <i class="ti ti-folder-open"></i>
           <p>Click <strong>Open Folder</strong> to browse photos</p>
           <p class="empty-hint">or load a saved project file</p>
+          <button id="btn-reopen-folder" hidden></button>
+          <p class="privacy-hint"><i class="ti ti-lock"></i> Your photos stay on your computer — nothing is uploaded.</p>
         </div>
         <div id="image-grid-scroll">
           <div id="image-grid"></div>
@@ -81,6 +118,7 @@
         <div class="canvas-banners">
           <div id="missing-images-banner" class="missing-images-banner" hidden>
             <span id="missing-images-text"></span>
+            <button id="btn-reopen-folder-banner" hidden></button>
             <button id="btn-open-folder-banner">Open image folder</button>
             <button id="btn-dismiss-banner" class="banner-dismiss" title="Dismiss"><i class="ti ti-x"></i></button>
           </div>
@@ -98,20 +136,22 @@
             <button id="btn-cut-tool" title="Cut tool (K)"><i class="ti ti-cut" aria-hidden="true"></i></button>
             <button id="btn-swap-tool" title="Swap images (Alt+drag)"><i class="ti ti-replace" aria-hidden="true"></i></button>
             <div class="canvas-tools-sep"></div>
-            <button id="btn-flip-h"     disabled title="Mirror left / right"><i class="ti ti-flip-vertical" aria-hidden="true"></i></button>
-            <button id="btn-flip-v"     disabled title="Mirror top / bottom"><i class="ti ti-flip-horizontal" aria-hidden="true"></i></button>
+            <button id="btn-flip-h"     disabled title="Mirror left / right"><i class="ti ti-flip-horizontal" aria-hidden="true"></i></button>
+            <button id="btn-flip-v"     disabled title="Mirror top / bottom"><i class="ti ti-flip-vertical" aria-hidden="true"></i></button>
             <button id="btn-rotate-cw"  disabled title="Rotate 90° clockwise"><i class="ti ti-rotate-clockwise" aria-hidden="true"></i></button>
             <button id="btn-rotate-ccw" disabled title="Rotate 90° counter-clockwise"><i class="ti ti-rotate" aria-hidden="true"></i></button>
             <div class="canvas-tools-sep"></div>
             <button id="btn-distribute-v" disabled title="Distribute frames vertically"><i class="ti ti-layout-distribute-horizontal" aria-hidden="true"></i></button>
             <button id="btn-distribute-h" disabled title="Distribute frames horizontally"><i class="ti ti-layout-distribute-vertical" aria-hidden="true"></i></button>
             <div class="canvas-tools-sep"></div>
+            <button id="btn-clear-gaps" disabled title="Clear all transformations"><i class="ti ti-eraser" aria-hidden="true"></i></button>
             <button id="btn-outer-margin" disabled title="Set outer frame margins"><i class="ti ti-border-outer" aria-hidden="true"></i></button>
             <button id="btn-inner-gap" disabled title="Set inner frame gaps"><i class="ti ti-border-inner" aria-hidden="true"></i></button>
-            <button id="btn-clear-gaps" disabled title="Clear all frame gaps"><i class="ti ti-border-none" aria-hidden="true"></i></button>
+            <button id="btn-randomize-layout" disabled title="Randomize gaps, rotations and layer order"><i class="ti ti-dice-5" aria-hidden="true"></i></button>
           </div>
-          <div id="outer-margin-dialog" class="outer-margin-dialog" hidden></div>
-          <div id="inner-gap-dialog" class="inner-gap-dialog" hidden></div>
+          <div id="outer-margin-dialog" class="tool-dialog outer-margin-dialog" hidden></div>
+          <div id="inner-gap-dialog" class="tool-dialog inner-gap-dialog" hidden></div>
+          <div id="randomize-layout-dialog" class="tool-dialog randomize-layout-dialog" hidden></div>
           <div id="zoom-controls">
             <button id="btn-zoom-out" title="Zoom out (Ctrl+-)">−</button>
             <span id="zoom-label">100%</span>

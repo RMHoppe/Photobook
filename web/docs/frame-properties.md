@@ -9,6 +9,10 @@ Select one or more frames to show the styling controls in the right sidebar. The
 - [Corner radius](#corner-radius)
 - [Layer order (z-order)](#layer-order-z-order)
 - [Transforms](#transforms)
+- [Distributing frames](#distributing-frames)
+- [Outer margins tool](#outer-margins-tool)
+- [Inner gaps tool](#inner-gaps-tool)
+- [Clearing all gaps](#clearing-all-gaps)
 - [Randomizing values](#randomizing-values)
 
 ## Margins
@@ -57,7 +61,18 @@ The current layer number is shown (e.g., "Layer 3").
 
 ## Transforms
 
-When two or more frames are selected in a rectangular arrangement, transform buttons appear:
+The flip and rotate buttons in the canvas toolbar become active in two situations:
+
+**Single frame with an image selected** — the operations act on the *image within the frame*:
+
+| Button | Action |
+|--------|--------|
+| Flip Horizontal | Mirror the image left–right |
+| Flip Vertical | Mirror the image top–bottom |
+| Rotate CW | Rotate the image 90° clockwise inside the frame |
+| Rotate CCW | Rotate the image 90° counter-clockwise inside the frame |
+
+**Two or more frames selected in a rectangular arrangement** — the operations rearrange the *frames themselves*:
 
 | Button | Action |
 |--------|--------|
@@ -66,7 +81,45 @@ When two or more frames are selected in a rectangular arrangement, transform but
 | Rotate CW | Rotate the arrangement 90° clockwise |
 | Rotate CCW | Rotate the arrangement 90° counter-clockwise |
 
-These operations rearrange the images within the selected frames — they do not move the frames themselves.
+## Distributing frames
+
+Select two or more frames that form a rectangular arrangement. The **Distribute** buttons in the canvas toolbar become active:
+
+| Button | Action |
+|--------|--------|
+| Distribute Vertically | Space the frames evenly along the vertical axis |
+| Distribute Horizontally | Space the frames evenly along the horizontal axis |
+
+The outermost frames in the selection stay in place; the frames between them are redistributed to equal spacing.
+
+## Outer margins tool
+
+Select one or more frames and click the **Outer Margins** button (border-outer icon) in the canvas toolbar. A floating dialog appears next to the canvas.
+
+Enter a value in mm to apply a uniform inset margin to all selected frames at once. The three mode buttons control which sides are linked:
+
+| Mode | Behaviour |
+|------|-----------|
+| All | One value for all four sides |
+| X / Y | Horizontal and vertical pairs set separately |
+| Each | All four sides set independently |
+
+The dialog stays open while you continue working. Click the button again or deselect all frames to close it.
+
+## Inner gaps tool
+
+Select two or more frames and click the **Inner Gaps** button (border-inner icon). A floating dialog lets you set the gap between all shared edges within the selection, in mm:
+
+| Mode | Behaviour |
+|------|-----------|
+| All | Same gap for horizontal and vertical dividers |
+| H / V | Horizontal and vertical gaps set separately |
+
+The dialog stays open while you work. Click the button again or reduce the selection to fewer than two frames to close it.
+
+## Clearing all gaps
+
+Select one or more frames and click the **Clear Gaps** button (border-none icon) to reset all outer margins and inner gaps on those frames to zero in one step.
 
 ## Randomizing values
 
