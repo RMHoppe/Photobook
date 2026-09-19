@@ -16,6 +16,7 @@ mod editor_text_ops;
 mod editor_spread_settings;
 mod editor_pinwheel;
 mod editor_preflight;
+mod editor_clipboard;
 pub(crate) mod editor_tests;
 
 #[cfg(feature = "wasm-test")]

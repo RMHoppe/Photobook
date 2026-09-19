@@ -119,6 +119,86 @@ pub struct GridFace {
     pub z_index: i32,
 }
 
+/// A clipboard-safe frame inside a rectangular layout patch. Geometry is
+/// normalised to the patch outline, not to the spread.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct LayoutPatchFrame {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub image: ImageContent,
+    pub box_model: BoxModel,
+    /// Relative to the lowest z-index in the copied selection.
+    pub z_offset: i32,
+    /// top, right, bottom, left — stored in millimetres.
+    pub half_gaps: [f32; 4],
+    pub is_pinwheel_center: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct LayoutPatch {
+    pub version: u32,
+    pub frames: Vec<LayoutPatchFrame>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SelectionBounds {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+pub(crate) struct LayoutReplacement {
+    pub face_ids: Vec<FaceId>,
+    pub pinwheel_centers: Vec<FaceId>,
+}
+
+fn sorted_unique(mut values: Vec<f32>) -> Vec<f32> {
+    values.sort_by(|a, b| a.total_cmp(b));
+    values.dedup_by(|a, b| (*a - *b).abs() < EPS);
+    values
+}
+
+/// Check exact coverage by sampling every elementary cell induced by the
+/// rectangles' x/y coordinates. This catches holes, overlaps and disconnected
+/// selections without depending on accumulated floating-point area.
+fn rectangles_cover_bounds(
+    rects: &[(f32, f32, f32, f32)],
+    bounds: SelectionBounds,
+) -> bool {
+    if rects.is_empty() || bounds.right - bounds.left <= EPS || bounds.bottom - bounds.top <= EPS {
+        return false;
+    }
+    let mut xs = vec![bounds.left, bounds.right];
+    let mut ys = vec![bounds.top, bounds.bottom];
+    for &(left, top, right, bottom) in rects {
+        if left < bounds.left - EPS || top < bounds.top - EPS
+            || right > bounds.right + EPS || bottom > bounds.bottom + EPS
+        {
+            return false;
+        }
+        xs.extend([left, right]);
+        ys.extend([top, bottom]);
+    }
+    let xs = sorted_unique(xs);
+    let ys = sorted_unique(ys);
+    for x_pair in xs.windows(2) {
+        if x_pair[1] - x_pair[0] <= EPS { continue; }
+        let x = (x_pair[0] + x_pair[1]) * 0.5;
+        for y_pair in ys.windows(2) {
+            if y_pair[1] - y_pair[0] <= EPS { continue; }
+            let y = (y_pair[0] + y_pair[1]) * 0.5;
+            let covering = rects.iter().filter(|&&(left, top, right, bottom)| {
+                x > left - EPS && x < right + EPS && y > top - EPS && y < bottom + EPS
+            }).count();
+            if covering != 1 { return false; }
+        }
+    }
+    true
+}
+
 // ---------------------------------------------------------------------------
 // GridLayout
 // ---------------------------------------------------------------------------
@@ -188,6 +268,180 @@ impl GridLayout {
         let id = self.next_edge_id;
         self.next_edge_id += 1;
         id
+    }
+
+    /// Return the exact rectangular outline covered by `selection`.
+    /// Disconnected, L-shaped and holed selections are rejected.
+    pub(crate) fn rectangular_selection_bounds(
+        &self,
+        selection: &[FaceId],
+    ) -> Result<SelectionBounds, String> {
+        if selection.is_empty() {
+            return Err("Select one or more frames first.".into());
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut rects = Vec::with_capacity(selection.len());
+        for &id in selection {
+            if !seen.insert(id) { continue; }
+            let Some((x, y, w, h)) = self.face_rect(id) else {
+                return Err("The selection contains a frame that no longer exists.".into());
+            };
+            if w <= EPS || h <= EPS {
+                return Err("The selection contains an empty frame.".into());
+            }
+            rects.push((x, y, x + w, y + h));
+        }
+
+        let bounds = SelectionBounds {
+            left: rects.iter().map(|r| r.0).fold(f32::INFINITY, f32::min),
+            top: rects.iter().map(|r| r.1).fold(f32::INFINITY, f32::min),
+            right: rects.iter().map(|r| r.2).fold(f32::NEG_INFINITY, f32::max),
+            bottom: rects.iter().map(|r| r.3).fold(f32::NEG_INFINITY, f32::max),
+        };
+        if !rectangles_cover_bounds(&rects, bounds) {
+            return Err("The selected frames must form one complete rectangle.".into());
+        }
+        Ok(bounds)
+    }
+
+    pub(crate) fn make_layout_patch(
+        &self,
+        selection: &[FaceId],
+        pinwheel_centers: &[FaceId],
+    ) -> Result<LayoutPatch, String> {
+        let bounds = self.rectangular_selection_bounds(selection)?;
+        let width = bounds.right - bounds.left;
+        let height = bounds.bottom - bounds.top;
+        let min_z = selection.iter().filter_map(|id| self.faces.get(id))
+            .map(|f| f.z_index).min().unwrap_or(0);
+        let centers: std::collections::HashSet<FaceId> =
+            pinwheel_centers.iter().copied().collect();
+
+        let mut frames = Vec::with_capacity(selection.len());
+        for &id in selection {
+            let face = self.faces.get(&id)
+                .ok_or_else(|| "The selection contains a frame that no longer exists.".to_string())?;
+            let (x, y, w, h) = self.face_rect(id).unwrap();
+            let gap = |eid: EdgeId| self.edges.get(&eid).map(|e| e.half_gap).unwrap_or(0.0);
+            frames.push(LayoutPatchFrame {
+                left: (x - bounds.left) / width,
+                top: (y - bounds.top) / height,
+                right: (x + w - bounds.left) / width,
+                bottom: (y + h - bounds.top) / height,
+                image: face.image.clone(),
+                box_model: face.box_model.clone(),
+                z_offset: face.z_index - min_z,
+                half_gaps: [
+                    gap(face.top_edge_id), gap(face.right_edge_id),
+                    gap(face.bottom_edge_id), gap(face.left_edge_id),
+                ],
+                is_pinwheel_center: centers.contains(&id),
+            });
+        }
+        frames.sort_by(|a, b| {
+            a.top.total_cmp(&b.top).then_with(|| a.left.total_cmp(&b.left))
+        });
+        Ok(LayoutPatch { version: 1, frames })
+    }
+
+    pub(crate) fn validate_layout_patch(patch: &LayoutPatch) -> Result<(), String> {
+        if patch.version != 1 {
+            return Err("This copied layout uses an unsupported format.".into());
+        }
+        if patch.frames.is_empty() {
+            return Err("The copied layout is empty.".into());
+        }
+        let mut rects = Vec::with_capacity(patch.frames.len());
+        for frame in &patch.frames {
+            let values = [frame.left, frame.top, frame.right, frame.bottom];
+            if values.iter().any(|v| !v.is_finite())
+                || frame.left < -EPS || frame.top < -EPS
+                || frame.right > 1.0 + EPS || frame.bottom > 1.0 + EPS
+                || frame.right - frame.left <= EPS || frame.bottom - frame.top <= EPS
+            {
+                return Err("The copied layout contains invalid frame geometry.".into());
+            }
+            rects.push((frame.left, frame.top, frame.right, frame.bottom));
+        }
+        let unit = SelectionBounds { left: 0.0, top: 0.0, right: 1.0, bottom: 1.0 };
+        if !rectangles_cover_bounds(&rects, unit) {
+            return Err("The copied frames do not form one complete rectangle.".into());
+        }
+        Ok(())
+    }
+
+    /// Replace a rectangular selection without changing its outer outline.
+    pub(crate) fn replace_selection_with_patch(
+        &mut self,
+        selection: &[FaceId],
+        patch: &LayoutPatch,
+    ) -> Result<LayoutReplacement, String> {
+        Self::validate_layout_patch(patch)?;
+        let bounds = self.rectangular_selection_bounds(selection)?;
+        let target_base_z = selection.iter().filter_map(|id| self.faces.get(id))
+            .map(|f| f.z_index).min().unwrap_or(0);
+        let selected: std::collections::HashSet<FaceId> = selection.iter().copied().collect();
+
+        let removed: Vec<GridFace> = selected.iter()
+            .filter_map(|id| self.faces.remove(id)).collect();
+        for face in removed {
+            for eid in [face.top_edge_id, face.right_edge_id, face.bottom_edge_id, face.left_edge_id] {
+                self.edges.remove(&eid);
+            }
+        }
+
+        let width = bounds.right - bounds.left;
+        let height = bounds.bottom - bounds.top;
+        let mut face_ids = Vec::with_capacity(patch.frames.len());
+        let mut pinwheel_centers = Vec::new();
+
+        for source in &patch.frames {
+            let left = bounds.left + source.left * width;
+            let top = bounds.top + source.top * height;
+            let right = bounds.left + source.right * width;
+            let bottom = bounds.top + source.bottom * height;
+            let face_id = self.alloc_face();
+            let top_id = self.alloc_edge();
+            let right_id = self.alloc_edge();
+            let bottom_id = self.alloc_edge();
+            let left_id = self.alloc_edge();
+
+            self.edges.insert(top_id, Edge {
+                id: top_id, orientation: Orientation::Horizontal, offset: top,
+                facing: Facing::Start, half_gap: source.half_gaps[0], face_id,
+                is_boundary: top.abs() < EPS,
+            });
+            self.edges.insert(right_id, Edge {
+                id: right_id, orientation: Orientation::Vertical, offset: right,
+                facing: Facing::End, half_gap: source.half_gaps[1], face_id,
+                is_boundary: (right - 1.0).abs() < EPS,
+            });
+            self.edges.insert(bottom_id, Edge {
+                id: bottom_id, orientation: Orientation::Horizontal, offset: bottom,
+                facing: Facing::End, half_gap: source.half_gaps[2], face_id,
+                is_boundary: (bottom - 1.0).abs() < EPS,
+            });
+            self.edges.insert(left_id, Edge {
+                id: left_id, orientation: Orientation::Vertical, offset: left,
+                facing: Facing::Start, half_gap: source.half_gaps[3], face_id,
+                is_boundary: left.abs() < EPS,
+            });
+            self.faces.insert(face_id, GridFace {
+                id: face_id,
+                left_edge_id: left_id,
+                top_edge_id: top_id,
+                right_edge_id: right_id,
+                bottom_edge_id: bottom_id,
+                image: source.image.clone(),
+                box_model: source.box_model.clone(),
+                z_index: target_base_z.saturating_add(source.z_offset),
+            });
+            face_ids.push(face_id);
+            if source.is_pinwheel_center { pinwheel_centers.push(face_id); }
+        }
+
+        Ok(LayoutReplacement { face_ids, pinwheel_centers })
     }
 
     // -----------------------------------------------------------------------

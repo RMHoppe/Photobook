@@ -16,6 +16,7 @@ import type {
   MarginInsets,
   InnerGaps,
   BoundaryGap,
+  LayoutCopyResult,
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,18 @@ export function getFrameTransform(editor: PhotobookEditor, faceId: number): Fram
 
 export function getAllSelected(editor: PhotobookEditor): number[] {
   return JSON.parse(editor.get_all_selected()) as number[];
+}
+
+export function copySelectedLayout(editor: PhotobookEditor): LayoutCopyResult {
+  return JSON.parse(editor.copy_selected_layout()) as LayoutCopyResult;
+}
+
+export function getLayoutPasteError(editor: PhotobookEditor, clipboard: string): string {
+  return editor.get_layout_paste_error(clipboard);
+}
+
+export function pasteLayout(editor: PhotobookEditor, clipboard: string): boolean {
+  return editor.paste_layout(clipboard);
 }
 
 // ---------------------------------------------------------------------------

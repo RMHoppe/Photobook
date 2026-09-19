@@ -7,6 +7,7 @@ The canvas is divided into **frames** — the rectangular cells that hold images
 - [What is a frame?](#what-is-a-frame)
 - [Splitting frames with the Cut tool](#splitting-frames-with-the-cut-tool)
 - [Selecting frames](#selecting-frames)
+- [Copying and pasting layouts](#copying-and-pasting-layouts)
 - [Deleting frames](#deleting-frames)
 - [Working with dividers](#working-with-dividers)
 - [Dropping images to split](#dropping-images-to-split)
@@ -38,6 +39,20 @@ Press **K** (or click the **Cut** button in the toolbar) to activate the Cut too
 | Shift + Drag on empty canvas | Marquee — select all frames inside the rectangle |
 
 The right sidebar shows properties for the selected frame(s).
+
+## Copying and pasting layouts
+
+Select one or more frames and press **Ctrl/Cmd+C** to copy the complete layout,
+including its images, crops, styling, gaps, and relative divider positions.
+
+Select a target frame or frame region and press **Ctrl/Cmd+V**. The copied
+layout replaces everything inside the target outline while the outline itself
+stays fixed. This lets a multi-frame layout replace one frame, or one copied
+frame collapse a multi-frame target region.
+
+Both the copied selection and the target selection must form one complete
+rectangle, without holes or protruding frames. Incompatible selections are
+left unchanged.
 
 ## Deleting frames
 

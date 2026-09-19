@@ -124,6 +124,13 @@ export interface SpreadDelta {
   updated_frames: RenderFrame[] | null;
 }
 
+/** Result of capturing a rectangular frame selection for the in-app clipboard. */
+export interface LayoutCopyResult {
+  ok: boolean;
+  clipboard?: string;
+  error?: string;
+}
+
 /** DPI warning badge hit area (computed in canvas, not from WASM). */
 export interface DpiBadge {
   cx: number;

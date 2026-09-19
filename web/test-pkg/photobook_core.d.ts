@@ -47,6 +47,12 @@ export class PhotobookEditor {
      */
     clear_selection_gaps(): void;
     /**
+     * Capture the current rectangular frame selection as an opaque JSON
+     * clipboard payload. The outer response lets the UI report invalid
+     * selections without having to understand the payload format.
+     */
+    copy_selected_layout(): string;
+    /**
      * Delete an edge (twin pair) by ID. Returns true on success.
      */
     delete_segment(segment_id: number): boolean;
@@ -130,6 +136,12 @@ export class PhotobookEditor {
      * cumulative drift.
      */
     get_inner_edge_offsets(): string;
+    /**
+     * Empty means compatible; otherwise the returned text is suitable for a
+     * toast. Kept separate from paste so failed actions do not add no-op undo
+     * snapshots in the TypeScript undo manager.
+     */
+    get_layout_paste_error(clipboard: string): string;
     get_low_dpi_frames(canvas_w: number, canvas_h: number): string;
     get_page_size_mm(): string;
     /**
@@ -216,6 +228,11 @@ export class PhotobookEditor {
      */
     navigate(direction: string): void;
     constructor(page_width_mm: number, page_height_mm: number, bleed_mm: number);
+    /**
+     * Replace the selected rectangular region while preserving its outline.
+     * The caller must create the undo snapshot immediately before this call.
+     */
+    paste_layout(clipboard: string): boolean;
     /**
      * Phase 1 of the staged export. Decodes images/fonts and pre-allocates
      * one PDF page per spread. Returns the total spread count so the caller
@@ -471,6 +488,7 @@ export interface InitOutput {
     readonly photobookeditor_can_undo: (a: number) => number;
     readonly photobookeditor_cancel_pinwheel_spawn: (a: number) => void;
     readonly photobookeditor_clear_selection_gaps: (a: number) => void;
+    readonly photobookeditor_copy_selected_layout: (a: number) => [number, number];
     readonly photobookeditor_delete_segment: (a: number, b: number) => number;
     readonly photobookeditor_delete_selected: (a: number) => number;
     readonly photobookeditor_delete_selected_segment: (a: number) => number;
@@ -498,6 +516,7 @@ export interface InitOutput {
     readonly photobookeditor_get_face_z_index: (a: number, b: number) => number;
     readonly photobookeditor_get_frame_transform: (a: number, b: number) => [number, number];
     readonly photobookeditor_get_inner_edge_offsets: (a: number) => [number, number];
+    readonly photobookeditor_get_layout_paste_error: (a: number, b: number, c: number) => [number, number];
     readonly photobookeditor_get_low_dpi_frames: (a: number, b: number, c: number) => [number, number];
     readonly photobookeditor_get_page_size_mm: (a: number) => [number, number];
     readonly photobookeditor_get_pinwheel_centers: (a: number) => [number, number];
@@ -537,6 +556,7 @@ export interface InitOutput {
     readonly photobookeditor_move_text_element: (a: number, b: number, c: number, d: number) => void;
     readonly photobookeditor_navigate: (a: number, b: number, c: number) => void;
     readonly photobookeditor_new: (a: number, b: number, c: number) => number;
+    readonly photobookeditor_paste_layout: (a: number, b: number, c: number) => number;
     readonly photobookeditor_pdf_export_begin: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly photobookeditor_pdf_export_begin_target: (a: number, b: number, c: number) => number;
     readonly photobookeditor_pdf_export_begin_v2: (a: number) => number;

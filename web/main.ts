@@ -9,7 +9,7 @@ import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
 import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode, getSelectedTwinEdgeId, setSwapToolActive } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
-import { getSpreadInfo, getSpreadsInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getExportSettings, getPreflightReport, getUsedImageIds, splitFaceForMultiDrop, getRenderList, getFrameTransform, getSelectedSegmentHalfGaps, getEdgePairHalfGaps, setSelectedSegmentHalfGapAAxis, setSelectedSegmentHalfGapBAxis, setSelectionOuterMargins, setSelectionInnerGaps, clearSelectionGaps, selectionHasTransformations, getBoundaryChainGap, isSelectedSegmentBoundary, getInnerEdgeOffsets, setSelectionOuterMarginsAndAdjust, getSelectionOuterMargins} from './wasm-bridge.js';
+import { getSpreadInfo, getSpreadsInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getExportSettings, getPreflightReport, getUsedImageIds, splitFaceForMultiDrop, getRenderList, getFrameTransform, getSelectedSegmentHalfGaps, getEdgePairHalfGaps, setSelectedSegmentHalfGapAAxis, setSelectedSegmentHalfGapBAxis, setSelectionOuterMargins, setSelectionInnerGaps, clearSelectionGaps, selectionHasTransformations, getBoundaryChainGap, isSelectedSegmentBoundary, getInnerEdgeOffsets, setSelectionOuterMarginsAndAdjust, getSelectionOuterMargins, copySelectedLayout, getLayoutPasteError, pasteLayout} from './wasm-bridge.js';
 import type { Overlays, DropZone, Rect, PreflightIssue, MarginInsets } from './types.js';
 import { isSinglePageKind } from './types.js';
 import { getPrintShopSpec, PRINT_SHOP_SPECS, DEFAULT_PREFLIGHT_RULES } from './print-shop-specs.js';
@@ -822,6 +822,10 @@ const undoManager = new UndoManager(
   commit,
 );
 
+// Layout clipboard is deliberately app-local: image IDs refer to resources in
+// the currently open project and are not portable browser clipboard data.
+let layoutClipboard: string | null = null;
+
 
 // ---------------------------------------------------------------------------
 // Inline text editor
@@ -1343,6 +1347,35 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
     undoManager.redo(); commit(); e.preventDefault(); return;
   }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !e.shiftKey) {
+    const result = copySelectedLayout(editor);
+    if (result.ok && result.clipboard) {
+      layoutClipboard = result.clipboard;
+      showToast(`Copied ${editor.get_selection_count()} frame${editor.get_selection_count() === 1 ? '' : 's'}.`);
+    } else {
+      showToast(result.error ?? 'The selected frames cannot be copied.', 'error', 5000);
+    }
+    e.preventDefault(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && !e.shiftKey) {
+    if (!layoutClipboard) {
+      showToast('Copy a rectangular frame selection first.', 'info');
+      e.preventDefault(); return;
+    }
+    const error = getLayoutPasteError(editor, layoutClipboard);
+    if (error) {
+      showToast(`Cannot paste layout: ${error}`, 'error', 5000);
+      e.preventDefault(); return;
+    }
+    undoManager.snapshot();
+    if (pasteLayout(editor, layoutClipboard)) {
+      renderer.selectedTextIds.clear();
+      commit();
+    } else {
+      showToast('Cannot paste layout: the selected target is incompatible.', 'error');
+    }
+    e.preventDefault(); return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
     editor.select_all();
     renderer.selectedTextIds = new Set(getTextElements(editor).map(t => t.id));
@@ -1523,6 +1556,7 @@ document.getElementById('btn-open-project')!.addEventListener('click', () => { v
  *  modal, so a project whose images are still in place re-links itself. */
 async function afterProjectLoaded(reopenRecentFolder = false): Promise<void> {
   sidebar.clearLoadedImages(); // discard images from any previous project session
+  layoutClipboard = null;      // copied image IDs belong to the previous project
   undoManager.reset();
   refreshBoxModel();
   checkMissingFonts();

@@ -7,6 +7,8 @@
 | `Ctrl/Cmd+Z` | Undo |
 | `Ctrl/Cmd+Y` / `Ctrl/Cmd+Shift+Z` | Redo |
 | `Ctrl/Cmd+A` | Select all frames and text on current spread |
+| `Ctrl/Cmd+C` | Copy the selected rectangular frame region |
+| `Ctrl/Cmd+V` | Replace the selected rectangular frame region with the copied layout |
 | `Delete` / `Backspace` | Delete selected element(s) |
 | `Escape` | Deselect all / exit current tool / exit inline text edit |
 

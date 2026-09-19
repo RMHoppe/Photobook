@@ -35,7 +35,13 @@ pub(crate) mod test_impls {
         layout.edges.values()
             .find(|e| e.is_boundary)
             .map(|e| e.id)
-            .unwrap()
+        .unwrap()
+    }
+
+    fn copied_layout(ed: &PhotobookEditor) -> String {
+        let result: serde_json::Value = serde_json::from_str(&ed.copy_selected_layout()).unwrap();
+        assert_eq!(result["ok"].as_bool(), Some(true), "copy failed: {result}");
+        result["clipboard"].as_str().unwrap().to_string()
     }
 
     // -----------------------------------------------------------------------
@@ -368,6 +374,144 @@ pub(crate) mod test_impls {
     }
 
     // -----------------------------------------------------------------------
+    // Layout clipboard
+    // -----------------------------------------------------------------------
+
+    pub fn paste_multiframe_layout_into_single_frame() {
+        let mut ed = ed();
+        let source = first_face(&ed);
+        ed.split_face_at(source, "v", 0.3);
+        let mut source_faces: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied().collect();
+        source_faces.sort_by(|a, b| {
+            let ax = ed.doc.current_spread().layout.face_rect(*a).unwrap().0;
+            let bx = ed.doc.current_spread().layout.face_rect(*b).unwrap().0;
+            ax.total_cmp(&bx)
+        });
+        ed.assign_image(source_faces[0], "left.jpg");
+        ed.assign_image(source_faces[1], "right.jpg");
+        ed.select_all();
+        let clipboard = copied_layout(&ed);
+
+        ed.doc.current_spread_mut().layout = crate::grid_layout::GridLayout::new();
+        let target = first_face(&ed);
+        ed.select_face(target);
+        assert!(ed.get_layout_paste_error(&clipboard).is_empty());
+        assert!(ed.paste_layout(&clipboard));
+        assert_eq!(face_count(&ed), 2);
+        assert_eq!(ed.get_selection_count(), 2);
+
+        let layout = &ed.doc.current_spread().layout;
+        let mut frames: Vec<_> = layout.faces.values().map(|face| {
+            let rect = layout.face_rect(face.id).unwrap();
+            (rect.0, rect.2, face.image.image_id.clone())
+        }).collect();
+        frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert!((frames[0].1 - 0.3).abs() < 1e-4);
+        assert!((frames[1].1 - 0.7).abs() < 1e-4);
+        assert_eq!(frames[0].2.as_deref(), Some("left.jpg"));
+        assert_eq!(frames[1].2.as_deref(), Some("right.jpg"));
+    }
+
+    pub fn paste_single_frame_over_multiframe_region() {
+        let mut ed = ed();
+        let root = first_face(&ed);
+        ed.split_face_at(root, "v", 0.5);
+        let layout = &ed.doc.current_spread().layout;
+        let source = layout.faces.keys().copied()
+            .find(|id| layout.face_rect(*id).unwrap().0 < 0.25).unwrap();
+        let target = layout.faces.keys().copied()
+            .find(|id| layout.face_rect(*id).unwrap().0 > 0.25).unwrap();
+        ed.assign_image(source, "single.jpg");
+        ed.select_face(source);
+        let clipboard = copied_layout(&ed);
+
+        ed.split_face_at(target, "h", 0.4);
+        let target_faces: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied()
+            .filter(|id| ed.doc.current_spread().layout.face_rect(*id).unwrap().0 > 0.25)
+            .collect();
+        ed.select_face(target_faces[0]);
+        for &id in &target_faces[1..] { ed.toggle_selection(id); }
+        assert!(ed.paste_layout(&clipboard));
+        assert_eq!(face_count(&ed), 2);
+        let layout = &ed.doc.current_spread().layout;
+        let right = layout.faces.values()
+            .find(|face| layout.face_rect(face.id).unwrap().0 > 0.25).unwrap();
+        let rect = layout.face_rect(right.id).unwrap();
+        assert!((rect.0 - 0.5).abs() < 1e-4 && (rect.2 - 0.5).abs() < 1e-4);
+        assert_eq!(right.image.image_id.as_deref(), Some("single.jpg"));
+    }
+
+    pub fn paste_layout_preserves_target_outline_and_outside_frames() {
+        let mut ed = ed();
+        let root = first_face(&ed);
+        ed.split_face_at(root, "v", 0.5);
+        let layout = &ed.doc.current_spread().layout;
+        let left = layout.faces.keys().copied()
+            .find(|id| layout.face_rect(*id).unwrap().0 < 0.25).unwrap();
+        let right = layout.faces.keys().copied()
+            .find(|id| layout.face_rect(*id).unwrap().0 > 0.25).unwrap();
+        ed.split_face_at(left, "h", 0.4);
+        let left_faces: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied()
+            .filter(|id| ed.doc.current_spread().layout.face_rect(*id).unwrap().0 < 0.25)
+            .collect();
+        ed.select_face(left_faces[0]);
+        for &id in &left_faces[1..] { ed.toggle_selection(id); }
+        let clipboard = copied_layout(&ed);
+
+        ed.select_face(right);
+        assert!(ed.paste_layout(&clipboard));
+        assert_eq!(face_count(&ed), 4);
+        let layout = &ed.doc.current_spread().layout;
+        let mut right_rects: Vec<_> = layout.faces.keys().copied()
+            .filter_map(|id| {
+                let rect = layout.face_rect(id).unwrap();
+                (rect.0 > 0.25).then_some(rect)
+            }).collect();
+        right_rects.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(right_rects.len(), 2);
+        assert!(right_rects.iter().all(|r| (r.0 - 0.5).abs() < 1e-4 && (r.2 - 0.5).abs() < 1e-4));
+        assert!((right_rects[0].3 - 0.4).abs() < 1e-4);
+        assert!((right_rects[1].3 - 0.6).abs() < 1e-4);
+    }
+
+    pub fn layout_clipboard_rejects_nonrectangular_selection() {
+        let mut ed = ed();
+        let root = first_face(&ed);
+        ed.split_face_at(root, "v", 0.5);
+        let halves: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied().collect();
+        for half in halves { ed.split_face_at(half, "h", 0.5); }
+        let mut faces: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied().collect();
+        faces.sort();
+        ed.select_face(faces[0]);
+        ed.toggle_selection(faces[1]);
+        ed.toggle_selection(faces[2]);
+        let result: serde_json::Value = serde_json::from_str(&ed.copy_selected_layout()).unwrap();
+        assert_eq!(result["ok"].as_bool(), Some(false));
+        assert!(result["error"].as_str().unwrap().contains("complete rectangle"));
+    }
+
+    pub fn layout_clipboard_rejects_nonrectangular_target() {
+        let mut ed = ed();
+        let source = first_face(&ed);
+        ed.select_face(source);
+        let clipboard = copied_layout(&ed);
+
+        ed.split_face_at(source, "v", 0.5);
+        let halves: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied().collect();
+        for half in halves { ed.split_face_at(half, "h", 0.5); }
+        let mut faces: Vec<_> = ed.doc.current_spread().layout.faces.keys().copied().collect();
+        faces.sort();
+        ed.select_face(faces[0]);
+        ed.toggle_selection(faces[1]);
+        ed.toggle_selection(faces[2]);
+
+        let error = ed.get_layout_paste_error(&clipboard);
+        assert!(error.contains("complete rectangle"), "unexpected error: {error}");
+        assert!(!ed.paste_layout(&clipboard));
+        assert_eq!(face_count(&ed), 4);
+    }
+
+    // -----------------------------------------------------------------------
     // Save / load state
     // -----------------------------------------------------------------------
 
@@ -546,6 +690,11 @@ mod tests {
     #[test] fn snap_excludes_the_dragged_chain() { t::snap_excludes_the_dragged_chain(); }
     #[test] fn boundary_edge_cannot_be_deleted() { t::boundary_edge_cannot_be_deleted(); }
     #[test] fn delete_selected_face() { t::delete_selected_face(); }
+    #[test] fn paste_multiframe_layout_into_single_frame() { t::paste_multiframe_layout_into_single_frame(); }
+    #[test] fn paste_single_frame_over_multiframe_region() { t::paste_single_frame_over_multiframe_region(); }
+    #[test] fn paste_layout_preserves_target_outline_and_outside_frames() { t::paste_layout_preserves_target_outline_and_outside_frames(); }
+    #[test] fn layout_clipboard_rejects_nonrectangular_selection() { t::layout_clipboard_rejects_nonrectangular_selection(); }
+    #[test] fn layout_clipboard_rejects_nonrectangular_target() { t::layout_clipboard_rejects_nonrectangular_target(); }
     #[test] fn save_and_load_roundtrip() { t::save_and_load_roundtrip(); }
     #[test] fn load_state_rejects_future_schema_version() { t::load_state_rejects_future_schema_version(); }
     #[test] fn cover_pages_mode_splits_cover_into_front_and_back() { t::cover_pages_mode_splits_cover_into_front_and_back(); }
