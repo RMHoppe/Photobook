@@ -1,11 +1,15 @@
-//! Sorted-edge grid layout model.
+//! Coincident-Edge Grid layout model.
 //!
 //! The spread is partitioned into rectangular **faces** by **edges**. Each
-//! face owns exactly four edges (top, bottom, left, right). Interior dividers
-//! are represented as **twin pairs** — two edges at the same offset with
-//! opposite `Facing`. An edge's extent along its perpendicular axis is
-//! derived on-demand from the face it belongs to, so the model stores only
-//! the scalar `offset` and orientation.
+//! face privately owns exactly four edges (top, bottom, left, right); edges
+//! are never shared. An edge's extent along its perpendicular axis is derived
+//! on demand from the face it belongs to, so the model stores only the scalar
+//! `offset`, orientation and `Facing`.
+//!
+//! Topology is not stored — it is recovered from geometry. Two faces are
+//! neighbours when their edges coincide: interior dividers are **twin pairs**
+//! (two coincident edges with opposite `Facing`, see `twin()`), and
+//! T-junction neighbours and divider chains are found by the same matching.
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};

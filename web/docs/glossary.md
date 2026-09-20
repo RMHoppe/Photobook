@@ -58,12 +58,18 @@ A **pinwheel** is a five-face layout created from an X-junction. Dragging the pi
 
 ---
 
-## PSLG (Planar Straight-Line Graph)
+## Coincident-Edge Grid
 
-The **PSLG** is the internal data structure that represents the layout. It stores all vertices, half-edges, and faces that together describe which faces exist and how they connect. All layout operations — splitting, merging, snapping, and dragging — are mutations of the PSLG.
+The **Coincident-Edge Grid** is the internal data structure that represents the layout. Each face privately owns four edges (top, bottom, left, right); edges are never shared between faces. Two faces are neighbours when their edges coincide, so all adjacency is derived from geometry rather than stored as links. All layout operations — splitting, merging, snapping, and dragging — are mutations of this grid.
 
 ---
 
-## Half-edge
+## Edge
 
-A **half-edge** is a directed edge in the PSLG. Each segment in the layout is represented by two opposing half-edges, one for each direction. Half-edges allow the layout engine to efficiently traverse face boundaries and determine which faces are adjacent to one another.
+An **edge** is one side of a face in the Coincident-Edge Grid. It stores only its orientation (horizontal or vertical), its position along the perpendicular axis, and which side of its face it bounds. Its length is derived from the face that owns it. Edges on the outer boundary of the spread are marked as boundary edges.
+
+---
+
+## Twin pair
+
+A **twin pair** is two coincident edges — same orientation, same position, overlapping extent — that face each other from adjacent faces. Every interior divider segment is a twin pair; moving the divider moves both edges together, and deleting it merges the two faces.

@@ -29,8 +29,8 @@ crates/
   photobook-core/src/
     lib.rs                      # wasm-bindgen exports, PhotobookEditor struct
     page.rs                     # Document/Spread/TextElement data model
-    layout.rs                   # PSLG data structure (vertices, half-edges, faces)
-    grid_layout.rs              # Face/Edge collections; interior dividers as twin pairs
+    layout.rs                   # Shared value types: box model, Rect, resolved-output structs
+    grid_layout.rs              # Coincident-Edge Grid: faces own four edges; dividers are twin pairs
     grid_resolver.rs            # GridLayout → canvas-space RenderFrame
     pdf.rs                      # PDF export pipeline
     interaction.rs              # Hit-testing helpers shared with Rust tests
@@ -99,7 +99,7 @@ web/
 
 **WASM boundary pattern** — every Rust method returning JSON has a typed wrapper in `wasm-bridge.ts`. Callers never call `JSON.parse()` directly; field renames in Rust become TS compile errors. `types.ts` is the single source of truth for all WASM-crossing JSON shapes.
 
-**Grid model** — `GridLayout` stores `Face` and `Edge` collections built on top of a PSLG (`layout.rs`) of vertices and half-edges. Interior dividers are twin pairs (two edges, same offset, opposite `Facing`). `GridResolver` converts to canvas-space `RenderFrame` for drawing.
+**Coincident-Edge Grid** (`grid_layout.rs`) — the layout model. `GridLayout` holds `GridFace` and `Edge` maps; every face privately owns four edges and edges are never shared. An `Edge` is only `orientation + scalar offset + Facing` (extent derived from its face). Topology is not stored: adjacency is recovered from geometry by matching coincident edges — an interior divider is a *twin pair* (two coincident edges, opposite `Facing`, found by `twin()`), and T-junction neighbours / chains are found the same way. Not guillotine-restricted (pinwheels allowed). `GridResolver` converts to canvas-space `RenderFrame` for drawing.
 
 **Interaction modes** — each mode (idle, cut, text-place, image-pan, divider-drag, …) is a separate object implementing `onMouseDown/Move/Up/Leave`. `interaction.ts` holds the state machine; no global event spaghetti.
 
