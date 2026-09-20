@@ -70,7 +70,7 @@ Ctrl/Cmd + Click adds a divider to an existing selection.
 
 ### Dragging a divider
 
-Click and drag a divider to reposition it. Both adjacent frames resize in real time. Hold **Alt** to disable snapping while dragging.
+Click and drag a divider to reposition it. Both adjacent frames resize in real time. Hold **Shift** to also scale the neighbouring parallel dividers proportionally, so the whole row or column stretches with the drag instead of just the two adjacent frames. Hold **Alt** to disable snapping. A hint in the bottom-left corner of the canvas lists these modifiers while you drag.
 
 ### X-junction handles
 

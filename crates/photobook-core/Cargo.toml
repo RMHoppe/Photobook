@@ -18,6 +18,10 @@ console_error_panic_hook = { version = "0.1", optional = true }
 printpdf       = { version = "0.7", features = ["embedded_images"] }
 image          = { version = "0.24", default-features = false, features = ["jpeg", "png"] }
 jpeg-decoder   = "0.3"
+moxcms        = { version = "0.8.1", default-features = false, features = ["lut"] }
+
+[dev-dependencies]
+png = "0.17"
 
 [features]
 default = ["console_error_panic_hook", "wasm-test"]
@@ -25,4 +29,3 @@ wasm-test = ["console_error_panic_hook"]
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
-

@@ -8,3 +8,4 @@ export { ProjectSettingsPanel }  from './sidebar-project-settings.js';
 export { SpreadSettingsPanel }   from './sidebar-spread-settings.js';
 export { TextElementEditor }     from './sidebar-text-editor.js';
 export { SidebarPhotoInfoPanel } from './sidebar-photo-info.js';
+export { FrameImagePanel }       from './sidebar-frame-image.js';

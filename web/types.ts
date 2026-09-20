@@ -140,6 +140,21 @@ export interface DpiBadge {
   printDpi: number;
 }
 
+/** Image placement metadata for one frame (get_frame_image_info()). */
+export interface FrameImageInfo {
+  image_id: string;
+  frame_w_mm: number;
+  frame_h_mm: number;
+  /** Natural pixel size — null until register_image_size() has run. */
+  image_w_px: number | null;
+  image_h_px: number | null;
+  scale: number;
+  rotation_deg: number;
+  /** Resolution at print size — null while the natural size is unknown. */
+  effective_dpi: number | null;
+  print_dpi: number;
+}
+
 /** Low-DPI frame entry from get_low_dpi_frames(). */
 export interface LowDpiFrame {
   id: number;

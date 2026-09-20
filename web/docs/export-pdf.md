@@ -33,12 +33,15 @@ The exported PDF:
 - Conforms to **PDF/X-4** with an embedded **sRGB output intent** — the hand-off format accepted by digital photo printers; no manual CMYK conversion is needed
 - Uses the page dimensions set in Project Settings (in mm)
 - Sets the **TrimBox** and **BleedBox** so automated print workflows can position and trim pages without crop marks
-- Embeds all images at their original resolution
+- Resizes images to the configured print DPI without upscaling
+- Converts images with supported embedded RGB or greyscale ICC profiles (including Adobe RGB and Display P3) to sRGB after cropping and resizing, leaving the original files unchanged
 - Includes bleed area if configured in Project Settings
 - Embeds fonts used in text elements
 - Applies corner radius and border styling at pixel level
 
 > For best print quality, use JPEG or PNG images at a minimum of 300 DPI at their intended print size. You can adjust the target DPI in **Project Settings → Print DPI**.
+
+Images without an embedded profile are assumed to be sRGB. Invalid or unsupported profiles retain the decoder's default colours; profile-based CMYK conversion is not supported.
 
 ## Export options
 

@@ -3,13 +3,13 @@
 import init, { PhotobookEditor, init_panic_hook } from './pkg/photobook_core.js';
 import { CanvasRenderer } from './canvas.js';
 import { ImageSidebar } from './sidebar-left.js';
-import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel } from './sidebar-right.js';
+import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel, FrameImagePanel } from './sidebar-right.js';
 import type { ProjectSettingsData, SpreadSettingsData } from './sidebar-right.js';
 import { Footer } from './footer.js';
 import { NULL_ID, ZOOM_MIN, ZOOM_MAX } from './constants.js';
-import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode, getSelectedTwinEdgeId, setSwapToolActive } from './interaction.js';
+import { idleMode, splitPreviewMode, cutToolMode, textPlaceMode, dividerDragMode, getSelectedTwinEdgeId, setSwapToolActive } from './interaction.js';
 import type { InteractionMode, ModeState, InteractionContext } from './interaction.js';
-import { getSpreadInfo, getSpreadsInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getExportSettings, getPreflightReport, getUsedImageIds, splitFaceForMultiDrop, getRenderList, getFrameTransform, getSelectedSegmentHalfGaps, getEdgePairHalfGaps, setSelectedSegmentHalfGapAAxis, setSelectedSegmentHalfGapBAxis, setSelectionOuterMargins, setSelectionInnerGaps, clearSelectionGaps, selectionHasTransformations, getBoundaryChainGap, isSelectedSegmentBoundary, getInnerEdgeOffsets, setSelectionOuterMarginsAndAdjust, getSelectionOuterMargins, copySelectedLayout, getLayoutPasteError, pasteLayout} from './wasm-bridge.js';
+import { getSpreadInfo, getSpreadsInfo, getTextElements, addTextElement, deleteTextElement, updateTextElement, getAllSelected, getPageSizeMm, getExportSettings, getPreflightReport, getUsedImageIds, splitFaceForMultiDrop, getRenderList, getFrameTransform, getSelectedSegmentHalfGaps, getEdgePairHalfGaps, setSelectedSegmentHalfGapAAxis, setSelectedSegmentHalfGapBAxis, setSelectionOuterMargins, setSelectionInnerGaps, clearSelectionGaps, selectionHasTransformations, getBoundaryChainGap, isSelectedSegmentBoundary, getInnerEdgeOffsets, setSelectionOuterMarginsAndAdjust, getSelectionOuterMargins, copySelectedLayout, getLayoutPasteError, pasteLayout, getFrameImageInfo} from './wasm-bridge.js';
 import type { Overlays, DropZone, Rect, PreflightIssue, MarginInsets } from './types.js';
 import { isSinglePageKind } from './types.js';
 import { getPrintShopSpec, PRINT_SHOP_SPECS, DEFAULT_PREFLIGHT_RULES } from './print-shop-specs.js';
@@ -354,6 +354,7 @@ const panelFace          = document.getElementById('panel-face')!;
 const panelText          = document.getElementById('panel-text')!;
 const panelDivider       = document.getElementById('panel-divider')!;
 const panelPhoto         = document.getElementById('panel-photo')!;
+const panelFrameImage    = document.getElementById('panel-frame-image')!;
 const panelProject       = document.getElementById('panel-project')!;
 
 const randomizeDialog = new RandomizeDialog(
@@ -512,6 +513,7 @@ function wireRightSidebar() {
   });
 
   const photoPanel = new SidebarPhotoInfoPanel(panelPhoto, sidebar);
+  const frameImagePanel = new FrameImagePanel(panelFrameImage, sidebar);
 
   const textEditor = new TextElementEditor(
     panelText,
@@ -538,10 +540,10 @@ function wireRightSidebar() {
     }),
   );
 
-  return { boxEditor, dividerPanel, spreadPanel, projectPanel, photoPanel, textEditor };
+  return { boxEditor, dividerPanel, spreadPanel, projectPanel, photoPanel, frameImagePanel, textEditor };
 }
 
-const { boxEditor, dividerPanel, spreadPanel, projectPanel, photoPanel, textEditor } = wireRightSidebar();
+const { boxEditor, dividerPanel, spreadPanel, projectPanel, photoPanel, frameImagePanel, textEditor } = wireRightSidebar();
 
 // ---------------------------------------------------------------------------
 // Sidebar — shows all applicable panels for the current selection
@@ -598,6 +600,19 @@ function refreshBoxModel(): void {
       singleFrameWithImage = !!(frame?.image_id);
     }
     boxEditor.update(bmJson, zIndex, selectionCount);
+  }
+  // Image metadata lives in its own panel pinned to the sidebar bottom; only
+  // meaningful for exactly one selected frame that holds an image.
+  const frameImageInfo = singleFrameWithImage
+    ? getFrameImageInfo(editor, editor.get_selected(), renderer.lastLayoutRect.w || 1, renderer.lastLayoutRect.h || 1)
+    : null;
+  if (frameImageInfo) {
+    frameImagePanel.show(frameImageInfo, (id, dims) => {
+      editor.register_image_size(id, dims[0], dims[1]);
+      redraw();
+    });
+  } else {
+    frameImagePanel.hide();
   }
   updateLayoutTransformButtons(selectionIsRect || singleFrameWithImage);
   updateDistributeButtons(selectionIsRect);
@@ -860,6 +875,14 @@ function setMode(mode: InteractionMode, state: ModeState): void {
   }
   currentMode = mode;
   modeState = state;
+  // Modifier hint in the canvas corner: only divider dragging has hidden
+  // modifier behaviour worth advertising.
+  document.getElementById('canvas-hint')!.hidden = mode !== dividerDragMode;
+}
+
+/** Highlight a key in the canvas hint while it is physically held. */
+function setModifierHeld(key: 'shift' | 'alt', held: boolean): void {
+  document.querySelector<HTMLElement>(`#canvas-hint kbd[data-key="${key}"]`)?.classList.toggle('held', held);
 }
 
 function toSpread(e: MouseEvent) {
@@ -1913,8 +1936,12 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
   }
   if (e.code === 'AltLeft' || e.code === 'AltRight') {
-    document.getElementById('btn-swap-tool')!.classList.add('active');
+    // Alt only means "swap" in idle mode; elsewhere (divider drag, cut tool,
+    // text drag) it disables snapping, so don't advertise the swap tool.
+    if (currentMode === idleMode) document.getElementById('btn-swap-tool')!.classList.add('active');
+    setModifierHeld('alt', true);
   }
+  if (e.key === 'Shift') setModifierHeld('shift', true);
 }, true);
 
 document.addEventListener('keyup', (e) => {
@@ -1924,7 +1951,9 @@ document.addEventListener('keyup', (e) => {
   }
   if (e.code === 'AltLeft' || e.code === 'AltRight') {
     document.getElementById('btn-swap-tool')!.classList.toggle('active', _swapToolActive);
+    setModifierHeld('alt', false);
   }
+  if (e.key === 'Shift') setModifierHeld('shift', false);
 });
 
 canvasEl.addEventListener('wheel', (e) => {

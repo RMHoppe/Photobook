@@ -127,6 +127,14 @@ export class PhotobookEditor {
     get_export_settings(): string;
     get_face_box_model(): string;
     get_face_z_index(id: number): number;
+    /**
+     * Placement metadata for the image in `face_id` on the current spread, as
+     * JSON (`FrameImageInfo` in types.ts), or `"null"` when the face has no
+     * image. `effective_dpi` is `null` until the image's natural size has been
+     * registered via `register_image_size`. Uses the same cover-factor maths as
+     * `get_low_dpi_frames` so the panel agrees with the canvas warning badge.
+     */
+    get_frame_image_info(face_id: number, canvas_w: number, canvas_h: number): string;
     get_frame_transform(face_id: number): string;
     /**
      * Returns a JSON object `{id: offset, …}` for every non-boundary edge in
@@ -514,6 +522,7 @@ export interface InitOutput {
     readonly photobookeditor_get_endpapers: (a: number) => number;
     readonly photobookeditor_get_export_settings: (a: number) => [number, number];
     readonly photobookeditor_get_face_z_index: (a: number, b: number) => number;
+    readonly photobookeditor_get_frame_image_info: (a: number, b: number, c: number, d: number) => [number, number];
     readonly photobookeditor_get_frame_transform: (a: number, b: number) => [number, number];
     readonly photobookeditor_get_inner_edge_offsets: (a: number) => [number, number];
     readonly photobookeditor_get_layout_paste_error: (a: number, b: number, c: number) => [number, number];

@@ -221,6 +221,62 @@ impl PhotobookEditor {
         });
         json
     }
+
+    /// Placement metadata for the image in `face_id` on the current spread, as
+    /// JSON (`FrameImageInfo` in types.ts), or `"null"` when the face has no
+    /// image. `effective_dpi` is `null` until the image's natural size has been
+    /// registered via `register_image_size`. Uses the same cover-factor maths as
+    /// `get_low_dpi_frames` so the panel agrees with the canvas warning badge.
+    pub fn get_frame_image_info(&self, face_id: u32, canvas_w: f32, canvas_h: f32) -> String {
+        #[derive(serde::Serialize)]
+        struct FrameImageInfo<'a> {
+            image_id: &'a str,
+            frame_w_mm: f32,
+            frame_h_mm: f32,
+            image_w_px: Option<u32>,
+            image_h_px: Option<u32>,
+            scale: f32,
+            rotation_deg: f32,
+            effective_dpi: Option<u32>,
+            print_dpi: f32,
+        }
+
+        let spread = self.doc.current_spread();
+        let mm_to_px = self.mm_to_px(canvas_w);
+        let root_rect = self.root_rect_with_bleed(canvas_w, canvas_h);
+        let frames = GridResolver::new(&spread.layout, &[], mm_to_px)
+            .resolve_frames(root_rect);
+        let Some(frame) = frames.iter().find(|f| f.id == face_id) else { return "null".into() };
+        let Some(image_id) = frame.image_id.as_deref() else { return "null".into() };
+
+        let frame_w_mm = frame.rect.w / mm_to_px;
+        let frame_h_mm = frame.rect.h / mm_to_px;
+        let size = self.image_sizes.get(image_id).copied().filter(|&(w, h)| w > 0 && h > 0);
+
+        let nat_dpi = 300.0_f32;
+        let effective_dpi = size.and_then(|(img_w, img_h)| {
+            if frame_w_mm <= 0.0 || frame_h_mm <= 0.0 { return None; }
+            let nat_w_mm = img_w as f32 / nat_dpi * 25.4;
+            let nat_h_mm = img_h as f32 / nat_dpi * 25.4;
+            let (_, _, total_scale) = image_cover_factors(
+                frame_w_mm, frame_h_mm, nat_w_mm, nat_h_mm, frame.rotation_deg, frame.scale,
+            );
+            Some((nat_dpi / total_scale).round() as u32)
+        });
+
+        let info = FrameImageInfo {
+            image_id,
+            frame_w_mm,
+            frame_h_mm,
+            image_w_px: size.map(|s| s.0),
+            image_h_px: size.map(|s| s.1),
+            scale: frame.scale,
+            rotation_deg: frame.rotation_deg,
+            effective_dpi,
+            print_dpi: self.doc.print_dpi,
+        };
+        serde_json::to_string(&info).unwrap_or_else(|_| "null".into())
+    }
 }
 
 // ---------------------------------------------------------------------------

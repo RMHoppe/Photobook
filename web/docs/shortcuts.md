@@ -53,6 +53,7 @@
 
 | Modifier | Effect |
 |----------|--------|
+| `Shift` (during divider drag) | Scale neighbouring parallel dividers proportionally |
 | `Alt` (during divider drag, cut tool, or text drag) | Disable snapping — position freely |
 
 ## Image adjustments (on canvas)

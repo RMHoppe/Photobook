@@ -56,8 +56,8 @@ interface MainThreadTimings {
 function ms(n: number): string { return `${n.toFixed(1)} ms`; }
 
 function spreadPhaseLine(p: SpreadPhases): string {
-  const other = Math.max(0, (p.decode_ms + p.crop_ms + p.resample_ms + p.encode_ms));
-  return `decode ${ms(p.decode_ms)}  crop ${ms(p.crop_ms)}  resample ${ms(p.resample_ms)}  encode ${ms(p.encode_ms)}  (${p.image_count} img, sum ${ms(other)})`;
+  const other = Math.max(0, (p.decode_ms + p.crop_ms + p.resample_ms + p.color_ms + p.encode_ms));
+  return `decode ${ms(p.decode_ms)}  crop ${ms(p.crop_ms)}  resample ${ms(p.resample_ms)}  colour ${ms(p.color_ms)}  encode ${ms(p.encode_ms)}  (${p.image_count} img, sum ${ms(other)})`;
 }
 
 function logExportProfile(main: MainThreadTimings, worker: ExportWorkerTimings, imageCount: number, fontCount: number): void {

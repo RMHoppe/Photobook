@@ -41,6 +41,7 @@ pub(crate) struct SpreadTimes {
     pub decode_ms:   f64,
     pub crop_ms:     f64,
     pub resample_ms: f64,
+    pub color_ms:    f64,
     pub encode_ms:   f64,
     pub image_count: u32,
 }
@@ -71,6 +72,7 @@ pub(crate) struct DecodedImage {
     is_jpeg: bool,
     orig_w: u32,
     orig_h: u32,
+    icc_profile: Option<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -544,11 +546,27 @@ pub fn export_pdf(doc: &PhotobookDocument, images_json: &str, fonts_json: &str) 
 // ---------------------------------------------------------------------------
 
 fn decode_image_bytes(bytes: &[u8]) -> Option<DecodedImage> {
+    use image::ImageDecoder;
+    use std::io::Cursor;
     let format = image::guess_format(bytes).ok()?;
-    let img = image::load_from_memory_with_format(bytes, format).ok()?;
+    // Keep the source profile alongside unconverted pixels. Conversion belongs
+    // after the frame crop and print-size resampling, not at full resolution.
+    let (img, icc_profile) = match format {
+        image::ImageFormat::Jpeg => {
+            let mut decoder = image::codecs::jpeg::JpegDecoder::new(Cursor::new(bytes)).ok()?;
+            let profile = decoder.icc_profile();
+            (image::DynamicImage::from_decoder(decoder).ok()?, profile)
+        }
+        image::ImageFormat::Png => {
+            let mut decoder = image::codecs::png::PngDecoder::new(Cursor::new(bytes)).ok()?;
+            let profile = decoder.icc_profile();
+            (image::DynamicImage::from_decoder(decoder).ok()?, profile)
+        }
+        _ => (image::load_from_memory_with_format(bytes, format).ok()?, None),
+    };
     let is_jpeg = matches!(format, image::ImageFormat::Jpeg);
     let (orig_w, orig_h) = (img.width(), img.height());
-    Some(DecodedImage { img, is_jpeg, orig_w, orig_h })
+    Some(DecodedImage { img, is_jpeg, orig_w, orig_h, icc_profile })
 }
 
 /// Attempt a scale-factor JPEG decode. Returns `None` for non-JPEG bytes,
@@ -585,7 +603,34 @@ fn jpeg_scaled_decode(bytes: &[u8], need_w: u32, need_h: u32) -> Option<DecodedI
         ),
         _ => return None, // CMYK or other — caller falls back to full decode
     };
-    Some(DecodedImage { img, is_jpeg: true, orig_w, orig_h })
+    Some(DecodedImage { img, is_jpeg: true, orig_w, orig_h, icc_profile: dec.icc_profile() })
+}
+
+/// Convert only the final print-sized pixels. Untagged images keep the existing
+/// sRGB assumption; malformed/unsupported profiles retain the decoder's output.
+/// In particular, do not apply a CMYK profile to pixels already decoded as RGB.
+fn convert_to_srgb(img: image::DynamicImage, icc: Option<&[u8]>) -> image::DynamicImage {
+    use moxcms::{ColorProfile, DataColorSpace, Layout, TransformOptions};
+    let converted = (|| {
+        let source = ColorProfile::new_from_slice(icc?).ok()?;
+        let (layout, pixels) = match source.color_space {
+            DataColorSpace::Rgb => (Layout::Rgba, img.to_rgba8().into_raw()),
+            DataColorSpace::Gray => (Layout::GrayAlpha, img.to_luma_alpha8().into_raw()),
+            _ => return None,
+        };
+        let destination = ColorProfile::new_srgb();
+        let transform = source.create_transform_8bit(
+            layout, &destination, Layout::Rgba, TransformOptions::default(),
+        ).ok()?;
+        let mut output = vec![0; img.width() as usize * img.height() as usize * 4];
+        transform.transform(&pixels, &mut output).ok()?;
+        let rgba = image::RgbaImage::from_raw(img.width(), img.height(), output)?;
+        let converted = image::DynamicImage::ImageRgba8(rgba);
+        Some(if img.color().has_alpha() { converted } else {
+            image::DynamicImage::ImageRgb8(converted.to_rgb8())
+        })
+    })();
+    converted.unwrap_or(img)
 }
 
 /// Largest power-of-2 denominator such that `src / denom >= need` on both axes.
@@ -605,6 +650,7 @@ fn decoded_size_bytes(d: &DecodedImage) -> usize {
     (d.img.width() as usize)
         .saturating_mul(d.img.height() as usize)
         .saturating_mul(4)
+        .saturating_add(d.icc_profile.as_ref().map_or(0, Vec::len))
 }
 
 // ---------------------------------------------------------------------------
@@ -814,6 +860,10 @@ fn prepare_image(
         cropped
     };
     times.resample_ms += now_ms() - t;
+
+    let t = now_ms();
+    let final_img = convert_to_srgb(final_img, decoded.icc_profile.as_deref());
+    times.color_ms += now_ms() - t;
 
     let final_img = match (flip_h, flip_v) {
         (true,  true)  => final_img.fliph().flipv(),
@@ -1319,6 +1369,101 @@ fn draw_text_elements(
 mod tests {
     use super::*;
     use crate::page::PhotobookDocument;
+
+    fn adobe_profile() -> Vec<u8> {
+        moxcms::ColorProfile::new_adobe_rgb().encode().unwrap()
+    }
+
+    fn tagged_jpeg(profile: &[u8]) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(256, 256, image::Rgb([128, 64, 32]));
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100)
+            .encode_image(&img).unwrap();
+        let mut tagged = vec![0xff, 0xd8, 0xff, 0xe2];
+        tagged.extend_from_slice(&((profile.len() + 16) as u16).to_be_bytes());
+        tagged.extend_from_slice(b"ICC_PROFILE\0\x01\x01");
+        tagged.extend_from_slice(profile);
+        tagged.extend_from_slice(&jpeg[2..]);
+        tagged
+    }
+
+    fn assert_adobe_sample(pixel: &[u8]) {
+        // Adobe RGB (gamma 563/256) -> XYZ -> sRGB, independently calculated.
+        // Allow for 8-bit rounding and JPEG quantisation.
+        for (&actual, expected) in pixel.iter().zip([146u8, 62, 23]) {
+            assert!(actual.abs_diff(expected) <= 3, "unexpected colour: {pixel:?}");
+        }
+    }
+
+    #[test]
+    fn export_converts_adobe_rgb_after_print_resampling() {
+        let profile = adobe_profile();
+        let pixels = image::RgbImage::from_pixel(256, 256, image::Rgb([128, 64, 32]));
+        let mut png_bytes = Vec::new();
+        let mut info = png::Info::with_size(256, 256);
+        info.color_type = png::ColorType::Rgb;
+        info.icc_profile = Some(std::borrow::Cow::Borrowed(&profile));
+        png::Encoder::with_info(&mut png_bytes, info).unwrap().write_header().unwrap()
+            .write_image_data(pixels.as_raw()).unwrap();
+
+        // Exercise PNG, full JPEG, and scale-factor JPEG profile extraction.
+        let jpeg = tagged_jpeg(&profile);
+        let decoded_images = [
+            decode_image_bytes(&png_bytes).unwrap(),
+            decode_image_bytes(&jpeg).unwrap(),
+            jpeg_scaled_decode(&jpeg, 24, 24).unwrap(),
+        ];
+        for decoded in decoded_images {
+            assert_eq!(decoded.icc_profile.as_deref(), Some(profile.as_slice()));
+            // Decoding must retain the source colour values, not convert early.
+            assert!(decoded.img.to_rgb8().get_pixel(0, 0)[0].abs_diff(128) <= 1);
+            let prepared = prepare_image(
+                &decoded, &Rect::new(0.0, 0.0, 25.4, 25.4), 0.0, 25.4,
+                0.0, 0.0, 1.0, 0.0, false, false, 24.0, &mut SpreadTimes::default(),
+            ).unwrap();
+            assert_eq!((prepared.xobj.width.0, prepared.xobj.height.0), (24, 24));
+            if decoded.is_jpeg {
+                let rgb = image::load_from_memory(&prepared.xobj.image_data).unwrap().to_rgb8();
+                assert_adobe_sample(&rgb.get_pixel(0, 0).0);
+            } else {
+                assert_adobe_sample(&prepared.xobj.image_data[..3]);
+                assert!(prepared.xobj.smask.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn colour_conversion_preserves_alpha_and_srgb_colours() {
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            2, 3, image::Rgba([128, 64, 32, 79]),
+        ));
+        let converted = convert_to_srgb(img.clone(), Some(&adobe_profile())).to_rgba8();
+        assert_eq!(converted.dimensions(), (2, 3));
+        for pixel in converted.pixels() {
+            assert_adobe_sample(&pixel.0[..3]);
+            assert_eq!(pixel[3], 79);
+        }
+        let converted = convert_to_srgb(img.clone(), Some(SRGB_ICC)).to_rgba8();
+        for (actual, expected) in converted.as_raw().iter().zip(img.as_bytes()) {
+            assert!(actual.abs_diff(*expected) <= 1);
+        }
+        for profile in [None, Some(b"invalid ICC".as_slice())] {
+            assert_eq!(convert_to_srgb(img.clone(), profile).as_bytes(), img.as_bytes());
+        }
+    }
+
+    #[test]
+    fn colour_conversion_handles_greyscale_profile() {
+        let profile = moxcms::ColorProfile::new_gray_with_gamma(1.0).encode().unwrap();
+        let img = image::DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_pixel(
+            1, 1, image::LumaA([128, 79]),
+        ));
+        let converted = convert_to_srgb(img, Some(&profile)).to_rgba8();
+        // Linear-light 0.5 is approximately 188 in sRGB.
+        let pixel = converted.get_pixel(0, 0);
+        for channel in &pixel.0[..3] { assert!(channel.abs_diff(188) <= 1); }
+        assert_eq!(pixel[3], 79);
+    }
 
     fn assert_valid_pdf(bytes: &[u8]) {
         assert!(!bytes.is_empty(), "PDF must not be empty");

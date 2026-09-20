@@ -30,6 +30,7 @@ export interface SpreadPhases {
   decode_ms: number;
   crop_ms: number;
   resample_ms: number;
+  color_ms: number;
   encode_ms: number;
   image_count: number;
 }
@@ -120,7 +121,7 @@ ctx.addEventListener('message', async (e: MessageEvent) => {
         const phasesJson = editor.pdf_export_spread();
         perSpreadMs.push(performance.now() - ts);
         try { perSpreadPhases.push(JSON.parse(phasesJson) as SpreadPhases); }
-        catch { perSpreadPhases.push({ decode_ms: 0, crop_ms: 0, resample_ms: 0, encode_ms: 0, image_count: 0 }); }
+        catch { perSpreadPhases.push({ decode_ms: 0, crop_ms: 0, resample_ms: 0, color_ms: 0, encode_ms: 0, image_count: 0 }); }
         const passFraction = (pi + (i + 1) / Math.max(total, 1)) / passes.length;
         ctx.postMessage({ type: 'progress', reqId, fraction: 0.15 + passFraction * 0.85 });
       }

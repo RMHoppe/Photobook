@@ -27,6 +27,7 @@
 //   - Drag: initiates a canvas drop using the dragged image; does not alter
 //     the sidebar selection.
 
+import { readExif, type ExifInfo } from './exif.js';
 import { PROXY_MAX_PX, THUMB_MAX_PX, DECODE_CONCURRENCY, IMAGE_EXTS, PROXY_CACHE_BUDGET_BYTES, BUFFER_CACHE_BUDGET_BYTES } from './constants.js';
 import { LruCache, rasterBytes } from './lru.js';
 
@@ -66,6 +67,7 @@ export class ImageSidebar {
   );  // 800px, for canvas rendering
   private _buffers  = new LruCache<ArrayBuffer>(BUFFER_CACHE_BUDGET_BYTES, b => b.byteLength);  // lazy, for PDF export
   private _dims     = new Map<string, [number, number]>();  // natural dims, lazy
+  private _exif     = new Map<string, ExifInfo>();          // timestamp + GPS, lazy
   private _sizes    = new Map<string, number>();            // file sizes in bytes
   /** IDs loaded directly from raw buffers (no FileSystemFileHandle). */
   private _loadedIds = new Set<string>();
@@ -155,6 +157,7 @@ export class ImageSidebar {
     for (const id of [...this._handles.keys(), ...this._fallbackFiles.keys()]) {
       this._proxies.delete(id);
       this._dims.delete(id);
+      this._exif.delete(id);
       this._sizes.delete(id);
     }
     this._handles.clear();
@@ -176,6 +179,7 @@ export class ImageSidebar {
     for (const id of [...this._handles.keys(), ...this._fallbackFiles.keys()]) {
       this._proxies.delete(id);
       this._dims.delete(id);
+      this._exif.delete(id);
       this._sizes.delete(id);
     }
     this._handles.clear();
@@ -656,6 +660,27 @@ export class ImageSidebar {
       return dims;
     }
     return null;
+  }
+
+  /**
+   * Returns capture timestamp + GPS location from the file's EXIF data,
+   * parsing the file head once. Falls back to the file's modification time
+   * when the image carries no EXIF date. Cached after first call.
+   */
+  async ensureExif(id: string): Promise<ExifInfo> {
+    const cached = this._exif.get(id);
+    if (cached) return cached;
+    const file = await this._getFile(id);
+    const buf  = file ? null : this._buffers.get(id);
+    const info = file ? await readExif(file)
+               : buf  ? await readExif(new Blob([buf]))
+               : { timestamp: null, location: null };
+    if (!info.timestamp && file && file.lastModified > 0) {
+      info.timestamp = new Date(file.lastModified);
+      info.timestampIsFileTime = true;
+    }
+    this._exif.set(id, info);
+    return info;
   }
 
   /** Returns the IDs of all images available for use (folder + buffer-loaded). */

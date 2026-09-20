@@ -9,7 +9,7 @@ import { PhotobookEditor, compute_image_cover } from './pkg/photobook_core.js';
 import type {
   SpreadInfo, SpreadSummary, PageSize, ExportSettings,
   PreflightRules, PreflightIssue,
-  RenderFrame, Divider, LowDpiFrame,
+  RenderFrame, Divider, LowDpiFrame, FrameImageInfo,
   BoxModel, FrameTransform,
   ImageCoverResult, TextElement,
   ResolvedSpread, SpreadDelta, XJunction, ChainHalfGaps, MultiDividerGaps,
@@ -54,6 +54,10 @@ export function getRenderList(editor: PhotobookEditor, w: number, h: number): Re
 
 export function getDividers(editor: PhotobookEditor, w: number, h: number): Divider[] {
   return JSON.parse(editor.get_dividers(w, h)) as Divider[];
+}
+
+export function getFrameImageInfo(editor: PhotobookEditor, faceId: number, w: number, h: number): FrameImageInfo | null {
+  return JSON.parse(editor.get_frame_image_info(faceId, w, h)) as FrameImageInfo | null;
 }
 
 export function getLowDpiFrames(editor: PhotobookEditor, w: number, h: number): LowDpiFrame[] {
