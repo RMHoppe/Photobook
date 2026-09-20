@@ -51,10 +51,20 @@ jobs:
 
       # Mirrors [package.metadata.wasm-pack.profile.release] wasm-opt in
       # crates/photobook-core/Cargo.toml — keep the flags in sync.
+      #
+      # Binaryen is fetched from GitHub Releases, not apt: Ubuntu's package is
+      # version 108, which mis-renumbers wasm-bindgen's tables so that the
+      # `__wbindgen_externrefs` export ends up pointing at the fixed-size funcref
+      # table and `table.grow()` fails at startup in every browser
+      # (WebAssembly/binaryen#4711, fixed in 109).
       - name: Optimize WASM
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq binaryen
-          wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
+          BINARYEN=version_132
+          curl -sL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN}/binaryen-${BINARYEN}-x86_64-linux.tar.gz" \
+            | tar xz -C /tmp
+          WASM_OPT="/tmp/binaryen-${BINARYEN}/bin/wasm-opt"
+          "$WASM_OPT" --version
+          "$WASM_OPT" -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
             web/pkg/photobook_core_bg.wasm -o web/pkg/photobook_core_bg.wasm
           ls -l web/pkg/photobook_core_bg.wasm
 
@@ -69,6 +79,17 @@ jobs:
 
       - name: Compile TypeScript
         run: npx tsc
+
+      # Instantiate the optimized module once: a broken wasm-opt (see above)
+      # produces a file that is valid Wasm but throws in `init()`.
+      - name: Smoke-test WASM
+        run: |
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const m = await import("./web/pkg/photobook_core.js");
+            m.initSync({ module: fs.readFileSync("web/pkg/photobook_core_bg.wasm") });
+            console.log("wasm init ok");
+          '
 
       - name: Copy vendor libs
         run: |
