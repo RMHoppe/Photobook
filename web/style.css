@@ -508,13 +508,15 @@ num-input > input[data-mixed]::placeholder {
    pair pinned to the right edge (so the field's width is unchanged and every browser
    renders the same control). */
 num-input {
-  display: inline-flex; align-items: stretch; width: 100%;
+  display: inline-flex; align-items: stretch; width: 100%; min-width: 0;
   background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 3px;
   padding: 0 0 0 5px; font-size: 12px; overflow: hidden;
 }
+/* width: 0 + flex-grow: the input's intrinsic ~20ch width must not become the host's
+   min-content, or it would widen the grid column past what a bare input took */
 num-input > input {
-  flex: 1; min-width: 0; padding: 3px 0;
+  flex: 1 1 0; width: 0; min-width: 0; padding: 3px 0;
   background: transparent; border: none; outline: none;
   color: inherit; font: inherit;
   -moz-appearance: textfield;  /* Firefox: no native spinner */
