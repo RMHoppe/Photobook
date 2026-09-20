@@ -22,6 +22,8 @@ Incremental:
 
 > **`--out-dir` must be an absolute path.** `wasm-pack` changes into the crate directory before running, so a relative path like `web/pkg` resolves to `crates/photobook-core/web/pkg` instead of the project-root `web/pkg/` that the app imports from. Always use `"$(pwd)/web/pkg"` or the `./build.sh` script.
 
+Release builds run `wasm-opt -Oz` (configured in `crates/photobook-core/Cargo.toml`; wasm-pack uses `binaryen` from PATH or downloads it). It strips the debug name section and trims the binary from ~3.4 MB to ~2.2 MB, at ~10 s extra build time. CI mirrors the same flags in `deploy.yml`.
+
 ## Directory Layout
 
 ```

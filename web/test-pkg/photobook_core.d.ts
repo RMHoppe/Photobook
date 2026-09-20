@@ -521,6 +521,7 @@ export interface InitOutput {
     readonly photobookeditor_get_edge_pair_half_gaps: (a: number, b: number) => [number, number];
     readonly photobookeditor_get_endpapers: (a: number) => number;
     readonly photobookeditor_get_export_settings: (a: number) => [number, number];
+    readonly photobookeditor_get_face_box_model: (a: number) => [number, number];
     readonly photobookeditor_get_face_z_index: (a: number, b: number) => number;
     readonly photobookeditor_get_frame_image_info: (a: number, b: number, c: number, d: number) => [number, number];
     readonly photobookeditor_get_frame_transform: (a: number, b: number) => [number, number];
@@ -634,7 +635,6 @@ export interface InitOutput {
     readonly photobookeditor_update_text_element: (a: number, b: number, c: number) => void;
     readonly wasm_test_list: () => [number, number];
     readonly wasm_test_run: (a: number, b: number) => void;
-    readonly photobookeditor_get_face_box_model: (a: number) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

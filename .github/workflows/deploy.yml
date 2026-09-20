@@ -49,6 +49,15 @@ jobs:
           mkdir -p web/pkg
           wasm-bindgen --out-dir web/pkg --target web target/wasm32-unknown-unknown/release/photobook_core.wasm
 
+      # Mirrors [package.metadata.wasm-pack.profile.release] wasm-opt in
+      # crates/photobook-core/Cargo.toml — keep the flags in sync.
+      - name: Optimize WASM
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq binaryen
+          wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
+            web/pkg/photobook_core_bg.wasm -o web/pkg/photobook_core_bg.wasm
+          ls -l web/pkg/photobook_core_bg.wasm
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
