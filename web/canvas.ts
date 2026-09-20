@@ -64,6 +64,55 @@ const TEXT_HANDLE_RADIUS = 6;
 const TEXT_SELECTED_COLOR = '#34c9a0';
 const ROTATION_HANDLE_DIST = 22; // px from top-center to rotation handle
 
+// ---------------------------------------------------------------------------
+// CSS baseline probe
+//
+// The inline text editor is a <textarea> laid out by the browser's CSS engine,
+// which rounds font ascent/descent to whole pixels before centring the content
+// area in the line box. Reproducing that rounding from canvas font metrics is
+// engine-specific, so instead we measure it: a hidden block with the same font
+// and line-height contains a zero-size inline-block, whose bottom sits on the
+// baseline. Its offsetTop is exactly where CSS puts the first baseline.
+// Results are cached per font/size/line-height so redraws don't force layout.
+// ---------------------------------------------------------------------------
+let baselineProbe: HTMLDivElement | null = null;
+let baselineMarker: HTMLSpanElement | null = null;
+const baselineCache = new Map<string, number>();
+// A font that finishes loading after we measured with its fallback changes the
+// answer, so drop the cache whenever the document's font set changes.
+document.fonts?.addEventListener('loadingdone', () => baselineCache.clear());
+
+function cssFirstBaselineOffset(
+  fontFamily: string, fontPx: number, lineH: number, bold: boolean, italic: boolean,
+): number {
+  const key = `${fontFamily}|${fontPx}|${lineH}|${bold}|${italic}`;
+  const cached = baselineCache.get(key);
+  if (cached !== undefined) return cached;
+
+  if (!baselineProbe) {
+    baselineProbe = document.createElement('div');
+    baselineProbe.style.cssText =
+      'position:fixed;top:-9999px;left:-9999px;visibility:hidden;' +
+      'pointer-events:none;white-space:pre;margin:0;padding:0;border:none;';
+    baselineMarker = document.createElement('span');
+    baselineMarker.style.cssText = 'display:inline-block;width:0;height:0;';
+    baselineProbe.appendChild(document.createTextNode('Hg'));
+    baselineProbe.appendChild(baselineMarker);
+    document.body.appendChild(baselineProbe);
+  }
+  baselineProbe.style.fontFamily = `"${fontFamily}", sans-serif`;
+  baselineProbe.style.fontSize   = `${fontPx}px`;
+  baselineProbe.style.lineHeight = `${lineH}px`;
+  baselineProbe.style.fontWeight = bold   ? 'bold'   : 'normal';
+  baselineProbe.style.fontStyle  = italic ? 'italic' : 'normal';
+
+  // offsetTop is integer; getBoundingClientRect keeps the fractional part.
+  const offset = baselineMarker!.getBoundingClientRect().bottom
+               - baselineProbe.getBoundingClientRect().top;
+  baselineCache.set(key, offset);
+  return offset;
+}
+
 
 interface DrawMetrics {
   mmToPx: number;
@@ -1108,8 +1157,15 @@ export class CanvasRenderer {
       ctx.translate(-cx, -cy);
 
       ctx.fillStyle = el.color || '#000';
-      ctx.textBaseline = 'top';
       ctx.textAlign = (el.align || 'left') as CanvasTextAlign;
+
+      // Place the baseline exactly where the CSS engine puts it for the
+      // inline-editor textarea (same font, `line-height: 1.2`), so the text
+      // doesn't jump when editing starts or ends. `textBaseline = 'top'` would
+      // put the em-box top at `oy` and ignore CSS half-leading and rounding.
+      const firstBaseline = oy + cssFirstBaselineOffset(
+        el.font_family, fontPx, lineH, !!el.bold, !!el.italic);
+      ctx.textBaseline = 'alphabetic';
 
       let textX: number;
       if (el.align === 'center')      textX = ox + hw;
@@ -1117,12 +1173,13 @@ export class CanvasRenderer {
       else                             textX = ox;
 
       for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], textX, oy + i * lineH);
+        ctx.fillText(lines[i], textX, firstBaseline + i * lineH);
       }
 
       if (el.underline) {
-        const ulY = oy + fontPx * 0.87;
-        const thickness = Math.max(1, fontPx * 0.06);
+        // Mirror the PDF export: ~15% of the font size below the baseline.
+        const ulY = firstBaseline + fontPx * 0.15;
+        const thickness = Math.max(1, fontPx * 0.07);
         ctx.strokeStyle = el.color || '#000';
         ctx.lineWidth = thickness;
         for (let i = 0; i < lines.length; i++) {
