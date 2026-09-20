@@ -83,7 +83,7 @@ export class TextElementEditor {
         <div class="bm-grid" style="margin-top:4px">
           <div class="bm-field">
             <label>Size (pt)</label>
-            <input type="number" min="4" max="300" step="1" data-field="font_size_pt" value="24" />
+            <num-input><input type="number" min="4" max="300" step="1" data-field="font_size_pt" value="24" /></num-input>
           </div>
           <div class="bm-field">
             <label>Style</label>
@@ -116,16 +116,16 @@ export class TextElementEditor {
         <h4>Position (mm)</h4>
         <div class="bm-grid">
           <div class="bm-field"><label>X</label>
-            <input type="number" step="0.5" data-field="x_mm" value="0" /></div>
+            <num-input><input type="number" step="0.5" data-field="x_mm" value="0" /></num-input></div>
           <div class="bm-field"><label>Y</label>
-            <input type="number" step="0.5" data-field="y_mm" value="0" /></div>
+            <num-input><input type="number" step="0.5" data-field="y_mm" value="0" /></num-input></div>
         </div>
       </div>
       <div class="bm-section">
         <h4>Transform</h4>
         <div class="bm-grid bm-full-width">
           <div class="bm-field"><label>Rotation (°)</label>
-            <input type="number" step="1" data-field="rotation_deg" value="0" /></div>
+            <num-input><input type="number" step="1" data-field="rotation_deg" value="0" /></num-input></div>
         </div>
       </div>
     `;

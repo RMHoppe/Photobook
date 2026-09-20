@@ -473,7 +473,6 @@ button.active { background: var(--accent); border-color: var(--accent); }
 }
 .bm-full-width { grid-column: 1 / -1; }
 .bm-field label { font-size: 10px; color: var(--text-muted); }
-.bm-field input[type="number"],
 .bm-field input[type="text"] {
   width: 100%;
   background: var(--bg);
@@ -483,7 +482,6 @@ button.active { background: var(--accent); border-color: var(--accent); }
   padding: 3px 5px;
   font-size: 12px;
 }
-.bm-field input[type="number"]:focus,
 .bm-field input[type="text"]:focus { outline: none; border-color: var(--accent); }
 .bm-field input[type="color"] {
   width: 100%;
@@ -500,10 +498,52 @@ button.active { background: var(--accent); border-color: var(--accent); }
   border-style: dashed;
 }
 /* Mixed-value placeholder text on number inputs. */
-.bm-field input[type="number"][data-mixed]::placeholder {
+num-input > input[data-mixed]::placeholder {
   color: var(--text-muted);
   font-style: italic;
 }
+
+/* <num-input> (num-input.ts): the host is the bordered box; the real <input> sits
+   inside it, borderless, with the native spin buttons suppressed and our own stacked
+   pair pinned to the right edge (so the field's width is unchanged and every browser
+   renders the same control). */
+num-input {
+  display: inline-flex; align-items: stretch; width: 100%;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 0 0 0 5px; font-size: 12px; overflow: hidden;
+}
+num-input > input {
+  flex: 1; min-width: 0; padding: 3px 0;
+  background: transparent; border: none; outline: none;
+  color: inherit; font: inherit;
+  -moz-appearance: textfield;  /* Firefox: no native spinner */
+}
+num-input > input::-webkit-outer-spin-button,
+num-input > input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+num-input:focus-within { border-color: var(--accent); }
+num-input:has(> input:disabled) { opacity: 0.45; cursor: not-allowed; }
+.num-spin {
+  flex: 0 0 auto; display: flex; flex-direction: column;
+  width: 14px; border-left: 1px solid var(--border);
+}
+.num-spin button {
+  flex: 1 1 0; min-height: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface); border: none; color: var(--text-muted);
+  cursor: pointer;
+}
+/* arrows drawn with borders rather than ▴/▾ glyphs, which fall back to different
+   font faces (and so different sizes) from machine to machine */
+.num-spin button::before {
+  content: ""; width: 0; height: 0;
+  border-left: 3px solid transparent; border-right: 3px solid transparent;
+}
+.num-spin button[data-step="1"]::before { border-bottom: 4px solid currentColor; }
+.num-spin button[data-step="-1"]::before { border-top: 4px solid currentColor; }
+.num-spin button + button { border-top: 1px solid var(--border); }
+.num-spin button:hover { background: var(--border); color: var(--accent); }
+num-input:has(> input:disabled) .num-spin button { cursor: not-allowed; }
 .bm-field select {
   width: 100%;
   background: var(--bg);
@@ -551,7 +591,7 @@ button.active { background: var(--accent); border-color: var(--accent); }
   align-items: center;
   gap: 3px;
 }
-.bm-input-row input { flex: 1; min-width: 0; }
+.bm-input-row num-input { flex: 1; min-width: 0; }
 
 /* Dice randomize button — appears beside the input when multi-selection is active */
 .bm-dice-btn {
@@ -583,10 +623,13 @@ button.active { background: var(--accent); border-color: var(--accent); }
   width: 0;
   height: 0;
 }
+/* the off track matches a field input: same background and border, so a switch reads
+   as part of the same control family; the border also keeps it visible on --bg */
 .bm-switch-track {
   position: absolute;
   inset: 0;
-  background: var(--border);
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 9px;
   transition: background 0.15s ease;
 }
@@ -595,13 +638,16 @@ button.active { background: var(--accent); border-color: var(--accent); }
   position: absolute;
   width: 14px;
   height: 14px;
-  left: 2px;
-  top: 2px;
-  background: #fff;
+  left: 1px;
+  top: 1px;
+  /* the knob is the input text colour, not #fff, which was the brightest thing on the page */
+  background: var(--text);
   border-radius: 50%;
   transition: transform 0.15s ease;
 }
-.bm-switch input:checked + .bm-switch-track { background: var(--accent); }
+/* "on" is a plain brighter grey rather than the accent, which read as a highlight
+   competing with the actual accented controls */
+.bm-switch input:checked + .bm-switch-track { background: var(--text-muted); }
 .bm-switch input:checked + .bm-switch-track::before { transform: translateX(14px); }
 .bm-enable-body[hidden] { display: none; }
 
@@ -640,16 +686,7 @@ button.active { background: var(--accent); border-color: var(--accent); }
   width: 26px;
   flex-shrink: 0;
 }
-.rd-row input {
-  flex: 1;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text);
-  padding: 3px 5px;
-  font-size: 12px;
-}
-.rd-row input:focus { outline: none; border-color: var(--accent); }
+.rd-row num-input { flex: 1; }
 .rd-actions {
   display: flex;
   gap: 4px;

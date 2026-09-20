@@ -7,6 +7,12 @@ export type NumFieldOpts = {
   fullWidth?: boolean;
 };
 
+/** `<input type="number" …>` wrapped in the `<num-input>` element (num-input.ts) that
+ *  supplies the spin buttons. `attrs` is the raw attribute string of the inner input. */
+export function numInput(attrs: string): string {
+  return `<num-input><input type="number" ${attrs} /></num-input>`;
+}
+
 export function wrapField(label: string, input: string, fullWidth = false): string {
   return `<div class="bm-field${fullWidth ? ' bm-full-width' : ''}"><label>${label}</label>${input}</div>`;
 }
@@ -16,7 +22,7 @@ export function numField(name: string, label: string, opts: NumFieldOpts = {}): 
   const minAttr = min !== null ? `min="${min}" ` : '';
   return wrapField(
     label,
-    `<input type="number" ${minAttr}max="${max}" step="${step}" data-field="${name}" value="0" />`,
+    numInput(`${minAttr}max="${max}" step="${step}" data-field="${name}" value="0"`),
     fullWidth,
   );
 }
@@ -27,7 +33,7 @@ export function numFieldWithDice(name: string, label: string, opts: NumFieldOpts
   const maxAttr = max !== undefined ? `max="${max}" ` : '';
   return wrapField(
     label,
-    `<div class="bm-input-row"><input type="number" ${minAttr}${maxAttr}step="${step}" data-field="${name}" value="0" /><button class="bm-dice-btn" data-dice="${name}" title="Randomize across selection" hidden><i class="ti ti-dice-5"></i></button></div>`,
+    `<div class="bm-input-row">${numInput(`${minAttr}${maxAttr}step="${step}" data-field="${name}" value="0"`)}<button class="bm-dice-btn" data-dice="${name}" title="Randomize across selection" hidden><i class="ti ti-dice-5"></i></button></div>`,
     fullWidth,
   );
 }

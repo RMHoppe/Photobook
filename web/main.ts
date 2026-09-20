@@ -1,6 +1,7 @@
 // main.ts — App bootstrap: initialises Wasm and wires all UI modules together.
 
 import init, { PhotobookEditor, init_panic_hook } from './pkg/photobook_core.js';
+import './num-input.js';
 import { CanvasRenderer } from './canvas.js';
 import { ImageSidebar } from './sidebar-left.js';
 import { BoxModelEditor, DividerPanel, ProjectSettingsPanel, SpreadSettingsPanel, TextElementEditor, SidebarPhotoInfoPanel, FrameImagePanel } from './sidebar-right.js';

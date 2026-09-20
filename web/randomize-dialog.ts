@@ -40,8 +40,8 @@ export class RandomizeDialog {
     this._el.hidden = true;
     this._el.innerHTML = `
       <h5 id="rd-title">Randomize</h5>
-      <div class="rd-row"><label>Min</label><input id="rd-min" type="number" step="0.01" value="0" /></div>
-      <div class="rd-row"><label>Max</label><input id="rd-max" type="number" step="0.01" value="1" /></div>
+      <div class="rd-row"><label>Min</label><num-input><input id="rd-min" type="number" step="0.01" value="0" /></num-input></div>
+      <div class="rd-row"><label>Max</label><num-input><input id="rd-max" type="number" step="0.01" value="1" /></num-input></div>
       <div class="rd-actions">
         <button id="rd-cancel">Cancel</button>
         <button id="rd-apply">Apply</button>

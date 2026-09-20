@@ -103,7 +103,7 @@ export class DividerPanel {
           <div class="bm-grid">
             <div class="bm-field">
               <label>Total (mm)</label>
-              <input id="divider-gap-all" type="number" min="-50" max="50" step="0.5" value="0" />
+              <num-input><input id="divider-gap-all" type="number" min="-50" max="50" step="0.5" value="0" /></num-input>
             </div>
           </div>
         </div>
@@ -111,11 +111,11 @@ export class DividerPanel {
           <div class="bm-grid">
             <div class="bm-field">
               <label data-label="a">Left (mm)</label>
-              <input id="divider-gap-a" type="number" min="-50" max="50" step="0.5" value="0" />
+              <num-input><input id="divider-gap-a" type="number" min="-50" max="50" step="0.5" value="0" /></num-input>
             </div>
             <div class="bm-field">
               <label data-label="b">Right (mm)</label>
-              <input id="divider-gap-b" type="number" min="-50" max="50" step="0.5" value="0" />
+              <num-input><input id="divider-gap-b" type="number" min="-50" max="50" step="0.5" value="0" /></num-input>
             </div>
           </div>
         </div>
@@ -181,7 +181,7 @@ export class DividerPanel {
         <div class="bm-grid">
           <div class="bm-field">
             <label data-label="boundary">Edge</label>
-            <input id="boundary-gap" type="number" min="0" max="50" step="0.5" value="0" />
+            <num-input><input id="boundary-gap" type="number" min="0" max="50" step="0.5" value="0" /></num-input>
           </div>
         </div>
       </div>`;
