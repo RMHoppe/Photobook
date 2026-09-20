@@ -39,7 +39,7 @@ The exported PDF:
 - Embeds fonts used in text elements
 - Applies corner radius and border styling at pixel level
 
-> For best print quality, use JPEG or PNG images at a minimum of 300 DPI at their intended print size. You can adjust the target DPI in **Project Settings → Print DPI**.
+> Only JPEG and PNG images are embedded in the PDF; WebP, GIF, and AVIF frames export empty. For best print quality, use JPEG or PNG images at a minimum of 300 DPI at their intended print size. You can adjust the target DPI in **Project Settings → Print DPI**.
 
 Images without an embedded profile are assumed to be sRGB. Invalid or unsupported profiles retain the decoder's default colours; profile-based CMYK conversion is not supported.
 
@@ -67,7 +67,7 @@ You can cancel to fix the issues, or choose **Export anyway**.
 
 ## Image resolution warnings
 
-If a placed image's effective resolution falls below the **Print DPI** setting, a badge appears on that frame in the canvas. Hover over the badge to see the actual DPI. To resolve the warning:
+If a placed image's effective resolution falls below the **Print DPI** setting, a badge appears on that frame in the canvas. Hover over the badge to see the actual DPI, or select the frame — the image details panel at the bottom of the right sidebar shows the **Print res.** value for every placed image, highlighted when it is too low. To resolve the warning:
 
 - Use a higher-resolution version of the image, or
 - Make the frame smaller so the image is not stretched as much, or

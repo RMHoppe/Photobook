@@ -64,7 +64,8 @@ web/
   sidebar-spread-settings.ts    # Spread margins + per-page background colours
   sidebar-divider.ts            # Divider gap editor
   sidebar-left.ts               # Image browser (File System Access API + fallback)
-  sidebar-photo-info.ts         # Image metadata panel (dimensions, DPI, colour space)
+  sidebar-photo-info.ts         # Sidebar image metadata panel (name, dimensions, file size)
+  sidebar-frame-image.ts        # Bottom-of-right-sidebar panel for the selected frame's image (EXIF, effective DPI, placement)
   sidebar-project-settings.ts   # Project settings modal (page size, DPI, bleed, spine)
   footer.ts                     # Thumbnail strip, spread add/remove/reorder, navigation
   export.ts                     # PDF production (generatePdfs) + export-to-download flow
@@ -90,8 +91,10 @@ web/
   randomize-dialog.ts           # Per-field min/max randomize dialog
   toast.ts                      # Toast notification display
   ui-fields.ts                  # Reusable numeric field + toggle components
-  mobile.ts                     # Mobile detection, shows landing page on narrow screens
+  mobile.ts                     # In-browser WASM test runner (loaded by index.html below 1024 px instead of main.ts)
+  exif.ts                       # Minimal EXIF reader (capture time + GPS) from JPEG APP1 / PNG eXIf
   pkg/                          # Generated WASM bindings (do not edit)
+  test-pkg/                     # WASM build with the wasm-test feature, for the in-browser test runner (do not edit)
   docs/                         # In-app user documentation (Markdown, served by DocsPanel)
 ```
 
@@ -111,7 +114,7 @@ web/
 
 **Worker threads** — image decoding (`decode-worker.ts`) and PDF generation (`export-worker.ts`) run in separate Web Workers to keep the main thread responsive. Both fall back gracefully if workers are unavailable.
 
-**LRU image caches** — `lru.ts` backs two caches: 800 px proxy thumbnails (sidebar) and full-resolution buffers (export). A 256 MB canvas image cache with automatic eviction prevents memory exhaustion on large books.
+**LRU image caches** — `lru.ts` backs two caches: 800 px proxy thumbnails (sidebar) and full-resolution buffers (export). A 192 MB canvas image cache (`CANVAS_IMAGE_BUDGET_BYTES`) with automatic eviction prevents memory exhaustion on large books.
 
 **PDF export** — produces **PDF/X-4** with an embedded sRGB output intent (compact CC0 profile in `crates/photobook-core/assets/`); embeds fonts loaded via the browser Font Loading API; uses the patched `printpdf` crate; handles image rotation, margin, border, corner radius. Export is job-based (`PageJob` in `pdf.rs`): a job is a full spread or one half of a spread, enabling cover/body split files, interior-as-single-pages mode (endpaper blanks skipped), cover wrap allowance, and an opt-in crop-marks toggle (all stored on the document, edited in Project Settings → Export). Print-shop presets (`web/print-shop-specs.ts`) prefill these settings and install page-count rules enforced by `add_page`/`remove_page`. Performance metrics are logged to the browser console.
 

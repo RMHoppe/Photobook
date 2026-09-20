@@ -10,13 +10,13 @@
 
 | Method | Action |
 |--------|--------|
-| `Ctrl/Cmd` + scroll wheel | Zoom toward the cursor position |
+| `Ctrl/Cmd` + scroll wheel | Zoom toward the cursor position in 10% steps |
 | `Ctrl/Cmd` + `+` | Zoom in by 25% |
 | `Ctrl/Cmd` + `-` | Zoom out by 25% |
 | `Ctrl/Cmd` + `0` | Reset zoom to 100% and centre the canvas |
 | Zoom buttons (bottom-right) | Same as keyboard shortcuts |
 
-The zoom range is 50%–500%.
+The zoom range is 10%–400%.
 
 ## Panning
 

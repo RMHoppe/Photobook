@@ -24,7 +24,7 @@ Press **K** (or click the **Cut** button in the toolbar) to activate the Cut too
 2. Click to apply the split.
 3. Press **K** again or **Escape** to exit the tool.
 
-**Multi-split:** Scroll the mouse wheel while the Cut tool is active to increase the number of cuts (1–12). The frame is divided into equal-width or equal-height strips.
+**Multi-split:** Scroll the mouse wheel while the Cut tool is active to change the number of cuts (1–12), or press a number key **1–9** to set it directly. The frame is divided into equal-width or equal-height strips.
 
 **Snapping:** The preview line snaps to midpoints and existing dividers automatically. Hold **Alt** to disable snapping and position freely.
 

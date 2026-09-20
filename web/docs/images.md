@@ -10,6 +10,7 @@
 - [Dropping on an edge to split](#dropping-on-an-edge-to-split)
 - [Dropping multiple images](#dropping-multiple-images)
 - [Used image badges](#used-image-badges)
+- [Image details for a placed frame](#image-details-for-a-placed-frame)
 - [Supported formats](#supported-formats)
 
 ## Opening a folder
@@ -30,7 +31,7 @@ Images in the sidebar can be selected independently of placing them on the canva
 | Ctrl/Cmd + Click | Toggle image in/out of multi-selection |
 | Shift + Click | Extend selection to this image |
 
-When a single image is selected, the right sidebar shows its dimensions, file size, colour space, and creation date.
+When a single image is selected, the right sidebar shows its name, pixel dimensions, and file size. Capture date, location, and print resolution are shown once the image is placed in a frame — see [Image details for a placed frame](#image-details-for-a-placed-frame).
 
 To drag images onto the canvas, simply click and drag — you do not need to select them first.
 
@@ -62,10 +63,25 @@ Select multiple images in the sidebar and drag them all onto a frame at once. Th
 
 Images that have already been placed somewhere in the book show a green checkmark badge in the sidebar. This helps you track which photos are still unused.
 
+## Image details for a placed frame
+
+Select a single frame that contains an image and a details panel appears at the bottom of the right sidebar:
+
+| Row | Meaning |
+|-----|---------|
+| **Name** | File name of the placed image |
+| **Pixels** | Natural pixel size of the image |
+| **Taken** / **Modified** | Capture time from the photo's EXIF data; when the file carries no EXIF date, the file's modification time is shown instead |
+| **Location** | GPS position from EXIF, if present — click to open it in OpenStreetMap |
+| **Print res.** | Effective resolution at the frame's print size; highlighted when it falls below the project's Print DPI |
+| **Placement** | Current image scale and rotation inside the frame, when not at defaults |
+
 ## Supported formats
 
-| Format | Notes |
-|--------|-------|
-| JPEG | Full support |
-| PNG | Full support; transparency rendered on white |
-| WebP | Supported in modern browsers |
+| Format | Canvas | PDF export |
+|--------|--------|------------|
+| JPEG | Yes | Yes |
+| PNG | Yes | Yes; transparency rendered on white |
+| WebP, GIF, AVIF | Yes (if the browser can decode them) | **No** — the frame is left empty in the exported PDF |
+
+> Convert WebP, GIF, or AVIF photos to JPEG or PNG before placing them in a book you intend to print.

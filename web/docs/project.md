@@ -68,4 +68,4 @@ Choose from common presets or enter a custom size in millimetres:
 
 ### Endpapers
 
-Toggle **Endpapers** on or off. When enabled, the first and last spreads become cover / endpaper pages and are styled differently from content spreads. Enabling endpapers requires at least three spreads total.
+Toggle **Endpapers** on or off. When enabled, the first and last spreads become cover / endpaper pages and are styled differently from content spreads. Endpapers need at least two content spreads in addition to the cover; a spread is added automatically if the book is too short.

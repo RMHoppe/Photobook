@@ -36,6 +36,8 @@
 | Shortcut | Action |
 |----------|--------|
 | `K` | Toggle cut (frame splitting) tool |
+| `1`–`9` (cut tool active) | Set the number of cuts |
+| Scroll wheel (cut tool active) | Increase / decrease the number of cuts |
 | `T` | Enter text placement mode |
 | `Alt` (hold) | Temporarily enable swap mode — drag from one frame to another to swap images |
 

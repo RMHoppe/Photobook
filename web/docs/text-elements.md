@@ -27,7 +27,7 @@ Press **Escape** to exit placement mode without creating a text element.
 | Click and drag the text body | Move the element to a new position |
 | Drag a corner handle | Scale the font size proportionally |
 
-Corner handles appear when the element is selected. Drag any corner outward to make the text larger, inward to make it smaller. The minimum font size is 1 pt.
+Corner handles appear when the element is selected. Drag any corner outward to make the text larger, inward to make it smaller. Dragging can shrink text down to 1 pt; the sidebar field accepts 4–300 pt.
 
 ## Rotating text
 

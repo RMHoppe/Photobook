@@ -28,11 +28,11 @@ Click **+ Spread** in the footer, or press **N**. A new blank spread is inserted
 
 ## Reordering spreads
 
-Drag a spread thumbnail in the footer to a new position to reorder it. The first spread (cover) cannot be moved.
+Drag a spread thumbnail in the footer to a new position to reorder it. Cover spreads — the first spread, and also the last one when *Cover as front & back pages* is enabled — stay fixed.
 
 ## Deleting spreads
 
-Click the **− Spread** button in the footer, or select a spread in the footer and press **Delete**. A confirmation dialog appears. You cannot delete the first spread, and at least two content spreads must remain (three if endpapers are enabled).
+Click the **− Spread** button in the footer, or select a spread in the footer and press **Delete**. A confirmation dialog appears. Cover spreads cannot be deleted, and at least one content spread must remain (two if endpapers are enabled). A print-shop preset may require more — see [Exporting to PDF](export-pdf.md#export-options).
 
 ## Spread settings
 
@@ -46,4 +46,4 @@ Click on empty canvas (deselecting all frames and text) to show **Spread Setting
 
 ## Endpapers
 
-Enable **Endpapers** in Project Settings (gear icon) to designate the first and last spreads as cover / endpaper pages. These spreads are independent of the content spreads and are styled separately. At least three spreads are required when endpapers are on.
+Enable **Endpapers** in Project Settings (gear icon) to designate the first and last spreads as cover / endpaper pages. These spreads are independent of the content spreads and are styled separately. At least two content spreads (plus the cover) are required when endpapers are on; one is added automatically if needed.

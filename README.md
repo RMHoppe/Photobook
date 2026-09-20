@@ -10,9 +10,11 @@ A browser-based editor for designing print-ready photo books. Runs entirely in t
 - **Flexible grid** — split frames with the Cut tool; drag dividers to resize; drop images on frame edges to split and fill in one gesture
 - **Frame styling** — per-side margins, borders, corner radius, z-order, flips and rotations
 - **Text elements** — place, resize, rotate, and style text with system fonts
-- **Multi-page books** — add, reorder, and delete spreads; endpaper mode for cover pages
-- **PDF export** — print-ready output with embedded fonts, bleed, and configurable DPI
-- **Save / load** — projects saved as `.photobook` files; images re-linked on open
+- **Multi-page books** — add, reorder, and delete spreads; endpaper mode for cover pages; copy & paste rectangular layout regions
+- **PDF/X-4 export** — print-ready output with embedded fonts, sRGB output intent, bleed, TrimBox/BleedBox, optional crop marks, configurable DPI; embedded ICC profiles (Adobe RGB, Display P3, …) converted to sRGB
+- **Print-shop presets & preflight** — presets prefill page size, bleed, cover/interior split and page-count rules; preflight checks resolution, empty frames, safe zone and page count before export
+- **Print-on-demand ordering** — Peecho catalogue with live price estimates; generates the upload-ready PDF
+- **Save / load** — projects saved as `.photobook` files; images re-linked on open; session autosave with one-click restore
 - **Fully offline** — nothing leaves your machine
 
 ## Getting Started (users)
@@ -34,6 +36,7 @@ In-app help is available via the **?** button in the toolbar.
 | Open local folder | File System Access API (Chrome / Edge) or `<input webkitdirectory>` fallback |
 | Load system fonts | Local Font Access API (Chrome / Edge, optional) |
 | PDF export | Web Workers, WebAssembly |
+| Session autosave / folder re-linking | IndexedDB |
 
 Firefox and Safari work with reduced functionality (no folder picker shortcut, no system font loading).
 
@@ -52,7 +55,7 @@ cd Photobook
 | Change | Command |
 |--------|---------|
 | TypeScript only | `npx tsc` |
-| Rust / WASM only | `wasm-pack build crates/photobook-core --target web --out-dir web/pkg --release` |
+| Rust / WASM only | `wasm-pack build crates/photobook-core --target web --out-dir "$(pwd)/web/pkg" --release` (the `--out-dir` must be absolute — `wasm-pack` runs inside the crate directory) |
 | Type-check only | `npm run check` |
 
 ## Tech Stack
