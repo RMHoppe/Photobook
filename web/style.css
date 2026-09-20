@@ -32,7 +32,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   gap: 12px;
   flex-shrink: 0;
 }
-.app-title { font-weight: 600; font-size: 15px; color: var(--text); margin-right: 8px; }
+.app-title { font-weight: 600; font-size: 15px; color: var(--text); margin-right: 8px; display: inline-flex; align-items: center; gap: 8px; }
+.app-mark { height: 22px; width: 22px; }
 .toolbar-actions { display: flex; gap: 6px; align-items: center; }
 
 /* Shared progress track/fill pattern (export + wasm loader) */
@@ -1433,7 +1434,8 @@ button.primary:hover { background: #5a9fe8; }
 }
 #start-screen[hidden] { display: none; }
 .start-inner { width: 100%; max-width: 880px; text-align: center; }
-.start-title { font-size: 30px; margin: 0 0 4px; letter-spacing: 0.01em; }
+.start-title { margin: 0 0 16px; line-height: 0; }
+.start-logo { height: 56px; width: auto; }
 .start-subtitle { margin: 0 0 32px; color: var(--text-muted); font-size: 14px; }
 .start-cards {
   display: flex;

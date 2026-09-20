@@ -13,7 +13,9 @@
 
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::layout::{BoxModel, ObjectFit, SplitAxis};
+use crate::layout::{BoxModel, ObjectFit};
+/// Re-exported so out-of-crate callers (examples, tools) can drive `split_face`.
+pub use crate::layout::SplitAxis;
 
 // ---------------------------------------------------------------------------
 // ID types and sentinels
