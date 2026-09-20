@@ -2,6 +2,9 @@
 name = "photobook-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core engine for the Photobook editor: Coincident-Edge Grid layout, PDF/X-4 export, compiled to WebAssembly"
+repository = "https://github.com/RMHoppe/Photobook"
+license = "GPL-3.0-only"
 
 [lib]
 crate-type = ["cdylib", "lib"]
